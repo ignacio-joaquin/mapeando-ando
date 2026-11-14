@@ -301,3 +301,42 @@ def test_ortho_sin_descargar_no_frena_el_relieve(data_dir):
     assert index["layers"]["base-ortho"]["status"] == "error"
     assert index["layers"]["relief-slope"]["status"] == "ok"
     assert index["layers"]["relief-hillshade"]["tiles"]["status"] == "ok"
+
+
+def test_ortho_and_relief_have_separate_max_zoom(data_dir, monkeypatch):
+    """--max-zoom es del relieve y --ortho-max-zoom de la ortoimagen: uno no pisa al otro.
+
+    No necesita GDAL: se reemplazan las llamadas a las herramientas y se mira qué tope de
+    zoom le llega a cada teselado.
+    """
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater(n=60))
+    (data_dir / "raw" / "jezero" / "ortho.tif").write_bytes(b"")  # no se lee: el teselado es falso
+    (data_dir / "manifest.json").write_text(json.dumps({"sites": {"jezero": {"files": [
+        {"key": "dtm", "status": "ok", "path": "raw/jezero/dtm.tif"},
+        {"key": "ortho", "status": "ok", "path": "raw/jezero/ortho.tif"}]}}}))
+
+    def run(cmd):
+        # gdal_translate copia el archivo; el resto de GDAL falla y esas capas quedan en error.
+        if cmd[0] != "gdal_translate":
+            raise precompute.subprocess.CalledProcessError(1, cmd)
+        shutil.copy(cmd[-2], cmd[-1])
+
+    zooms = {}
+
+    def raster_a_tiles(src, outdir, max_zoom=None, **kwargs):
+        zooms[outdir.name] = max_zoom
+        return {"template": f"{outdir.name}/{{z}}/{{x}}/{{y}}.png", "minzoom": 0,
+                "maxzoom": max_zoom or 16, "bounds": [0, 0, 0, 0], "count": 0}
+
+    monkeypatch.setattr(precompute, "run", run)
+    monkeypatch.setattr(precompute, "raster_size", lambda path: [60, 60])
+    monkeypatch.setattr(precompute, "gdal_version", lambda: None)
+    monkeypatch.setattr(precompute.tiles, "faltan_herramientas", lambda: [])
+    monkeypatch.setattr(precompute.tiles, "raster_a_tiles", raster_a_tiles)
+
+    precompute.main(["--site", "jezero", "--ortho", "--max-zoom", "15"])
+    assert zooms == {"slope": 15, "ortho": 17}  # la ortoimagen, con el default de --ortho-max-zoom
+
+    zooms.clear()
+    precompute.main(["--site", "jezero", "--ortho", "--ortho-max-zoom", "18"])
+    assert zooms == {"slope": None, "ortho": 18}  # el relieve, con el zoom que deduce gdal2tiles

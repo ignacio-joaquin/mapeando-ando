@@ -100,10 +100,10 @@ Enciende **hillshade, pendiente y curvas de nivel**. Deja `terrain.json` y, con 
 **3. La ortoimagen**, aparte porque es la más cara (7,4 GB a 25 cm/px en Jezero, horas de proceso):
 
 ```bash
-.venv-pipeline/bin/python pipeline/precompute.py --site jezero --ortho --max-zoom 18
+.venv-pipeline/bin/python pipeline/precompute.py --site jezero --ortho
 ```
 
-Sin `--max-zoom` genera una cantidad enorme de PNG. Se recorta sola al bbox del sitio.
+La tesela hasta z17 (~0,64 m/px) y la recorta sola al bbox del sitio. Con `--ortho-max-zoom 18` llega a ~0,32 m/px, cerca de los 25 cm nativos, pero son ~4 veces más tiles. No le pases `--max-zoom`: ese tope es del relieve, y `--ortho` vuelve a generar también la pendiente y el sombreado.
 
 **4. Validar el reloj** (cierra su ticket):
 
