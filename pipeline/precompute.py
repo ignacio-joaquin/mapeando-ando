@@ -281,8 +281,9 @@ def main(argv=None):
                     help="teselar también la ortoimagen del sitio. Va aparte porque es la capa "
                          "más cara: en Jezero son 7,4 GB a 25 cm/px y tarda horas")
     ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
-                    help="tope de zoom al teselar; por defecto lo deduce gdal2tiles del tamaño "
-                         "del píxel. Para la ortoimagen conviene ponerlo")
+                    help="tope de zoom al teselar el relieve (pendiente y sombreado); por defecto "
+                         "lo deduce gdal2tiles del tamaño del píxel. No toca la ortoimagen: para "
+                         "eso está --ortho-max-zoom")
     ap.add_argument("--ortho-max-zoom", type=int, default=17, dest="ortho_max_zoom",
                     help="tope de zoom solo para la ortoimagen. Default 17 (~0,64 m/px en el "
                          "ecuador marciano; 18 da ~0,32 m/px, cerca de los 25 cm nativos, pero "
