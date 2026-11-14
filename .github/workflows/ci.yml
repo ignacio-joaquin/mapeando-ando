@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Sintaxis de Python
+        run: python -m py_compile pipeline/*.py api/*.py
+      - name: Configs de sitios válidas
+        run: for f in sites/*.json; do python -m json.tool "$f" > /dev/null; done
+      - name: Scripts de deploy
+        run: bash -n deploy/*.sh

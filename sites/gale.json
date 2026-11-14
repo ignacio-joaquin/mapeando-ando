@@ -1,0 +1,35 @@
+{
+  "id": "gale",
+  "name": "Gale / Mount Sharp",
+  "rover": "Curiosity (MSL)",
+  "center": {"lat": -4.6, "lon": 137.4},
+  "bbox": {"lat_min": -5.098652, "lat_max": -4.129605, "lon_min": 137.124167, "lon_max": 137.680559},
+  "notes": "DEM fusionado de 1 m de USGS (~107 x 33 km) a lo largo del traverse de Curiosity y la base de Mount Sharp. Donde no hay estéreo HiRISE se completó con CTX/HRSC/MOLA: verificar la resolución real en la zona elegida para la ruta de ejemplo.",
+  "horizon_pad_deg": 1.5,
+  "files": [
+    {
+      "key": "dtm",
+      "kind": "raster",
+      "desc": "MSL Gale merged DEM 1 m (HiRISE + CTX/HRSC/MOLA, USGS)",
+      "mission": "MRO HiRISE",
+      "url": "https://planetarymaps.usgs.gov/mosaic/Mars/MSL/MSL_Gale_DEM_Mosaic_1m_v3.tif",
+      "approx_gb": 3.6
+    },
+    {
+      "key": "ortho",
+      "kind": "raster",
+      "desc": "HiRISE color mosaic (LRGB, COG, USGS)",
+      "mission": "MRO HiRISE",
+      "url": "https://asc-pds-services.s3.us-west-2.amazonaws.com/mosaic/Mars/MSL/MSL_Gale_HiRISE-LRGB_78quads_sharp_cog.tif",
+      "approx_gb": 1.0
+    },
+    {
+      "key": "rover_waypoints",
+      "kind": "json",
+      "desc": "Curiosity waypoints (MMGIS)",
+      "mission": "MSL",
+      "url": "https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json",
+      "optional": true
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "dem200": {
+    "desc": "MOLA + HRSC blended DEM global 200 m (MGS MOLA + Mars Express HRSC, USGS). Se recorta por sitio con lectura remota; no se descarga entero (~11 GB).",
+    "url": "https://planetarymaps.usgs.gov/mosaic/Mars/HRSC_MOLA_Blend/Mars_HRSC_MOLA_BlendDEM_Global_200mp_v2.tif",
+    "radius_m": 3396190
+  },
+  "files": [
+    {"key": "spice_lsk", "kind": "spice", "desc": "Leap seconds", "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls"},
+    {"key": "spice_pck", "kind": "spice", "desc": "Planetary constants", "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc"},
+    {"key": "spice_de440s", "kind": "spice", "desc": "Planetary ephemeris DE440s", "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp"},
+    {"key": "spice_mar097", "kind": "spice", "desc": "Mars satellites ephemeris", "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/mar097.bsp"},
+    {"key": "iau_names", "kind": "zip", "desc": "IAU/USGS Gazetteer of Planetary Nomenclature, Mars center points", "url": "https://asc-planetarynames-data.s3.us-west-2.amazonaws.com/MARS_nomenclature_center_pts.zip", "optional": true}
+  ]
+}

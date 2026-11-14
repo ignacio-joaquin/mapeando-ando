@@ -1,0 +1,6 @@
+[Unit]
+Description=Mapa Marciano auto-deploy desde origin/main
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /opt/mapeando-ando/deploy/update.sh

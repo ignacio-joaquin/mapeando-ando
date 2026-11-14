@@ -1,0 +1,10 @@
+.venv*/
+__pycache__/
+*.pyc
+data/
+output/
+*.tif
+*.tif.aux.xml
+node_modules/
+web/dist/
+.env
