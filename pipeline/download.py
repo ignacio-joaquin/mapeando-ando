@@ -86,19 +86,24 @@ def crop_dem200(site, common, dest):
     R = d["radius_m"]
     pad = site.get("horizon_pad_deg", 1.0)
     b = site["bbox"]
-    xm = lambda lon: R * math.radians(lon)
-    ym = lambda lat: R * math.radians(lat)
-    ulx, uly = xm(b["lon_min"] - pad), ym(b["lat_max"] + pad)
-    lrx, lry = xm(b["lon_max"] + pad), ym(b["lat_min"] - pad)
+    src = f"/vsicurl/{d['url']}"
+    env = dict(os.environ, GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", GDAL_HTTP_MAX_RETRY="8",
+               GDAL_HTTP_RETRY_DELAY="5", CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif")
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and dest.stat().st_size > 0:
         log(f"skip existing {dest}")
         return
-    log(f"crop dem200 for {site['id']} pad={pad}deg -> {dest}")
+    # El archivo puede venir en grados (geográfico) o en metros (equirectangular): se detecta.
+    info = json.loads(subprocess.run(["gdalinfo", "-json", src], env=env, capture_output=True,
+                                     text=True, check=True).stdout)
+    in_degrees = abs(info["geoTransform"][1]) < 1.0
+    tx = (lambda lon: lon) if in_degrees else (lambda lon: R * math.radians(lon))
+    ty = (lambda lat: lat) if in_degrees else (lambda lat: R * math.radians(lat))
+    ulx, uly = tx(b["lon_min"] - pad), ty(b["lat_max"] + pad)
+    lrx, lry = tx(b["lon_max"] + pad), ty(b["lat_min"] - pad)
+    log(f"crop dem200 for {site['id']} pad={pad}deg ({'deg' if in_degrees else 'm'}) -> {dest}")
     cmd = ["gdal_translate", "-q", "-projwin", str(ulx), str(uly), str(lrx), str(lry),
-           "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", f"/vsicurl/{d['url']}", str(dest)]
-    env = dict(os.environ, GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", GDAL_HTTP_MAX_RETRY="8",
-               GDAL_HTTP_RETRY_DELAY="5", CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif")
+           "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", src, str(dest)]
     rc = subprocess.run(cmd, env=env).returncode
     if rc != 0:
         raise RuntimeError("gdal_translate crop failed")
