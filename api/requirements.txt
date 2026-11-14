@@ -1,2 +1,5 @@
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
+# Muestreo del DTM en /api/route. numpy < 2 por consistencia con el venv del pipeline.
+numpy==1.26.4
+rasterio==1.4.3
