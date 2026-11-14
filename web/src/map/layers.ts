@@ -66,6 +66,8 @@ export interface LayerSpec {
    * suavizar al agrandar, para no inventar colores intermedios.
    */
   readonly categorical?: boolean;
+  /** Script del pipeline que la genera, para el aviso cuando falla. Default: precompute.py. */
+  readonly script?: string;
 }
 
 export const LAYERS: readonly LayerSpec[] = [
@@ -168,24 +170,85 @@ export const LAYERS: readonly LayerSpec[] = [
     defaultVisible: false,
   },
   {
-    id: "survival-shelter",
-    label: "Refugio",
+    id: "survival-shelter-minutes",
+    label: "Minutos al refugio",
     group: "supervivencia",
-    unit: "índice 0–1",
+    unit: "min",
+    script: "shelter.py",
     source: {
       provenance: "MODELED",
       mission: "MRO",
       instrument: "HiRISE DTM",
-      resolution: "1 m/px",
-      source: "Índice del pipeline a partir del DTM HiRISE",
-      assumptions: ["Índice propio, no una medición"],
+      resolution: "10 m/px",
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y la capa de refugios",
+      assumptions: [
+        "Caminata de Tobler (1993) escalada a 0,8 m/s en plano",
+        "Más de 30° no se pisa",
+        "Provisorio hasta que exista el costo del planificador",
+      ],
     },
+    // Los mismos cortes que RAMPAS["minutos"] de pipeline/tiles.py.
     legend: [
-      { color: "#5fbf86", label: "protegido" },
-      { color: "#3a342e", label: "expuesto" },
+      { color: "#2f7d4f", label: "< 5 min" },
+      { color: "#e0a24a", label: "5–15 min" },
+      { color: "#e07a4a", label: "15–30 min" },
+      { color: "#e0564a", label: "> 30 min" },
     ],
+    tiles: "/tiles/{site}/shelter-minutes/{z}/{x}/{y}.png",
+    kind: "raster",
+    categorical: true,
+    defaultVisible: false,
+  },
+  {
+    id: "survival-skyview",
+    label: "Cielo visible",
+    group: "supervivencia",
+    unit: "fracción",
+    script: "shelter.py",
+    source: {
+      provenance: "DERIVED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "2 m/px",
+      source: "Sky-view factor (Zakšek et al. 2011) calculado desde el DTM HiRISE (USGS)",
+      assumptions: [
+        "Solo el terreno a menos de 500 m",
+        "Sin dato a menos de 500 m del borde del DTM",
+      ],
+    },
+    // Los mismos cortes que RAMPAS["cielo"] de pipeline/tiles.py.
+    legend: [
+      { color: "#56c8e8", label: "≤ 85 % (refugio)" },
+      { color: "#8a9a8c", label: "85–92 %" },
+      { color: "#786c60", label: "92–97 %" },
+      { color: "transparent", label: "> 97 % cielo abierto" },
+    ],
+    tiles: "/tiles/{site}/skyview/{z}/{x}/{y}.png",
+    kind: "raster",
+    categorical: true,
+    defaultVisible: false,
+  },
+  {
+    id: "survival-shelter",
+    label: "Refugios",
+    group: "supervivencia",
+    unit: null,
+    script: "shelter.py",
+    source: {
+      provenance: "DERIVED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "2 m/px",
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+      assumptions: [
+        "Refugio = cielo visible ≤ 85 %, pendiente ≤ 30° y al menos ~10 m² (dos o tres personas)",
+        "Reparo geométrico, no una dosis calculada",
+      ],
+    },
+    legend: [{ color: "#56c8e8", label: "refugio de emergencia" }],
     tiles: "/tiles/{site}/shelter/{z}/{x}/{y}.png",
     kind: "raster",
+    categorical: true,
     defaultVisible: false,
   },
   {

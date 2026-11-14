@@ -2,6 +2,8 @@
 
 Responde **"¿dónde me cubro y a cuántos minutos?"**. Para cada celda del sitio calcula cuánto cielo se ve, marca como refugio los lugares con poco cielo donde se puede estar parado y dice cuántos minutos hay caminando hasta el refugio más cercano.
 
+Es un **refugio de emergencia para dos o tres personas**: alcanza con unos 10 m² (el pie de un bloque grande, una cornisa, el fondo de un cráter chico). Por eso se calcula a 2 m y no a 10.
+
 Poco cielo visible es reparo geométrico: menos cielo abierto es menos radiación de fondo que llega y más pared entre el astronauta y el horizonte. **No es una dosis calculada.**
 
 ## Cómo se corre
@@ -17,54 +19,80 @@ cd /opt/mapeando-ando
 
 | Opción | Default | Qué hace |
 |---|---|---|
-| `--res` | 10 | Promedia el DTM de 1 m en bloques N×N antes de calcular |
+| `--res` | 2 | Promedia el DTM de 1 m en bloques N×N para el sky-view y los refugios |
+| `--walk-res` | 10 | Grilla de los minutos (múltiplo de `--res`) |
 | `--radius-m` | 500 | Hasta dónde se mira el horizonte local |
 | `--directions` | 16 | Azimuts para el sky-view |
 | `--svf-max` | 0.85 | Refugio si se ve como mucho esta fracción del cielo |
 | `--max-slope` | 30 | Pendiente máxima (°) para estar parado y para caminar |
-| `--min-area-m2` | 1000 | Manchas de refugio más chicas no cuentan |
+| `--min-area-m2` | 10 | Manchas de refugio más chicas no cuentan (a 2 m son 3 celdas) |
+| `--no-tiles` | | No genera los tiles PNG del mapa |
 
-Sale con 0 si anduvo, 1 si falló (no escribe `index.json`) y 2 si faltan datos.
+Sale con 0 si anduvo, 1 si falló (si falla el cálculo no escribe `shelter.json`; si falla solo el teselado, lo anota en la capa) y 2 si faltan datos.
 
-Corrida en el server (2 vCPU, 7 GB), 2026-11-14:
+Corrida en el server (2 vCPU, 7 GB), 2026-11-14, con los defaults (2 m y minutos a 10 m):
 
-| Sitio | Grilla | Tiempo | RAM pico | Refugio | Mediana / p90 al refugio |
+| Sitio | Grilla fina | Tiempo | RAM pico | Refugio | Mediana / p90 al refugio |
 |---|---|---|---|---|---|
-| Jezero | 2148 × 2140 (9,5 × 10 m) | 25 s | 0,6 GB | 1,2 % | 19,7 / 73,2 min |
-| Gale | 5744 × 3298 (10 × 10 m) | 4,3 min | 1,9 GB | 8,3 % | 10,7 / 56,3 min |
+| Jezero | 10744 × 10700 (1,9 × 2 m) | 6,8 min | 1,6 GB | 4,2 % | 3,0 / 11,9 min |
+| Gale | 28720 × 16490 (2 × 2 m) | 27 min | 5,8 GB (RSS, incluye páginas del memmap) | 17,9 % | 0,5 / 6,4 min |
+
+Con `--res 10` y 1000 m² (la primera versión) salían 1,2 % y 19,7 / 73,2 min en Jezero: a 2 m aparecen los refugios chicos (pie de bloques y cornisas) y casi todo queda a minutos de uno.
+
+**El umbral pesa distinto en cada sitio.** Fracción de celdas con cielo visible bajo cada umbral (solo sky-view, sin el filtro de pendiente y área):
+
+| Umbral | Jezero | Gale |
+|---|---|---|
+| ≤ 0,85 | 4,7 % | 23,3 % |
+| ≤ 0,80 | 0,7 % | 14,5 % |
+| ≤ 0,75 | 0,1 % | 9,2 % |
+| ≤ 0,70 | 0,0 % | 5,9 % |
+
+En Gale, las faldas de Mount Sharp (yardangs, cárcavas) y el borde norte tienen 50–80 % de refugio por bloque de 128 m: es relieve real, pero ahí "refugio" deja de distinguir. En las llanuras del norte de Gale la densidad cambia por rectángulos que siguen las costuras del mosaico del DTM: parte de esos refugios chicos sale del ruido del DTM, no del relieve.
 
 ## Salida
 
-En `<out>/<sitio>/shelter/`:
+En `<out>/<sitio>/`, al lado de lo que deja `precompute.py`:
 
-| Archivo | Capa | Qué es | Badge |
+| Archivo | Capa del mapa | Qué es | Badge |
 |---|---|---|---|
-| `skyview.tif` | `survival-skyview` | Fracción de cielo visible, 0–1. COG float32, nodata −9999 | MRO HiRISE · DERIVED |
-| `shelter.tif` | `survival-shelter` | 1 refugio, 0 no, 255 sin dato. COG uint8 | MRO HiRISE · DERIVED |
-| `shelter_minutes.tif` | `survival-shelter-minutes` | Minutos caminando al refugio más cercano. COG float32, nodata −9999 | MRO HiRISE · MODELED |
-| `index.json` | | Procedencia, resolución, parámetros, supuestos y estadísticas de cada capa | |
+| `skyview.tif`, `skyview/` | `survival-skyview` | Fracción de cielo visible, 0–1, a 2 m. COG float32, nodata −9999 | MRO HiRISE · DERIVED |
+| `shelter.tif`, `shelter/` | `survival-shelter` | 1 refugio, 0 no, 255 sin dato, a 2 m. COG uint8 | MRO HiRISE · DERIVED |
+| `shelter_minutes.tif`, `shelter-minutes/` | `survival-shelter-minutes` | Minutos caminando al refugio más cercano, a 10 m. COG float32, nodata −9999 | MRO HiRISE · MODELED |
+| `shelter.json` | | Procedencia, resolución, parámetros, supuestos, estadísticas y tiles de cada capa | |
+
+Las carpetas son tiles XYZ PNG (`pipeline/tiles.py`, rampas `cielo`, `refugio` y `minutos`). Los nombres de carpeta y los ids son **contrato** con `web/src/map/layers.ts`.
+
+`shelter.json` tiene la misma forma que `terrain.json`; el mapa lee los dos y los junta (`fetchTerrain` en `web/src/api/client.ts`), así una capa se puede prender cuando su COG y sus tiles salieron bien. Si `shelter.json` está roto, el relieve sigue andando.
 
 Los minutos llevan **MODELED** y no DERIVED: dependen de un modelo de caminata con supuestos (Tobler, velocidad), no solo del DTM.
 
+## En el mapa
+
+- **Refugios**: las manchas verdes. Lo único que se dibuja es dónde hay refugio.
+- **Minutos al refugio**: cuatro clases (< 5, 5–15, 15–30, > 30 min), con el número en la leyenda: no depende solo del color.
+- **Cielo visible**: verde hasta 85 % (refugio), gris hasta 97 %, transparente con cielo abierto.
+- **Inspector**: al fijar un punto, `GET /api/sites/{sitio}/point` devuelve en `layers` los minutos al refugio y el cielo visible de ese punto, con su badge (`null` si el punto no tiene dato).
+
 ## Método
 
-1. **Grilla.** El DTM HiRISE de 1 m promediado 10 × 10, en el plano tangente del centro (la misma `WorkGrid` que `illumination.py`). A 10 m el cálculo entra en la memoria del server; a 1 m no.
+1. **Grillas.** El DTM HiRISE de 1 m promediado 2 × 2, en el plano tangente del centro (la misma `WorkGrid` que `illumination.py`), en disco y por franjas: Gale a 2 m son 474 millones de celdas y no entran en memoria. Los minutos van en una grilla de 10 m armada promediando la de 2 m: el costo acumulado necesita toda la grilla junta.
 2. **Sky-view factor** (Zakšek et al. 2011). Desde cada celda se recorren 16 azimuts hasta 500 m, en distancias que crecen en progresión geométrica. En cada azimut se toma el ángulo de horizonte γ más alto (con piso en 0°) y `SVF = 1 − Σ sin γ / 16`. Plano abierto da 1; el pie de una pared vertical da ~0,5.
 3. **Pendiente.** Horn 3 × 3 sobre la misma grilla, con el tamaño de píxel real sobre la esfera (`precompute.slope_strip`).
-4. **Refugio.** `SVF ≤ 0,85` y `pendiente ≤ 30°` (el límite de "no transitable" de la leyenda de pendiente), en manchas de al menos 1000 m² (vecindad de 8).
-5. **Minutos.** Costo acumulado desde todos los refugios a la vez (scikit-image `MCP_Geometric`, 8 vecinos, píxel anisótropo). Cada celda cuesta los segundos por metro de la función de Tobler (1993), `6·e^(−3,5·|s + 0,05|)` km/h, escalada para dar **0,8 m/s en plano** (el mismo default que `/api/route/consumables`). Como la pendiente de la celda es la máxima y no se sabe si se sube o se baja, se usa el promedio de subir y bajar. La distancia es sobre el terreno (÷ cos θ). Más de 30° no se pisa.
+4. **Refugio.** `SVF ≤ 0,85` y `pendiente ≤ 30°` (el límite de "no transitable" de la leyenda de pendiente), en manchas de al menos 10 m² (vecindad de 8). Por franjas, mirando `min_px` filas de más a cada lado: da lo mismo que de una vez.
+5. **Minutos.** En la grilla de 10 m, una celda es refugio si alguna de sus celdas de 2 m lo es. Costo acumulado desde todos los refugios a la vez (scikit-image `MCP_Geometric`, 8 vecinos, píxel anisótropo). Cada celda cuesta los segundos por metro de la función de Tobler (1993), `6·e^(−3,5·|s + 0,05|)` km/h, escalada para dar **0,8 m/s en plano** (el mismo default que `/api/route/consumables`). Como la pendiente de la celda es la máxima y no se sabe si se sube o se baja, se usa el promedio de subir y bajar. La distancia es sobre el terreno (÷ cos θ). Más de 30° no se pisa.
 
 ## Límites
 
-- **Resolución.** A 10 m no se ven rocas, bloques ni escalones chicos. Un refugio real puede ser más chico que una celda; uno de 10 m puede no existir a 1 m.
+- **Resolución.** A 2 m se ven bloques y escalones de algunos metros, no rocas chicas. Los minutos son a 10 m: el camino real puede pasar por un hueco más angosto que una celda, o no poder pasar por una celda que a 10 m parece suave.
 - **Borde y huecos.** Sin horizonte completo no hay número: las celdas a menos de 500 m del borde del DTM o de un hueco quedan sin sky-view y no pueden ser refugio. Los minutos sí se calculan ahí (solo necesitan la pendiente).
 - **Solo terreno cercano.** No cuenta montañas a más de 500 m ni el borde lejano del cráter.
-- **Umbral propio.** El 0,85 lo elegimos nosotros: en Jezero deja el ~1 % más cubierto del sitio. No sale de un estudio de dosis.
+- **Umbral propio.** El 0,85 lo elegimos nosotros. No sale de un estudio de dosis.
 - **Costo de caminata provisorio.** El modelo de rutas sigue abierto (`docs/context.md` §5). Si el planificador adopta otro costo, se cambia `walk_cost` y se recalcula.
 - **Isótropo.** Tobler es distinto subiendo que bajando; acá se promedia. La pendiente usada es la máxima de la celda, no la del rumbo: sobreestima el tiempo en laderas que se cruzan de costado.
 
 ## Pendientes
 
-- [ ] Servir las tres capas en el mapa (`web/`) con su badge.
-- [ ] Decidir el umbral de refugio con alguien que mire las zonas en el ortho.
+- [ ] Decidir el umbral de refugio (ver la tabla de arriba) con alguien que mire las zonas en el ortho.
+- [ ] Filtrar los refugios que salen del ruido en las costuras del mosaico de Gale.
 - [ ] Cambiar el costo por el del planificador 4D cuando exista.

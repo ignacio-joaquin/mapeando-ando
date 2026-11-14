@@ -65,9 +65,26 @@ class TestShelterMask:
         assert m[2:6, 2:6].all()
         assert not m[10, 10] and not m[14:18, 14:18].any()
 
+    def test_by_strips_matches_whole_array(self):
+        rng = np.random.default_rng(0)
+        svf = rng.uniform(0.7, 1.0, (97, 40)).astype(np.float32)
+        slope = rng.uniform(0, 40, (97, 40)).astype(np.float32)
+        whole = shelter.shelter_mask(svf, slope, 0.85, 30.0, min_px=5)
+        out = np.zeros_like(whole)
+        shelter.shelter_mask_strips(svf, slope, out, 0.85, 30.0, 5, strip_rows=7)
+        assert whole.any() and (out == whole).all()
+
     def test_nan_is_never_shelter(self):
         svf = np.full((5, 5), np.nan, np.float32)
         assert not shelter.shelter_mask(svf, np.zeros((5, 5)), 0.85, 30.0, 1).any()
+
+
+def test_block_reduce():
+    a = np.arange(36, dtype=np.float32).reshape(6, 6)
+    a[0, 0] = -np.inf
+    m = shelter.block_reduce(a, 3, np.mean)
+    assert m.shape == (2, 2) and np.isneginf(m[0, 0]) and m[1, 1] == a[3:, 3:].mean()
+    assert shelter.block_reduce(a > 34, 3, np.any).tolist() == [[False, False], [False, True]]
 
 
 class TestWalkCost:
@@ -143,25 +160,29 @@ def test_full_run_on_synthetic_crater(tmp_path):
         ds.write(z, 1)
 
     out = tmp_path / "out"
-    assert shelter.main(["--dtm", str(dtm), "--out", str(out), "--res", "2", "--radius-m", "500",
-                         "--min-area-m2", "500"]) == 0
-    d = out / "shelter"
-    index = json.loads((d / "index.json").read_text())
+    assert shelter.main(["--dtm", str(dtm), "--out", str(out), "--res", "2", "--walk-res", "4",
+                         "--radius-m", "500", "--min-area-m2", "500", "--no-tiles"]) == 0
+    d = out
+    index = json.loads((d / "shelter.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
         "survival-skyview": "ok", "survival-shelter": "ok", "survival-shelter-minutes": "ok"}
     assert index["layers"]["survival-skyview"]["provenance"] == "DERIVED"
+    assert index["mode"] == "completo" and index["warnings"] == []      # forma de terrain.json
+    assert not (out / ".shelter-run.work").exists()
 
     with rasterio.open(d / "skyview.tif") as s, rasterio.open(d / "shelter.tif") as r, \
             rasterio.open(d / "shelter_minutes.tif") as m:
         svf = s.read(1, masked=True)
         refuge = r.read(1, masked=True)
         mins = m.read(1, masked=True)
+        assert m.height == s.height // 2                 # minutos en la grilla gruesa
         c = s.height // 2
         # fondo del cráter: el borde a 500 m y 120 m más arriba tapa el cielo, 1 − sin(13°) ≈ 0,77
         assert svf[c, c] == pytest.approx(0.77, abs=0.02)
         assert svf.mask[0, 0]                         # borde: sin horizonte completo
         assert refuge[c, c] == 1
-        assert mins[c, c] == 0
+        cm = m.height // 2
+        assert mins[cm, cm] == 0
         # en el plano de afuera hace falta caminar: más minutos cuanto más lejos
-        ring = s.height // 2 + int(560 / 10)          # ~60 m afuera del borde del cráter
-        assert 0 < mins[c, ring] < mins[c, ring + 5]
+        ring = cm + int(560 / 20)                     # ~60 m afuera del borde del cráter
+        assert 0 < mins[cm, ring] < mins[cm, ring + 3]
