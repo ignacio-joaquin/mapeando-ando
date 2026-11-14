@@ -14,6 +14,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .consumables import Step, SuitParams, route_consumption
+from .illumination_matrix import (
+    a_star_path_between_points,
+    find_latest_sol_dir,
+    resolve_shadow_tif,
+    rectangular_window_from_points,
+)
 from .terrain import TerrainError, densify, haversine_m, sample_dtm
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
@@ -102,6 +108,21 @@ class RouteRequest(BaseModel):
     suit: SuitOverrides = Field(default_factory=SuitOverrides)
 
 
+class IlluminationPoint(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
+class IlluminationWindowRequest(BaseModel):
+    site_id: str = Field(..., description="Sitio cuyo `shadow_hourly.tif` se consulta")
+    sol_tag: Optional[str] = Field(None, description="Directorio de sol, por ejemplo 20261115T000000Z")
+    ltst: Optional[str] = Field(None, description="Hora local solar, por ejemplo 12:30")
+    p1: IlluminationPoint
+    p2: IlluminationPoint
+    band: Optional[int] = Field(None, ge=1, description="Banda del GeoTIFF; si falta, se resuelve desde ltst")
+    pixel_size_m: float = Field(5.0, gt=0, le=100.0, description="Distancia en metros entre dos píxeles adyacentes")
+
+
 def _dtm_path(site_id: str) -> Path:
     m = _manifest()
     if m is None or site_id not in m["sites"]:
@@ -157,3 +178,71 @@ def route(req: RouteRequest):
         seg["to"] = {"lat": b.lat, "lon": b.lon, "elev_m": elev[i + 1]}
     result["elevation_source"] = elev_source
     return result
+
+
+@app.post("/api/illumination/window")
+def illumination_window(req: IlluminationWindowRequest):
+    """Devuelve una submatriz rectangular de iluminación entre dos coordenadas.
+
+    La grilla queda en filas/columnas con resolución 5 m por píxel por defecto, y cada
+    celda vale True si está iluminada y False si está en sombra.
+    """
+    try:
+        tif_path, band = resolve_shadow_tif(req.site_id, req.sol_tag, req.ltst, DATA_DIR)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    band = req.band or band
+    try:
+        window = rectangular_window_from_points(
+            tif_path,
+            {"lat": req.p1.lat, "lon": req.p1.lon},
+            {"lat": req.p2.lat, "lon": req.p2.lon},
+            band=band,
+            pixel_size_m=req.pixel_size_m,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    sol_tag = req.sol_tag or find_latest_sol_dir(req.site_id, DATA_DIR).name
+    return {
+        "site_id": req.site_id,
+        "sol_tag": sol_tag,
+        "ltst": req.ltst,
+        "band": band,
+        "pixel_size_m": window["pixel_size_m"],
+        "adjacent_distance_m": window["adjacent_distance_m"],
+        "shape": window["shape"],
+        "window": window["window"],
+        "values": window["values"],
+    }
+
+
+@app.post("/api/illumination/path")
+def illumination_path(req: IlluminationWindowRequest):
+    """Genera el mapa de iluminación para la hora pedida y luego ejecuta A* sobre ese mapa.
+
+    La banda del GeoTIFF se resuelve a partir de `ltst` o de `band`; la ventana entre
+    `p1` y `p2` se recorta de esa banda exacta; luego el A* minimiza la cantidad de
+    celdas en sombra dentro de ese mapa.
+    """
+    try:
+        tif_path, band = resolve_shadow_tif(req.site_id, req.sol_tag, req.ltst, DATA_DIR)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    band = req.band or band
+    try:
+        path = a_star_path_between_points(
+            tif_path,
+            {"lat": req.p1.lat, "lon": req.p1.lon},
+            {"lat": req.p2.lat, "lon": req.p2.lon},
+            band=band,
+            pixel_size_m=req.pixel_size_m,
+            allow_diagonal=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    sol_tag = req.sol_tag or find_latest_sol_dir(req.site_id, DATA_DIR).name
+    return path["path"]
