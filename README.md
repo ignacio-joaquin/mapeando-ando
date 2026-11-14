@@ -50,5 +50,20 @@ Dentro del server, los datos están en `/data` y el repo en `/opt/mapeando-ando`
 
 **Session Manager (admin).** También se puede entrar sin SSH desde la consola de AWS: EC2 → la instancia → Connect → Session Manager.
 
+
+## Contexto y skills de IA (equipo)
+
+Todo el equipo trabaja con el mismo contexto y las mismas skills, versionados en el repo. No hay que instalar nada: al clonar ya están.
+
+| Archivo | Qué es |
+|---|---|
+| `context.md` | **Fuente única de contexto**: core value, arquitectura, stack, reglas duras, cómo trabajamos, decisiones abiertas. Si cambia una decisión del proyecto, se edita acá en el mismo PR. |
+| `CLAUDE.md` | Lo que lee Claude Code en cada sesión: carga `context.md` y dice qué skill usar en cada área. |
+| `.claude/skills/` | Skills propias (`mapeando-*`, `linear-task`) + skills curated de [Gentleman-Skills](https://github.com/Gentleman-Programming/Gentleman-Skills) copiadas. |
+| `.claude/settings.json` | Permisos del proyecto (incluye no pushear a `main`). |
+| `.claude/update-skills.sh` | Vuelve a traer las skills externas desde upstream. Se revisa el diff y va por PR. |
+
+Si usás otro asistente (Cursor, Copilot, Gemini CLI), apuntalo a `context.md`: es el mismo contenido.
+
 ---
 Prototipo educativo, no software de vuelo.
