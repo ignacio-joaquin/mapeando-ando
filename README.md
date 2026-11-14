@@ -39,6 +39,12 @@ sudo systemctl start mapeando-download        # volver a correr la descarga
 journalctl -u mapeando-download -f             # ver el progreso
 ```
 
+## Relieve: DTM, pendiente, sombreado y curvas
+
+`pipeline/precompute.py --site <id>` toma el DTM del sitio (del manifest, o de S3 si no está en disco) y deja en `/data/output/<id>/` el DTM en COG, la pendiente en grados (misma grilla que el DTM), el sombreado, las curvas de nivel cada 10 m en GeoJSON y un `terrain.json` con la procedencia, los parámetros y el estado de cada capa. `--prueba` procesa un recorte de 2×2 km en `/data/prueba/`, fuera de lo que sirve nginx.
+
+La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangular con paralelo estándar en el ecuador, y en Jezero un "metro" de la proyección mide 0,948 m hacia el este. gdaldem da 28,7° donde hay 30°. El script usa el tamaño de píxel real sobre la esfera de 3396190 m, fila por fila.
+
 ## Sol y sombra con terreno
 
 `pipeline/illumination.py` precomputa, por sol, una pila de máscaras de sol/sombra por hora LTST y el amanecer/atardecer de cada píxel con el terreno (DTM 1 m + DEM 200 m para el borde del cráter + efemérides SPICE). Funciona con cualquier DTM. Uso, formato de salida, método y límites: [docs/illumination.md](docs/illumination.md).

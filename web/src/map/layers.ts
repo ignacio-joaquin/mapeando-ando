@@ -57,7 +57,10 @@ export const LAYERS: readonly LayerSpec[] = [
       instrument: "HiRISE DTM",
       resolution: "1 m/px",
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
-      assumptions: ["Iluminación sintética fija: no es la luz real del momento"],
+      assumptions: [
+        "Iluminación sintética fija: no es la luz real del momento",
+        "Relieve exagerado x3 en vertical",
+      ],
     },
     legend: [
       { color: "#2a2520", label: "sombra" },
