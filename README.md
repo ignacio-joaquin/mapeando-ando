@@ -39,6 +39,10 @@ sudo systemctl start mapeando-download        # volver a correr la descarga
 journalctl -u mapeando-download -f             # ver el progreso
 ```
 
+## Sol y sombra con terreno
+
+`pipeline/illumination.py` precomputa, por sol, una pila de máscaras de sol/sombra por hora LTST y el amanecer/atardecer de cada píxel con el terreno (DTM 1 m + DEM 200 m para el borde del cráter + efemérides SPICE). Funciona con cualquier DTM. Uso, formato de salida, método y límites: [docs/illumination.md](docs/illumination.md).
+
 ## Consumibles del traje (`/api/route`) · MODELED
 
 `POST /api/route` recibe una ruta ya armada y devuelve, por tramo, el gasto metabólico, el O2 y la batería, con los valores acumulados desde la salida. Todavía no hace pathfinding: cuando exista, le va a pasar sus puntos a esta misma función. Todo lo que devuelve lleva el badge **MODELED**.
