@@ -154,10 +154,39 @@ export function MapView({ center, bbox, siteId }: Props) {
         if (!state) continue;
         const existing = map.getLayer(spec.id);
 
-        if (!state.available || spec.kind !== "raster") {
+        if (!state.available) {
           if (existing) map.setLayoutProperty(spec.id, "visibility", "none");
           continue;
         }
+
+        // Vectoriales (curvas de nivel): un GeoJSON que sirve el pipeline en
+        // /tiles/<sitio>/contours.geojson. MapLibre lo descarga solo.
+        if (spec.kind === "vector") {
+          if (!existing) {
+            if (!map.getSource(spec.id)) {
+              map.addSource(spec.id, { type: "geojson", data: tileUrl(spec, siteId) });
+            }
+            map.addLayer(
+              {
+                id: spec.id,
+                type: "line",
+                source: spec.id,
+                paint: {
+                  "line-color": spec.legend[0]?.color ?? "#e0a24a",
+                  // Finas de lejos y más marcadas de cerca: de otro modo, a
+                  // zoom bajo las curvas tapan el relieve que hay debajo.
+                  "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.4, 17, 1.2],
+                  "line-opacity": state.opacity,
+                },
+              },
+              "site-bbox-line",
+            );
+          }
+          map.setLayoutProperty(spec.id, "visibility", state.visible ? "visible" : "none");
+          map.setPaintProperty(spec.id, "line-opacity", state.opacity);
+          continue;
+        }
+
         if (!existing) {
           if (!map.getSource(spec.id)) {
             map.addSource(spec.id, {
