@@ -120,14 +120,25 @@ def _pixel_ground_m(ds, row: int, col: int) -> tuple[float, float]:
 
 @dataclass
 class Grid:
-    """Ventana de trabajo de un tramo: pendiente media por celda y su georreferencia."""
-    slope: np.ndarray        # grados, NaN = sin dato
-    cls: np.ndarray          # índice en CLASSES, -1 = sin dato
+    """Ventana de trabajo de un tramo: pendiente por celda y su georreferencia.
+
+    Cada celda junta f × f píxeles de slope.tif. `slope` es la media (para el costo y
+    el estiramiento del paso); `peak` es el máximo (para lo que no se pisa, el límite
+    duro y la clase del tramo): una franja empinada más angosta que la celda no se
+    diluye en el promedio.
+    """
+    slope: np.ndarray        # grados, media por celda, NaN = sin dato
+    cls: np.ndarray          # índice en CLASSES según `peak`, -1 = sin dato
     transform: object        # Affine celda → CRS del raster
     crs: object
     dx_m: float
     dy_m: float
     contact: np.ndarray | None = None   # 1 con vista al hábitat, 0 tapado, -1 sin dato
+    slope_max: np.ndarray | None = None  # grados, máximo por celda; None = igual a la media
+
+    @property
+    def peak(self) -> np.ndarray:
+        return self.slope if self.slope_max is None else self.slope_max
 
     def cell_of(self, x: float, y: float) -> tuple[int, int]:
         c, r = apply_affine(~self.transform, x, y)
@@ -140,7 +151,7 @@ class Grid:
 
 
 def build_grid(ds, a_xy: tuple[float, float], b_xy: tuple[float, float], leg_m: float) -> Grid:
-    """Lee la pendiente alrededor de un tramo y la promedia a celdas de trabajo."""
+    """Lee la pendiente alrededor de un tramo y la junta en celdas de trabajo (media y máximo)."""
     from rasterio.transform import Affine
     from rasterio.windows import Window
 
@@ -166,6 +177,7 @@ def build_grid(ds, a_xy: tuple[float, float], b_xy: tuple[float, float], leg_m: 
     nr, nc = -(-h // f), -(-w // f)
     sums = np.zeros((nr, nc))
     counts = np.zeros((nr, nc))
+    peaks = np.full((nr, nc), -np.inf)
     nodata = ds.nodata
     strip = f * max(1, (STRIP_PX // w) // f)
     for rs in range(0, h, strip):
@@ -177,18 +189,23 @@ def build_grid(ds, a_xy: tuple[float, float], b_xy: tuple[float, float], leg_m: 
         ph = -(-rh // f) * f
         vals = np.zeros((ph, nc * f))
         mask = np.zeros((ph, nc * f))
+        tops = np.full((ph, nc * f), -np.inf)
         vals[:rh, :w] = np.where(valid, a, 0.0)
         mask[:rh, :w] = valid
+        tops[:rh, :w] = np.where(valid, a, -np.inf)
         i0 = rs // f
-        sums[i0:i0 + ph // f] += vals.reshape(ph // f, f, nc, f).sum(axis=(1, 3))
-        counts[i0:i0 + ph // f] += mask.reshape(ph // f, f, nc, f).sum(axis=(1, 3))
+        blk = (ph // f, f, nc, f)
+        sums[i0:i0 + ph // f] += vals.reshape(blk).sum(axis=(1, 3))
+        counts[i0:i0 + ph // f] += mask.reshape(blk).sum(axis=(1, 3))
+        np.maximum(peaks[i0:i0 + ph // f], tops.reshape(blk).max(axis=(1, 3)), out=peaks[i0:i0 + ph // f])
 
     slope = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+    slope_max = np.where(counts > 0, peaks, np.nan)
     cls = np.full(slope.shape, -1, dtype=np.int8)
-    known = np.isfinite(slope)
-    cls[known] = np.searchsorted(SLOPE_CUTS, slope[known], side="right")
+    known = np.isfinite(slope_max)
+    cls[known] = np.searchsorted(SLOPE_CUTS, slope_max[known], side="right")
     transform = ds.window_transform(Window(c0, r0, w, h)) * Affine.scale(f)
-    return Grid(slope, cls, transform, ds.crs, px_e * f, px_n * f)
+    return Grid(slope, cls, transform, ds.crs, px_e * f, px_n * f, slope_max=slope_max)
 
 
 # ------------------------------------------------------------------ sombra
@@ -233,10 +250,13 @@ class ShadowSampler:
 
 
 def cell_terms(grid: Grid, max_slope: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Por celda: r_pendiente, r_contacto y si se puede pisar. Lo usan astar() y los tests."""
+    """Por celda: r_pendiente, r_contacto y si se puede pisar. Lo usan astar() y los tests.
+
+    r_pendiente sale de la media (cuánto cuesta cruzar la celda); si se puede pisar sale
+    del máximo (el límite duro no se promedia)."""
     known = np.isfinite(grid.slope)
     r_slope = np.where(known, np.clip(np.nan_to_num(grid.slope) / max_slope, 0.0, 1.0), 1.0)
-    passable = ~known | (np.nan_to_num(grid.slope) < max_slope)
+    passable = ~np.isfinite(grid.peak) | (np.nan_to_num(grid.peak) < max_slope)
     if grid.contact is None:
         r_contact = np.zeros(grid.slope.shape)
     else:
@@ -437,7 +457,8 @@ def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack |
         leg_cls = "unknown"
     else:
         leg_cls = CLASSES[worst] if worst is not None else "unknown"
-    slopes = [float(grid.slope[r, c]) for r, c in path if np.isfinite(grid.slope[r, c])]
+    peak = grid.peak
+    slopes = [float(peak[r, c]) for r, c in path if np.isfinite(peak[r, c])]
 
     shadow_fraction = None
     cols_n = grid.cls.shape[1]
@@ -463,7 +484,7 @@ def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack |
         vis = [None if grid.contact[r, c] < 0 else bool(grid.contact[r, c]) for r, c in path[1:]]
     else:
         vis = [None] * (len(path) - 1)
-    step_slopes = [float(grid.slope[r, c]) if np.isfinite(grid.slope[r, c]) else None for r, c in path[1:]]
+    step_slopes = [float(peak[r, c]) if np.isfinite(peak[r, c]) else None for r, c in path[1:]]
 
     plan = LegPlan(latlon, steps, elev, leg_cls, max(slopes) if slopes else None, shadow_fraction, True,
                    resolution=res, slopes=step_slopes, visible=vis, cost_s=cost)
@@ -522,7 +543,10 @@ def _limit_sources(slope_src: dict, dose_src: dict, contact: ContactField | None
     if contact is not None:
         contact_src["resolution"] = contact.resolution
     return {
-        "terrain": slope_src, "o2": MODEL, "battery": MODEL, "calories": MODEL,
+        "terrain": {**slope_src, "assumptions": [
+            "Peor celda pisada, con el máximo de slope.tif dentro de cada celda de trabajo",
+            "La pendiente de slope.tif es por píxel: no ve escalones más chicos que el píxel"]},
+        "o2": MODEL, "battery": MODEL, "calories": MODEL,
         "daylight": {**MODEL, "assumptions": list(MODEL["assumptions"]) + [
             "Atardecer sobre horizonte plano, del index.json de la pila de sombras"]},
         "contact": contact_src, "dose": dose_src,
@@ -682,7 +706,8 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             "max_slope": _mv(None if plan.max_slope is None else round(plan.max_slope, 1), "°",
                              {**slope_src, "resolution": plan.resolution} if plan.planned else
                              {**slope_src, "source": plan.note or slope_src["source"]},
-                             [f"Pendiente media por celda ({plan.resolution}): no ve escalones más chicos"]
+                             [f"Máximo de slope.tif dentro de cada celda ({plan.resolution}): una franja empinada "
+                              "más angosta que la celda no se diluye"]
                              if plan.planned else None),
         }
         if stack is not None:

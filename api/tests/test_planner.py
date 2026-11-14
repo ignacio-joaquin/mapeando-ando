@@ -314,3 +314,45 @@ class TestSeguridad:
         assert body["legs"][0]["class"] == "blocked"
         assert body["verdict"]["status"] == "NO_GO"
         assert body["verdict"]["limiting_factor"] == "terrain"
+
+
+class TestPendienteMaxima:
+    """El límite duro usa el máximo de cada celda de trabajo, no la media (review del PR #14)."""
+
+    @pytest.fixture
+    def celdas_gruesas(self, site, monkeypatch):
+        # Con celdas de 1 px no hay promedio que probar: se fuerza f > 1.
+        monkeypatch.setattr(planner, "MAX_CELLS_SIDE", 50)
+        return site
+
+    def test_franja_angosta_empinada_no_se_diluye(self, client, celdas_gruesas):
+        slope = flat()
+        slope[:, 100] = 40.0          # 1 px de ancho: promediada en la celda quedaría bajo 25°
+        write_terrain(celdas_gruesas, slope)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        assert body["legs"][0]["class"] == "blocked"
+        assert body["verdict"]["status"] == "NO_GO"
+        assert body["verdict"]["limiting_factor"] == "terrain"
+
+    def test_reporta_el_maximo_de_la_celda(self, client, celdas_gruesas):
+        slope = flat()
+        slope[:, 100] = 20.0          # se puede pisar, pero el número tiene que ser 20, no la media
+        write_terrain(celdas_gruesas, slope)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        leg = body["legs"][0]
+        assert leg["max_slope"]["value"] == pytest.approx(20.0)
+        terrain = next(lim for lim in body["verdict"]["limits"] if lim["id"] == "terrain")
+        assert terrain["used"]["value"] == pytest.approx(20.0)
+        assert terrain["margin"] == pytest.approx(1 - 20 / 25, abs=1e-3)
+
+    def test_build_grid_guarda_media_y_maximo(self, celdas_gruesas):
+        import rasterio
+        slope = flat()
+        slope[:, 100] = 40.0
+        out = write_terrain(celdas_gruesas, slope)
+        with rasterio.open(out / "slope.tif") as ds:
+            from .rasters import LAT0, LON0, R
+            xa, ya = R * math.radians(LON0) - 300, R * math.radians(LAT0)
+            grid = planner.build_grid(ds, (xa, ya), (xa + 600, ya), 600)
+        assert np.nanmax(grid.peak) == pytest.approx(40.0)
+        assert np.nanmax(grid.slope) < 25.0

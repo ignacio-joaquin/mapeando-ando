@@ -10,7 +10,7 @@ No se compensan con nada. Los valores los fija el equipo y **todavía no tienen 
 
 | Id | Límite | Valor | Qué se mide en la ruta | De dónde sale lo medido |
 |---|---|---|---|---|
-| `terrain` | Pendiente máxima transitable | **25°** | pendiente media de la peor celda pisada | `slope.tif` (HiRISE DTM) · DERIVED |
+| `terrain` | Pendiente máxima transitable | **25°** | máximo de `slope.tif` en la peor celda pisada | `slope.tif` (HiRISE DTM) · DERIVED |
 | `o2` | Reserva de O2 al volver | **20 %** de la capacidad | O2 consumido (Pandolf) vs. capacidad × 0,8 | `api/consumables.py` · MODELED |
 | `battery` | Reserva de batería al volver | **20 %** de la capacidad | batería consumida vs. capacidad × 0,8 | `api/consumables.py` · MODELED |
 | `daylight` | Volver antes del atardecer, con margen | **30 min** antes | duración vs. (atardecer − 30 min − salida) | atardecer plano del `index.json` de la pila de sombras |
@@ -21,6 +21,10 @@ No se compensan con nada. Los valores los fija el equipo y **todavía no tienen 
 Notas:
 
 - **Pendiente.** Ojo: Pandolf (el modelo de consumo) se validó hasta ±25 % *de grado* (~14°), no hasta 25°. El límite de 25° es solo un supuesto de transitabilidad a pie. El A\* tampoco pisa celdas que lo superan: antes cortaba en 30°.
+- **Máximo, no media.** El A\* trabaja con celdas que juntan f × f píxeles de `slope.tif` (≈ 6 m en un tramo de 1 km, ≈ 30 m en uno de 5 km). Por cada celda se guardan dos valores:
+  - La **media** se usa solo para el costo (`r_pendiente`).
+  - El **máximo** decide qué celdas no se pisan, el límite duro, el `max_slope` del tramo y su color.
+  - Así, una franja de 40° más angosta que la celda no se diluye en el promedio ni da un margen falso.
 - **Calorías.** Se calculan y se muestran siempre, pero mientras el tope esté en `null` el límite sale `undefined`: no cuenta en el puntaje ni fuerza CAUTION.
 - **Hábitat.** Es la salida (`waypoints[0]`). La reserva se mide al final de la ruta, sea o no el hábitat.
 

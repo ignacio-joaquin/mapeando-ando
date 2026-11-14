@@ -155,7 +155,7 @@ Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
   - **A\*** (`api/planner.py`) sobre `slope.tif`, con costo = Σ Δt · (1 + Σ w_k · r_k(celda, hora de llegada)).
   - **Factores activos:** pendiente (w = 2), sombra según la banda de `shadow_hourly.tif` más cercana a la hora de llegada (w = 1) y sin línea de vista al hábitat (w = 1).
   - **Factores con peso pero sin capa todavía:** rugosidad, suelo suelto y radiación por terreno.
-  - **Celdas que no se pisan:** las que superan la pendiente máxima (límite duro, 25°).
+  - **Celdas que no se pisan:** las que superan la pendiente máxima (límite duro, 25°), medida con el **máximo** de `slope.tif` en la celda, no con la media.
   - **Ventana:** cada tramo se resuelve con margen (≥ 300 m), promediado a ≤ 300 × 300 celdas.
   - **Veredicto** (`api/safety.py`): límites duros sin compensación (pendiente, reserva de O2 y batería, regreso antes del atardecer, minutos sin contacto, dosis, calorías), puntaje = 100 · el margen más chico y robustez en escenarios de estrés. GO / CAUTION / NO-GO.
   - **Pendiente de decidir:** los valores de los límites son `ASSUMED` hasta tener fuente; el equipo tiene que confirmarlos o cambiarlos, incluido el tope de calorías, que hoy está sin definir.
