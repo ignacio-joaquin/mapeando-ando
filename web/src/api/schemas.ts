@@ -127,6 +127,8 @@ export const RouteLegSchema = z.object({
   duration: MeasuredValueSchema,
   bearing: MeasuredValueSchema,
   max_slope: MeasuredValueSchema,
+  /** % de la ruta en sombra a la hora de paso. Solo si hay pila de sombras de ese sol. */
+  shadow_fraction: MeasuredValueSchema.optional(),
 });
 
 export const RouteStopSchema = z.object({
