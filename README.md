@@ -4,6 +4,8 @@ Mapa de supervivencia para una EVA en la superficie de Marte (NASA Space Apps 20
 
 Plan y tareas: proyecto **Mapa Marciano — Space Apps 2026** en Linear (equipo Mapeando Ando).
 
+Contexto, decisiones, datos y estado del proyecto: [BITACORA.md](BITACORA.md).
+
 ## Estructura
 
 | Carpeta | Qué hay |
@@ -38,7 +40,7 @@ journalctl -u mapeando-download -f             # ver el progreso
 
 ## Acceso al servidor
 
-**SSH (equipo).** Cada integrante tiene su propio usuario, con sudo. El admin pasa usuario y contraseña inicial por privado; en el primer login se pide cambiarla. Hay fail2ban: 3 intentos fallidos bloquean la IP 24 h.
+**SSH (equipo).** Cada integrante tiene su propio usuario, con sudo. El admin pasa usuario y contraseña por privado. Hay fail2ban: 8 intentos fallidos en 10 minutos bloquean la IP por 30 minutos.
 
 - Entrar: `ssh <usuario>@<IP del server>`. La IP la pasa el admin; no se publica acá.
 - Recomendado: subir tu clave pública con `ssh-copy-id <usuario>@<IP>`, para no depender de la contraseña.
