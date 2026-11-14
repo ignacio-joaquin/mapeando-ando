@@ -4,14 +4,15 @@
 A partir del DTM del sitio genera, en <out>/<sitio>/:
 
     skyview.tif           fracción de cielo visible (sky-view factor, 0–1), COG float32
-    shelter.tif           1 refugio, 0 no, 255 sin dato; COG uint8
+    shelter.tif           2 refugio fuerte, 1 refugio, 0 no, 255 sin dato; COG uint8
     shelter_minutes.tif   minutos caminando hasta el refugio más cercano, COG float32
-    skyview/, shelter/, shelter-minutes/   tiles XYZ PNG para el mapa (pipeline/tiles.py)
+    shelter_strong_minutes.tif   ídem, hasta el refugio fuerte más cercano
+    skyview/, shelter/, shelter-minutes/, shelter-strong-minutes/   tiles XYZ PNG (pipeline/tiles.py)
     shelter.json          procedencia, parámetros, estado y tiles de cada capa (mismo formato
                           que terrain.json, así el mapa lo lee igual)
 
 Refugio = poco cielo visible (pie de escarpes, paredes de cráter, bloques grandes) en un lugar
-donde se puede estar parado. Es un refugio de emergencia para dos o tres personas: alcanza con
+donde se puede estar parado. Dos niveles: refugio (cielo ≤ 85 %) y refugio fuerte (≤ 75 %). Es un refugio de emergencia para dos o tres personas: alcanza con
 unos 10 m². Menos cielo visible es menos radiación de fondo y más reparo; el número es
 geométrico, no una dosis.
 
@@ -57,6 +58,7 @@ RADIUS_M = 500.0           # hasta dónde se mira el horizonte local
 DIRECTIONS = 16            # azimuts para el sky-view factor
 DIST_RATIO = 1.15          # las distancias de muestreo crecen en progresión geométrica
 SVF_MAX = 0.85             # refugio si se ve como mucho el 85 % del cielo
+SVF_STRONG = 0.75          # refugio fuerte: 75 % o menos (en Gale, 0,85 marca casi todas las faldas)
 MAX_SLOPE_DEG = 30.0       # igual que "no transitable" en la leyenda de relief-slope (web)
 MIN_AREA_M2 = 10.0         # dos o tres personas sentadas
 WALK_SPEED_M_S = 0.8       # en plano; el mismo default que /api/route/consumables
@@ -71,6 +73,8 @@ LAYER_FILES = {
     "survival-skyview": ("skyview.tif", "skyview", "cielo", "bilinear"),
     "survival-shelter": ("shelter.tif", "shelter", "refugio", "near"),
     "survival-shelter-minutes": ("shelter_minutes.tif", "shelter-minutes", "minutos", "bilinear"),
+    "survival-shelter-strong-minutes": ("shelter_strong_minutes.tif", "shelter-strong-minutes", "minutos",
+                                        "bilinear"),
 }
 
 
@@ -283,6 +287,7 @@ def main(argv=None) -> int:
     p.add_argument("--radius-m", type=float, default=RADIUS_M, help="alcance del horizonte local")
     p.add_argument("--directions", type=int, default=DIRECTIONS, help="azimuts del sky-view")
     p.add_argument("--svf-max", type=float, default=SVF_MAX, help="umbral de cielo visible para refugio")
+    p.add_argument("--svf-strong", type=float, default=SVF_STRONG, help="umbral para refugio fuerte")
     p.add_argument("--max-slope", type=float, default=MAX_SLOPE_DEG, help="pendiente máxima transitable (°)")
     p.add_argument("--min-area-m2", type=float, default=MIN_AREA_M2, help="área mínima de un refugio")
     p.add_argument("--no-tiles", action="store_true", help="no generar los tiles PNG del mapa")
@@ -291,6 +296,8 @@ def main(argv=None) -> int:
         p.error("hace falta --site o --dtm")
     if args.walk_res % args.res:
         p.error("--walk-res tiene que ser múltiplo de --res")
+    if args.svf_strong > args.svf_max:
+        p.error("--svf-strong no puede ser mayor que --svf-max")
 
     t0 = time.time()
     try:
@@ -334,35 +341,64 @@ def main(argv=None) -> int:
         min_px = max(1, math.ceil(args.min_area_m2 / (px_e * px_n)))
         shelter = np.lib.format.open_memmap(work / "shelter.npy", mode="w+", dtype=bool, shape=shape)
         shelter_mask_strips(svf, slope, shelter, args.svf_max, args.max_slope, min_px, strip_rows)
-        n_data = n_shelter = 0
-        for r0, (d, s) in by_strips(*shape, lambda a, b: (
-                int((np.isfinite(svf[a:b]) & np.isfinite(slope[a:b])).sum()), int(shelter[a:b].sum()))):
+        # Fuerte: mismo criterio con menos cielo. Es un subconjunto de `shelter` (sus manchas
+        # caen dentro de manchas de refugio, que son al menos igual de grandes).
+        strong = np.lib.format.open_memmap(work / "strong.npy", mode="w+", dtype=bool, shape=shape)
+        shelter_mask_strips(svf, slope, strong, args.svf_strong, args.max_slope, min_px, strip_rows)
+        n_data = n_shelter = n_strong = 0
+        for r0, (d, s, f) in by_strips(*shape, lambda a, b: (
+                int((np.isfinite(svf[a:b]) & np.isfinite(slope[a:b])).sum()), int(shelter[a:b].sum()),
+                int(strong[a:b].sum()))):
             n_data += d
             n_shelter += s
-        fraction = n_shelter / max(1, n_data)
-        log(f"refugio: {n_shelter} celdas de {px_e * px_n:.1f} m² ({fraction:.2%} de las celdas con dato)")
+            n_strong += f
+        fraction, fraction_strong = n_shelter / max(1, n_data), n_strong / max(1, n_data)
+        log(f"refugio: {n_shelter} celdas de {px_e * px_n:.1f} m² ({fraction:.2%} de las celdas con dato), "
+            f"fuerte: {n_strong} ({fraction_strong:.2%})")
 
         # 3. Minutos en la grilla gruesa: refugio si alguna celda fina del bloque lo es.
         k = args.walk_res // args.res
         walk = coarse_grid(grid, k)
         zc = block_reduce(grid.z, k, np.mean)                  # −inf si falta algún píxel
-        refuge_c = block_reduce(shelter, k, np.any)
-        minutes = minutes_to_shelter(walk_cost(slope_of(zc, walk.jac), args.max_slope), refuge_c, walk.pixel_m)
+        cost = walk_cost(slope_of(zc, walk.jac), args.max_slope)
         del zc
+        minutes = minutes_to_shelter(cost, block_reduce(shelter, k, np.any), walk.pixel_m)
+        minutes_strong = minutes_to_shelter(cost, block_reduce(strong, k, np.any), walk.pixel_m)
+        del cost
         log(f"minutos al refugio listos (grilla {walk.rows}×{walk.cols})")
 
         # 4. COG.
         write_cog(out / "skyview.tif", grid, work, "float32", F32_NODATA, by_strips(*shape, lambda a, b: (
             np.where(np.isfinite(svf[a:b]), svf[a:b], F32_NODATA))))
         write_cog(out / "shelter.tif", grid, work, "uint8", U8_NODATA, by_strips(*shape, lambda a, b: (
-            np.where(np.isfinite(svf[a:b]) & np.isfinite(slope[a:b]), shelter[a:b].astype(np.uint8), U8_NODATA))))
-        write_cog(out / "shelter_minutes.tif", walk, work, "float32", F32_NODATA,
-                  [(0, np.where(np.isfinite(minutes), minutes, F32_NODATA))])
+            np.where(np.isfinite(svf[a:b]) & np.isfinite(slope[a:b]),
+                     shelter[a:b].astype(np.uint8) + strong[a:b].astype(np.uint8), U8_NODATA))))
+        for name, m in (("shelter_minutes.tif", minutes), ("shelter_strong_minutes.tif", minutes_strong)):
+            write_cog(out / name, walk, work, "float32", F32_NODATA, [(0, np.where(np.isfinite(m), m, F32_NODATA))])
 
-        reach = minutes[np.isfinite(minutes)]
         fine_res = f"derivada, {px_e:.1f} × {px_n:.1f} m/px"
         common = {"status": "ok", "mission": mission,
                   "instrument": "HiRISE DTM" if mission == "MRO HiRISE" else None}
+
+        def minutes_layer(fname, m, target):
+            reach = m[np.isfinite(m)]
+            return {
+                **common, "file": fname, "unit": "min", "provenance": "MODELED",
+                "resolution": f"modelada, {walk.pixel_m[0]:.0f} × {walk.pixel_m[1]:.0f} m/px",
+                "nodata": F32_NODATA,
+                "method": f"Costo acumulado (scikit-image MCP_Geometric, 8 vecinos) desde {target}.",
+                "params": {"flat_speed_m_s": WALK_SPEED_M_S, "max_slope_deg": args.max_slope,
+                           "walk_res": args.walk_res},
+                "assumptions": [
+                    f"Velocidad de Tobler (1993) escalada a {WALK_SPEED_M_S} m/s en plano.",
+                    "Pendiente máxima de la celda, promediando subir y bajar (conservador).",
+                    f"Celdas con más de {args.max_slope:.0f}° no se pisan.",
+                    f"Camino calculado a {walk.pixel_m[0]:.0f} m: un refugio de pocos metros cuenta "
+                    "desde el borde de su celda."],
+                "median_min": round(float(np.median(reach)), 1) if reach.size else None,
+                "p90_min": round(float(np.percentile(reach, 90)), 1) if reach.size else None,
+            }
+
         layers = {
             "survival-skyview": {
                 **common, "file": "skyview.tif", "unit": "fracción", "provenance": "DERIVED",
@@ -377,31 +413,21 @@ def main(argv=None) -> int:
             "survival-shelter": {
                 **common, "file": "shelter.tif", "unit": None, "provenance": "DERIVED",
                 "resolution": fine_res, "nodata": U8_NODATA,
-                "params": {"svf_max": args.svf_max, "max_slope_deg": args.max_slope,
+                "params": {"svf_max": args.svf_max, "svf_strong": args.svf_strong, "max_slope_deg": args.max_slope,
                            "min_area_m2": args.min_area_m2, "min_px": min_px},
-                "assumptions": [f"Refugio = cielo visible ≤ {args.svf_max:.0%}, pendiente ≤ {args.max_slope:.0f}° "
-                                f"y mancha de al menos {min_px * px_e * px_n:.0f} m² (dos o tres personas).",
+                "values": {"0": "no", "1": "refugio", "2": "refugio fuerte"},
+                "assumptions": [f"Refugio = cielo visible ≤ {args.svf_max:.0%}; fuerte = ≤ {args.svf_strong:.0%}.",
+                                f"Pendiente ≤ {args.max_slope:.0f}° y mancha de al menos "
+                                f"{min_px * px_e * px_n:.0f} m² (dos o tres personas).",
                                 "Poco cielo es reparo geométrico, no una dosis calculada."],
                 "fraction": round(fraction, 5),   # sobre las celdas con dato
+                "fraction_strong": round(fraction_strong, 5),
             },
-            "survival-shelter-minutes": {
-                **common, "file": "shelter_minutes.tif", "unit": "min", "provenance": "MODELED",
-                "resolution": f"modelada, {walk.pixel_m[0]:.0f} × {walk.pixel_m[1]:.0f} m/px",
-                "nodata": F32_NODATA,
-                "method": "Costo acumulado (scikit-image MCP_Geometric, 8 vecinos) desde los refugios.",
-                "params": {"flat_speed_m_s": WALK_SPEED_M_S, "max_slope_deg": args.max_slope,
-                           "walk_res": args.walk_res},
-                "assumptions": [
-                    f"Velocidad de Tobler (1993) escalada a {WALK_SPEED_M_S} m/s en plano.",
-                    "Pendiente máxima de la celda, promediando subir y bajar (conservador).",
-                    f"Celdas con más de {args.max_slope:.0f}° no se pisan.",
-                    f"Camino calculado a {walk.pixel_m[0]:.0f} m: un refugio de pocos metros cuenta "
-                    "desde el borde de su celda."],
-                "median_min": round(float(np.median(reach)), 1) if reach.size else None,
-                "p90_min": round(float(np.percentile(reach, 90)), 1) if reach.size else None,
-            },
+            "survival-shelter-minutes": minutes_layer("shelter_minutes.tif", minutes, "los refugios"),
+            "survival-shelter-strong-minutes": minutes_layer("shelter_strong_minutes.tif", minutes_strong,
+                                                             "los refugios fuertes"),
         }
-        del svf, slope, shelter, minutes
+        del svf, slope, shelter, strong, minutes, minutes_strong
 
         # 5. Tiles para el mapa. Si fallan, los COG quedan y el índice lo dice.
         failed = False

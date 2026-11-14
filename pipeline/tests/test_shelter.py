@@ -165,7 +165,8 @@ def test_full_run_on_synthetic_crater(tmp_path):
     d = out
     index = json.loads((d / "shelter.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
-        "survival-skyview": "ok", "survival-shelter": "ok", "survival-shelter-minutes": "ok"}
+        "survival-skyview": "ok", "survival-shelter": "ok", "survival-shelter-minutes": "ok",
+        "survival-shelter-strong-minutes": "ok"}
     assert index["layers"]["survival-skyview"]["provenance"] == "DERIVED"
     assert index["mode"] == "completo" and index["warnings"] == []      # forma de terrain.json
     assert not (out / ".shelter-run.work").exists()
@@ -180,9 +181,41 @@ def test_full_run_on_synthetic_crater(tmp_path):
         # fondo del cráter: el borde a 500 m y 120 m más arriba tapa el cielo, 1 − sin(13°) ≈ 0,77
         assert svf[c, c] == pytest.approx(0.77, abs=0.02)
         assert svf.mask[0, 0]                         # borde: sin horizonte completo
-        assert refuge[c, c] == 1
+        assert refuge[c, c] == 1                          # 0,77: refugio, no fuerte (≤ 0,75)
+        assert set(np.unique(refuge.compressed())) <= {0, 1, 2}
         cm = m.height // 2
         assert mins[cm, cm] == 0
         # en el plano de afuera hace falta caminar: más minutos cuanto más lejos
         ring = cm + int(560 / 20)                     # ~60 m afuera del borde del cráter
         assert 0 < mins[cm, ring] < mins[cm, ring + 3]
+
+
+def test_strong_tier_marks_2_and_has_its_own_minutes(tmp_path):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    # Mismo cráter, más profundo: el fondo ve menos del 75 % del cielo.
+    r_m, n, px = 3396190.0, 600, 5.0
+    yy, xx = np.mgrid[0:n, 0:n] * px
+    rr = np.hypot(xx - n * px / 2, yy - n * px / 2)
+    z = (-2500 - 200 * np.clip(1 - (rr / 500.0) ** 2, 0, None)).astype(np.float32)   # paredes ≤ 39°
+    dtm = tmp_path / "deep.tif"
+    with rasterio.open(dtm, "w", driver="GTiff", width=n, height=n, count=1, dtype="float32",
+                       crs="+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +R=3396190 +units=m +no_defs",
+                       transform=from_origin(math.radians(77.45) * r_m, math.radians(18.45) * r_m, px, px)) as ds:
+        ds.write(z, 1)
+    assert shelter.main(["--dtm", str(dtm), "--out", str(tmp_path / "o"), "--res", "2", "--walk-res", "4",
+                         "--radius-m", "500", "--min-area-m2", "500", "--max-slope", "45", "--no-tiles"]) == 0
+    index = json.loads((tmp_path / "o" / "shelter.json").read_text())
+    assert index["layers"]["survival-shelter"]["fraction_strong"] > 0
+    with rasterio.open(tmp_path / "o" / "shelter.tif") as r, \
+            rasterio.open(tmp_path / "o" / "shelter_strong_minutes.tif") as m:
+        c = r.height // 2
+        assert r.read(1)[c, c] == 2
+        mins = m.read(1, masked=True)
+        assert mins[m.height // 2, m.height // 2] == 0
+
+
+def test_strong_threshold_cannot_exceed_refuge_threshold(tmp_path):
+    with pytest.raises(SystemExit):
+        shelter.main(["--dtm", str(tmp_path / "x.tif"), "--svf-max", "0.8", "--svf-strong", "0.9"])

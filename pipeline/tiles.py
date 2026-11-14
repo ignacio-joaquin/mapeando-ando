@@ -52,7 +52,8 @@ RAMPAS = {
     ],
     # Capas de refugio (pipeline/shelter.py). Un color con cuatro números lleva su alfa.
     "cielo": [
-        (0, 0.85, "86 200 232"),      # refugio, ≤ 85 %    #56c8e8
+        (0, 0.75, "176 124 240"),     # refugio fuerte     #b07cf0
+        (0.75, 0.85, "86 200 232"),   # refugio            #56c8e8
         (0.85, 0.92, "138 154 140"),  # algo cubierto      #8a9a8c
         (0.92, 0.97, "120 108 96 120"),  # poco cubierto   #786c60, semitransparente
         (0.97, 1.001, "0 0 0 0"),     # cielo abierto: transparente
@@ -60,6 +61,7 @@ RAMPAS = {
     "refugio": [
         (0, 1, "0 0 0 0"),            # no es refugio: transparente
         (1, 2, "86 200 232"),         # refugio            #56c8e8 (no se confunde con "< 5 min")
+        (2, 3, "176 124 240"),        # refugio fuerte     #b07cf0
     ],
     "minutos": [
         (0, 5, "47 125 79"),          # < 5 min            #2f7d4f

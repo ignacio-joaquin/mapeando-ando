@@ -258,6 +258,7 @@ def _slope_deg(dtm_path: Path, lat: float, lon: float) -> float:
 # id de capa (web/src/map/layers.ts), etiqueta, unidad y decimales.
 SHELTER_POINT_LAYERS = (
     ("survival-shelter-minutes", "Minutos al refugio", "min", 1),
+    ("survival-shelter-strong-minutes", "Minutos al refugio fuerte", "min", 1),
     ("survival-skyview", "Cielo visible", "fracción", 3),
 )
 

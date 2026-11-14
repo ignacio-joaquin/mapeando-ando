@@ -200,6 +200,37 @@ export const LAYERS: readonly LayerSpec[] = [
     defaultVisible: false,
   },
   {
+    id: "survival-shelter-strong-minutes",
+    label: "Minutos al refugio fuerte",
+    group: "supervivencia",
+    unit: "min",
+    script: "shelter.py",
+    source: {
+      provenance: "MODELED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "10 m/px",
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y la capa de refugios",
+      assumptions: [
+        "Caminata de Tobler (1993) escalada a 0,8 m/s en plano",
+        "Más de 30° no se pisa",
+        "Refugio fuerte = cielo visible ≤ 75 %",
+        "Provisorio hasta que exista el costo del planificador",
+      ],
+    },
+    // Los mismos cortes que RAMPAS["minutos"] de pipeline/tiles.py.
+    legend: [
+      { color: "#2f7d4f", label: "< 5 min" },
+      { color: "#e0a24a", label: "5–15 min" },
+      { color: "#e07a4a", label: "15–30 min" },
+      { color: "#e0564a", label: "> 30 min" },
+    ],
+    tiles: "/tiles/{site}/shelter-strong-minutes/{z}/{x}/{y}.png",
+    kind: "raster",
+    categorical: true,
+    defaultVisible: false,
+  },
+  {
     id: "survival-skyview",
     label: "Cielo visible",
     group: "supervivencia",
@@ -218,7 +249,8 @@ export const LAYERS: readonly LayerSpec[] = [
     },
     // Los mismos cortes que RAMPAS["cielo"] de pipeline/tiles.py.
     legend: [
-      { color: "#56c8e8", label: "≤ 85 % (refugio)" },
+      { color: "#b07cf0", label: "≤ 75 % (refugio fuerte)" },
+      { color: "#56c8e8", label: "75–85 % (refugio)" },
       { color: "#8a9a8c", label: "85–92 %" },
       { color: "#786c60", label: "92–97 %" },
       { color: "transparent", label: "> 97 % cielo abierto" },
@@ -241,11 +273,16 @@ export const LAYERS: readonly LayerSpec[] = [
       resolution: "2 m/px",
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
       assumptions: [
-        "Refugio = cielo visible ≤ 85 %, pendiente ≤ 30° y al menos ~10 m² (dos o tres personas)",
+        "Refugio = cielo visible ≤ 85 %; fuerte = ≤ 75 %",
+        "Pendiente ≤ 30° y al menos ~10 m² (dos o tres personas)",
         "Reparo geométrico, no una dosis calculada",
       ],
     },
-    legend: [{ color: "#56c8e8", label: "refugio de emergencia" }],
+    // Los mismos valores que RAMPAS["refugio"] de pipeline/tiles.py.
+    legend: [
+      { color: "#b07cf0", label: "refugio fuerte (cielo ≤ 75 %)" },
+      { color: "#56c8e8", label: "refugio (cielo ≤ 85 %)" },
+    ],
     tiles: "/tiles/{site}/shelter/{z}/{x}/{y}.png",
     kind: "raster",
     categorical: true,
