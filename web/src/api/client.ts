@@ -1,0 +1,216 @@
+/**
+ * Cliente de la API. Rutas SIEMPRE relativas (`/api/...`): en dev las proxea
+ * vite al server real (VITE_API_TARGET), en producción las sirve nginx en el
+ * mismo origen. El build de producción no necesita ninguna variable.
+ */
+import {
+  HealthSchema,
+  PointSchema,
+  type PointInfo,
+  RouteResponseSchema,
+  RoverPhotosSchema,
+  type RoverPhotos,
+  type RouteRequest,
+  type RouteResponse,
+  SiteDetailSchema,
+  SitesSchema,
+  TerrainIndexSchema,
+  type TerrainIndex,
+  type Health,
+  type SiteDetail,
+  type Sites,
+} from "./schemas";
+import { fixtureHealth, fixtureSiteDetail, fixtureSites } from "./fixtures";
+import { exampleRoute } from "./routeFixture";
+import type { ZodType } from "zod";
+
+/**
+ * `true` cuando no hay backend: la UI tiene que avisarlo.
+ *
+ * Solo en desarrollo (`npm run dev`) sin VITE_API_TARGET. El build de
+ * producción NUNCA usa fixtures: nginx sirve /api en el mismo origen.
+ * OJO: no leer VITE_API_TARGET acá. Vite incrusta en el JS público las
+ * variables VITE_* que usa el código, y con ella iría la IP del server; por
+ * eso vite.config.ts pasa solo el booleano __API_PROXY__.
+ */
+export const usingFixtures = import.meta.env.DEV && !__API_PROXY__;
+
+/**
+ * Mensaje legible de un error de FastAPI. `detail` es un texto en los
+ * HTTPException, pero una lista de objetos en los 422 de validación (que sin
+ * esto se mostraban como "[object Object]").
+ */
+async function errorDetail(res: Response): Promise<string> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return ""; // sin cuerpo JSON
+  }
+  if (!body || typeof body !== "object" || !("detail" in body)) return "";
+  const { detail } = body;
+  if (typeof detail === "string") return `: ${detail}`;
+  if (Array.isArray(detail)) {
+    const msgs = detail.map((d: unknown) => {
+      if (d && typeof d === "object" && "msg" in d) {
+        const loc = "loc" in d && Array.isArray(d.loc) ? ` (${d.loc.join(".")})` : "";
+        return `${String(d.msg)}${loc}`;
+      }
+      return JSON.stringify(d);
+    });
+    return `: ${msgs.join("; ")}`;
+  }
+  return `: ${JSON.stringify(detail)}`;
+}
+
+async function get<T>(path: string, schema: ZodType<T>): Promise<T> {
+  const res = await fetch(path, { headers: { accept: "application/json" } });
+  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  const parsed = schema.safeParse(await res.json());
+  if (!parsed.success) {
+    // El contrato cambió: que se vea acá y no como undefined tres capas arriba.
+    throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+export async function fetchHealth(): Promise<Health> {
+  if (usingFixtures) return fixtureHealth;
+  return get("/api/health", HealthSchema);
+}
+
+export async function fetchSites(): Promise<Sites> {
+  if (usingFixtures) return fixtureSites;
+  return get("/api/sites", SitesSchema);
+}
+
+export async function fetchSiteDetail(siteId: string): Promise<SiteDetail | null> {
+  if (usingFixtures) return fixtureSiteDetail[siteId] ?? null;
+  try {
+    return await get(`/api/sites/${siteId}`, SiteDetailSchema);
+  } catch {
+    // 404 mientras la descarga no terminó: degradar, no romper.
+    return null;
+  }
+}
+
+/**
+ * Qué hay en un punto del mapa. Sin backend no hay nada que consultar: devuelve
+ * null y el inspector lo dice, en vez de inventar una elevación.
+ */
+export async function fetchPoint(
+  siteId: string,
+  lat: number,
+  lon: number,
+  signal?: AbortSignal,
+): Promise<PointInfo | null> {
+  if (usingFixtures) return null;
+  const q = new URLSearchParams({ lat: String(lat), lon: String(lon) });
+  const res = await fetch(`/api/sites/${siteId}/point?${q}`, {
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok) return null;
+  const parsed = PointSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error(`/api/sites/${siteId}/point no cumple el contrato: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Índice de las capas de relieve del sitio (pipeline/precompute.py). null =
+ * el pipeline todavía no corrió para este sitio: las capas quedan esperando.
+ * `no-cache` porque nginx manda `expires 1h` en /tiles/ y, después de volver a
+ * correr el pipeline, el navegador seguiría con el índice viejo.
+ */
+export async function fetchTerrain(siteId: string): Promise<TerrainIndex | null> {
+  if (usingFixtures) return null;
+  const path = `/tiles/${siteId}/terrain.json`;
+  const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  const parsed = TerrainIndexSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+/**
+ * ¿Existe esta salida del pipeline? Las capas se prenden solo si el tile está.
+ * Mientras MAP-9 no haya corrido, esto devuelve false y la capa queda en
+ * "esperando pipeline" en vez de pintar un mapa vacío.
+ */
+export async function tileExists(url: string): Promise<boolean> {
+  if (usingFixtures) return false;
+  try {
+    const res = await fetch(url, { method: "HEAD" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export interface PlannedRoute {
+  readonly route: RouteResponse;
+  /**
+   * true = la calculó el planificador de ejemplo del frontend, no el server.
+   * La UI tiene que decirlo al lado del veredicto.
+   */
+  readonly example: boolean;
+}
+
+/**
+ * Planifica una travesía. Sin backend, o mientras el server no tenga
+ * /api/route (404/405/501), usa el planificador de ejemplo: degradar, no romper.
+ * Cualquier otro error (contrato roto, 500) se muestra tal cual.
+ */
+export async function planRoute(req: RouteRequest, signal?: AbortSignal): Promise<PlannedRoute> {
+  if (usingFixtures) return { route: exampleRoute(req), example: true };
+
+  const res = await fetch("/api/route", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(req),
+    ...(signal ? { signal } : {}),
+  });
+  if (res.status === 404 || res.status === 405 || res.status === 501) {
+    return { route: exampleRoute(req), example: true };
+  }
+  if (!res.ok) {
+    throw new Error(`/api/route respondió ${res.status}${await errorDetail(res)}`);
+  }
+  const parsed = RouteResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error(`/api/route no cumple el contrato: ${parsed.error.message}`);
+  }
+  return { route: parsed.data, example: false };
+}
+
+/**
+ * Fotos reales del rover más cercanas a un punto (MAP-33). Sin backend, o
+ * mientras el endpoint no exista, devuelve la lista vacía con una nota: las
+ * fotos tienen que ser reales, así que no hay fotos de ejemplo.
+ */
+export async function fetchRoverPhotos(
+  siteId: string,
+  p: { readonly lat: number; readonly lon: number },
+  signal?: AbortSignal,
+): Promise<RoverPhotos> {
+  const missing: RoverPhotos = {
+    photos: [],
+    note: "Falta el endpoint de fotos del server (MAP-33): todavía no hay fotos reales para mostrar.",
+  };
+  if (usingFixtures) return missing;
+  const qs = new URLSearchParams({ lat: String(p.lat), lon: String(p.lon) });
+  const res = await fetch(`/api/sites/${siteId}/photos?${qs.toString()}`, {
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (res.status === 404 || res.status === 405 || res.status === 501) return missing;
+  if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}${await errorDetail(res)}`);
+  const parsed = RoverPhotosSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
+  return parsed.data;
+}

@@ -1,10 +1,12 @@
 """API de Mapa Marciano.
 
-Expone el estado del servidor, el inventario de datos por sitio y /api/route, que hoy
-calcula los consumibles del traje sobre una ruta dada. Acá se suman las point queries
-y el pathfinding.
+Expone el estado del servidor, el inventario de datos por sitio y
+/api/route/consumables, que calcula los consumibles del traje sobre una ruta dada.
+/api/route queda reservado para el planificador 4D (hoy responde 501). Acá se suman
+las point queries y el pathfinding.
 """
 import json
+import math
 import os
 import subprocess
 from pathlib import Path
@@ -14,13 +16,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .consumables import Step, SuitParams, route_consumption
-from .illumination_matrix import (
-    a_star_path_between_points,
-    find_latest_sol_dir,
-    resolve_shadow_tif,
-    rectangular_window_from_points,
-)
-from .terrain import TerrainError, densify, haversine_m, sample_dtm
+from .terrain import MARS_RADIUS_M, TerrainError, densify, haversine_m, sample_dtm
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 REPO_DIR = Path(__file__).resolve().parent.parent
@@ -72,7 +68,7 @@ def site(site_id: str):
     return m["sites"][site_id]
 
 
-# ---------------------------------------------------------------- /api/route
+# ---------------------------------------------------- /api/route/consumables
 
 _DEFAULTS = SuitParams()
 MAX_POINTS = 500
@@ -99,28 +95,13 @@ class SuitOverrides(BaseModel):
     base_power_w: float = Field(_DEFAULTS.base_power_w, ge=0)
 
 
-class RouteRequest(BaseModel):
+class ConsumablesRequest(BaseModel):
     site_id: Optional[str] = Field(None, description="Obligatorio si los puntos no traen elev_m")
     points: list[RoutePoint] = Field(min_length=2, max_length=MAX_POINTS)
     speed_m_s: float = Field(0.8, gt=0, le=3.0)
     cargo_kg: float = Field(_DEFAULTS.cargo_kg, ge=0, le=500, description="Carga extra transportada (M2)")
     sample_step_m: float = Field(10.0, ge=1.0, le=200.0, description="Paso de muestreo del DTM")
     suit: SuitOverrides = Field(default_factory=SuitOverrides)
-
-
-class IlluminationPoint(BaseModel):
-    lat: float = Field(ge=-90, le=90)
-    lon: float = Field(ge=-180, le=180)
-
-
-class IlluminationWindowRequest(BaseModel):
-    site_id: str = Field(..., description="Sitio cuyo `shadow_hourly.tif` se consulta")
-    sol_tag: Optional[str] = Field(None, description="Directorio de sol, por ejemplo 20261115T000000Z")
-    ltst: Optional[str] = Field(None, description="Hora local solar, por ejemplo 12:30")
-    p1: IlluminationPoint
-    p2: IlluminationPoint
-    band: Optional[int] = Field(None, ge=1, description="Banda del GeoTIFF; si falta, se resuelve desde ltst")
-    pixel_size_m: float = Field(5.0, gt=0, le=100.0, description="Distancia en metros entre dos píxeles adyacentes")
 
 
 def _dtm_path(site_id: str) -> Path:
@@ -133,7 +114,7 @@ def _dtm_path(site_id: str) -> Path:
     return DATA_DIR / dtm["path"]
 
 
-def _segments_from_request(req: RouteRequest) -> tuple[list[list[Step]], list[float], str]:
+def _segments_from_request(req: ConsumablesRequest) -> tuple[list[list[Step]], list[float], str]:
     pts = req.points
     given = [p.elev_m is not None for p in pts]
     if all(given):
@@ -165,10 +146,13 @@ def _segments_from_request(req: RouteRequest) -> tuple[list[list[Step]], list[fl
     return segments, vertex_elev, f"dtm:{req.site_id}"
 
 
-@app.post("/api/route")
-def route(req: RouteRequest):
+@app.post("/api/route/consumables")
+def route_consumables(req: ConsumablesRequest):
     """Consumibles del traje por tramo sobre una ruta ya armada (lista de puntos).
-    Cada tramo va de points[i] a points[i+1]. Todo el resultado es MODELED."""
+    Cada tramo va de points[i] a points[i+1]. Todo el resultado es MODELED.
+
+    Antes vivía en /api/route; se mudó para dejarle esa ruta al planificador 4D,
+    cuyo contrato (docs/context.md §4) ya consume web/."""
     params = SuitParams(cargo_kg=req.cargo_kg, **req.suit.model_dump())
     segments, elev, elev_source = _segments_from_request(req)
     result = route_consumption(segments, req.speed_m_s, params)
@@ -177,72 +161,174 @@ def route(req: RouteRequest):
         seg["from"] = {"lat": a.lat, "lon": a.lon, "elev_m": elev[i]}
         seg["to"] = {"lat": b.lat, "lon": b.lon, "elev_m": elev[i + 1]}
     result["elevation_source"] = elev_source
+    result["profile"] = _profile(segments, elev)
     return result
 
 
-@app.post("/api/illumination/window")
-def illumination_window(req: IlluminationWindowRequest):
-    """Devuelve una submatriz rectangular de iluminación entre dos coordenadas.
+def _profile(segments: list[list[Step]], vertex_elev: list[float]) -> dict:
+    """Perfil de elevación de la ruta: la serie que ya se muestreó, expuesta.
 
-    La grilla queda en filas/columnas con resolución 5 m por píxel por defecto, y cada
-    celda vale True si está iluminada y False si está en sombra.
+    `_segments_from_request` densifica cada tramo cada `sample_step_m` y lee el
+    DTM en cada punto; hasta ahora esa serie se usaba para integrar el consumo y
+    se descartaba. Devolverla no cuesta un muestreo más.
+
+    Por muestra: distancia acumulada desde la salida, elevación y pendiente del
+    sub-paso que termina ahí. La pendiente del primer punto es la del primer
+    sub-paso, para que la serie tenga el mismo largo que las otras dos.
     """
-    try:
-        tif_path, band = resolve_shadow_tif(req.site_id, req.sol_tag, req.ltst, DATA_DIR)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+    dist = [0.0]
+    elev = [vertex_elev[0] if vertex_elev else 0.0]
+    slope = []
+    acumulada = 0.0
+    for seg in segments:
+        for s in seg:
+            acumulada += s.dx_m
+            dist.append(acumulada)
+            elev.append(elev[-1] + s.dz_m)
+            slope.append(math.degrees(math.atan2(s.dz_m, s.dx_m)) if s.dx_m else 0.0)
+    slope.insert(0, slope[0] if slope else 0.0)
 
-    band = req.band or band
-    try:
-        window = rectangular_window_from_points(
-            tif_path,
-            {"lat": req.p1.lat, "lon": req.p1.lon},
-            {"lat": req.p2.lat, "lon": req.p2.lon},
-            band=band,
-            pixel_size_m=req.pixel_size_m,
-        )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+    # Dónde empieza cada tramo dentro de la serie, para marcar las estaciones.
+    cortes, k = [0], 0
+    for seg in segments:
+        k += len(seg)
+        cortes.append(k)
 
-    sol_tag = req.sol_tag or find_latest_sol_dir(req.site_id, DATA_DIR).name
     return {
-        "site_id": req.site_id,
-        "sol_tag": sol_tag,
-        "ltst": req.ltst,
-        "band": band,
-        "pixel_size_m": window["pixel_size_m"],
-        "adjacent_distance_m": window["adjacent_distance_m"],
-        "shape": window["shape"],
-        "window": window["window"],
-        "values": window["values"],
+        "distance_m": [round(d, 1) for d in dist],
+        "elevation_m": [round(z, 2) for z in elev],
+        "slope_deg": [round(s, 2) for s in slope],
+        "leg_starts": cortes,
     }
 
 
-@app.post("/api/illumination/path")
-def illumination_path(req: IlluminationWindowRequest):
-    """Genera el mapa de iluminación para la hora pedida y luego ejecuta A* sobre ese mapa.
+# Distancia del muestreo con el que se estima la pendiente. La pendiente depende
+# de sobre qué largo se mide: a 5 m da la rugosidad que le importa a quien camina,
+# a 50 m daría la del terreno general. Va en el supuesto del badge.
+SLOPE_BASELINE_M = 5.0
 
-    La banda del GeoTIFF se resuelve a partir de `ltst` o de `band`; la ventana entre
-    `p1` y `p2` se recorta de esa banda exacta; luego el A* minimiza la cantidad de
-    celdas en sombra dentro de ese mapa.
+
+def _value(value, unit, provenance, *, mission=None, instrument=None,
+           resolution=None, source=None, assumptions=None):
+    """Valor con procedencia, el formato de docs/context.md §4. `value=None` = falta."""
+    out = {"value": value, "unit": unit, "provenance": provenance,
+           "mission": mission, "instrument": instrument}
+    if resolution:
+        out["resolution"] = resolution
+    if source:
+        out["source"] = source
+    if assumptions:
+        out["assumptions"] = assumptions
+    return out
+
+
+def _dtm_entry(site_id: str):
+    """Entrada del DTM en el manifest, o None si todavía no está. No levanta:
+    el inspector tiene que poder contestar aunque la descarga no haya terminado."""
+    m = _manifest()
+    if m is None or site_id not in m["sites"]:
+        return None
+    return next((f for f in m["sites"][site_id]["files"]
+                 if f["key"] == "dtm" and f["status"] == "ok"), None)
+
+
+def _slope_deg(dtm_path: Path, lat: float, lon: float) -> float:
+    """Pendiente en grados por diferencias finitas sobre el DTM.
+
+    Se muestrean cuatro vecinos a ±SLOPE_BASELINE_M en el terreno y se arma el
+    gradiente. No usa `slope.tif` a propósito: así el inspector funciona con solo
+    el DTM descargado, sin depender del precómputo. Puede diferir en unas décimas
+    de la capa de pendiente del mapa, que se calcula con el método de Horn sobre
+    toda la grilla; para eso está el supuesto en el badge.
     """
-    try:
-        tif_path, band = resolve_shadow_tif(req.site_id, req.sol_tag, req.ltst, DATA_DIR)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+    dlat = math.degrees(SLOPE_BASELINE_M / MARS_RADIUS_M)
+    coslat = max(math.cos(math.radians(lat)), 1e-6)
+    dlon = dlat / coslat
 
-    band = req.band or band
-    try:
-        path = a_star_path_between_points(
-            tif_path,
-            {"lat": req.p1.lat, "lon": req.p1.lon},
-            {"lat": req.p2.lat, "lon": req.p2.lon},
-            band=band,
-            pixel_size_m=req.pixel_size_m,
-            allow_diagonal=False,
-        )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+    norte, sur, este, oeste = sample_dtm(
+        dtm_path,
+        [(lat + dlat, lon), (lat - dlat, lon), (lat, lon + dlon), (lat, lon - dlon)],
+    )
+    dz_dy = (norte - sur) / (2 * SLOPE_BASELINE_M)
+    dz_dx = (este - oeste) / (2 * SLOPE_BASELINE_M)
+    return math.degrees(math.atan(math.hypot(dz_dx, dz_dy)))
 
-    sol_tag = req.sol_tag or find_latest_sol_dir(req.site_id, DATA_DIR).name
-    return path["path"]
+
+@app.get("/api/sites/{site_id}/point")
+def point(site_id: str, lat: float, lon: float):
+    """Qué hay en un punto: elevación y pendiente, cada una con su procedencia.
+
+    Degrada en vez de romper. Si el DTM no está descargado, si el punto cae fuera
+    del raster o si cae en nodata, devuelve `value: null` y una nota que explica
+    por qué. Nunca estima un valor para llenar el hueco.
+    """
+    m = _manifest()
+    if m is not None and site_id not in m["sites"]:
+        raise HTTPException(404, f"No conozco el sitio '{site_id}'.")
+
+    entry = _dtm_entry(site_id)
+    meta = entry or {}
+    px = (meta.get("raster") or {}).get("pixel_size")
+    fuente = {
+        "mission": meta.get("mission") or "MRO",
+        "instrument": "HiRISE DTM",
+        # La resolución sale del raster, no hardcodeada: Gale no es Jezero.
+        "resolution": f"{abs(px):g} m/px" if px else None,
+        "source": meta.get("desc"),
+    }
+
+    def vacio(nota):
+        return {
+            "site": site_id, "lat": lat, "lon": lon,
+            "elevation": _value(None, "m", "OBSERVED", **fuente),
+            "slope": _value(None, "°", "DERIVED", **fuente),
+            "layers": [],
+            "note": nota,
+        }
+
+    if entry is None:
+        return vacio("El DTM de este sitio todavía no está descargado.")
+
+    path = DATA_DIR / entry["path"]
+    try:
+        elev = sample_dtm(path, [(lat, lon)])[0]
+    except TerrainError as e:
+        return vacio(str(e))
+    except (OSError, ValueError) as e:
+        raise HTTPException(503, f"No se pudo leer el DTM: {e}")
+
+    try:
+        slope = _slope_deg(path, lat, lon)
+    except TerrainError:
+        # El punto está dentro pero algún vecino no: sin pendiente, con elevación.
+        slope = None
+
+    return {
+        "site": site_id, "lat": lat, "lon": lon,
+        "elevation": _value(round(elev, 2), "m", "OBSERVED", **fuente),
+        "slope": _value(
+            None if slope is None else round(slope, 2), "°", "DERIVED", **fuente,
+            assumptions=[
+                f"Diferencias finitas sobre el DTM a ±{SLOPE_BASELINE_M:g} m",
+                "El valor depende de ese largo: a mayor distancia, pendiente más suave",
+            ] + ([] if slope is not None else ["El punto está en el borde del DTM"]),
+        ),
+        # Peligro, refugio, dosis y sombras se suman acá cuando el pipeline las
+        # precompute: se muestrean de su COG igual que la elevación.
+        "layers": [],
+    }
+
+
+@app.post("/api/route")
+def route():
+    """Planificador 4D (A* con costo según la hora de llegada). Todavía no existe.
+
+    Responde 501 a propósito: es la señal con la que web/ pasa al planificador
+    de ejemplo y lo avisa en pantalla. No lee el cuerpo, así un pedido con el
+    contrato de docs/context.md §4 no termina en 422.
+    """
+    raise HTTPException(
+        501,
+        "El planificador 4D todavía no está implementado. Para consumibles sobre "
+        "una ruta ya armada: POST /api/route/consumables.",
+    )
