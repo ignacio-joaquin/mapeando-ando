@@ -10,6 +10,7 @@ import { useStore } from "../../state/store";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { VerdictCard } from "./VerdictCard";
+import { StationPhoto } from "./StationPhoto";
 import {
   earthShort,
   formatBearing,
@@ -290,6 +291,7 @@ function StopCard({
 }) {
   const { updatePoint, removePoint, shiftPoint, setOpenStop } = usePlan.getState();
   const open = usePlan((s) => s.openStop === index);
+  const siteId = useStore((s) => s.activeSiteId);
   const label = waypointLabel(index, total);
   const isStation = label.kind === "station";
 
@@ -412,6 +414,18 @@ function StopCard({
           </dd>
         </dl>
       ) : null}
+
+      {open ? (
+        <StationPhoto siteId={siteId} lat={waypoint.lat} lon={waypoint.lon} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpenStop(index)}
+          className="mt-2 text-[11px] text-rust hover:underline"
+        >
+          Ver qué hay en este punto
+        </button>
+      )}
     </div>
   );
 }

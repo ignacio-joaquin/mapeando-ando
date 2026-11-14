@@ -6,6 +6,8 @@
 import {
   HealthSchema,
   RouteResponseSchema,
+  RoverPhotosSchema,
+  type RoverPhotos,
   type RouteRequest,
   type RouteResponse,
   SiteDetailSchema,
@@ -108,4 +110,31 @@ export async function planRoute(req: RouteRequest, signal?: AbortSignal): Promis
     throw new Error(`/api/route no cumple el contrato: ${parsed.error.message}`);
   }
   return { route: parsed.data, example: false };
+}
+
+/**
+ * Fotos reales del rover más cercanas a un punto (MAP-33). Sin backend, o
+ * mientras el endpoint no exista, devuelve la lista vacía con una nota: las
+ * fotos tienen que ser reales, así que no hay fotos de ejemplo.
+ */
+export async function fetchRoverPhotos(
+  siteId: string,
+  p: { readonly lat: number; readonly lon: number },
+  signal?: AbortSignal,
+): Promise<RoverPhotos> {
+  const missing: RoverPhotos = {
+    photos: [],
+    note: "Falta el endpoint de fotos del server (MAP-33): todavía no hay fotos reales para mostrar.",
+  };
+  if (usingFixtures) return missing;
+  const qs = new URLSearchParams({ lat: String(p.lat), lon: String(p.lon) });
+  const res = await fetch(`/api/sites/${siteId}/photos?${qs.toString()}`, {
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (res.status === 404 || res.status === 405 || res.status === 501) return missing;
+  if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}`);
+  const parsed = RoverPhotosSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
+  return parsed.data;
 }
