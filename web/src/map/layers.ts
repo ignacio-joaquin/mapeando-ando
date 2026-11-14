@@ -13,6 +13,41 @@ export interface LegendStop {
   readonly label: string;
 }
 
+/**
+ * Clases de pendiente: UNA sola definición para la capa del mapa, la leyenda y
+ * el perfil de elevación. Si un tramo se ve rojo en el perfil, se ve rojo en el
+ * mapa.
+ *
+ * Los mismos cortes están en `RAMPAS["pendiente"]` de `pipeline/tiles.py`, que
+ * es quien colorea el PNG. Si se cambian acá, hay que cambiarlos allá.
+ */
+export interface SlopeClass {
+  /** Límite superior en grados; el último es Infinity. */
+  readonly maxDeg: number;
+  readonly color: string;
+  readonly label: string;
+}
+
+export const SLOPE_CLASSES: readonly SlopeClass[] = [
+  { maxDeg: 10, color: "#2f7d4f", label: "0–10° transitable" },
+  { maxDeg: 20, color: "#e0a24a", label: "10–20° con cuidado" },
+  { maxDeg: 30, color: "#e07a4a", label: "20–30° límite del rover" },
+  { maxDeg: Infinity, color: "#e0564a", label: "> 30° no transitable" },
+];
+
+/** Clase de una pendiente en grados. Fuera de rango cae en la más severa. */
+export function slopeClass(deg: number): SlopeClass {
+  return (
+    SLOPE_CLASSES.find((c) => deg < c.maxDeg) ??
+    SLOPE_CLASSES[SLOPE_CLASSES.length - 1]!
+  );
+}
+
+const SLOPE_LEGEND: readonly LegendStop[] = SLOPE_CLASSES.map((c) => ({
+  color: c.color,
+  label: c.label,
+}));
+
 export interface LayerSpec {
   readonly id: string;
   readonly label: string;
@@ -26,6 +61,11 @@ export interface LayerSpec {
   readonly tiles: string;
   readonly kind: "raster" | "vector";
   readonly defaultVisible: boolean;
+  /**
+   * Raster por clases (cada color es un rango de la leyenda): se dibuja sin
+   * suavizar al agrandar, para no inventar colores intermedios.
+   */
+  readonly categorical?: boolean;
 }
 
 export const LAYERS: readonly LayerSpec[] = [
@@ -99,14 +139,10 @@ export const LAYERS: readonly LayerSpec[] = [
       resolution: "1 m/px",
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
     },
-    legend: [
-      { color: "#2f7d4f", label: "0–10° transitable" },
-      { color: "#e0a24a", label: "10–20° con cuidado" },
-      { color: "#e07a4a", label: "20–30° límite del rover" },
-      { color: "#e0564a", label: "> 30° no transitable" },
-    ],
+    legend: SLOPE_LEGEND,
     tiles: "/tiles/{site}/slope/{z}/{x}/{y}.png",
     kind: "raster",
+    categorical: true,
     defaultVisible: false,
   },
   {

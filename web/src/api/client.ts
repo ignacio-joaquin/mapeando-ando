@@ -5,6 +5,8 @@
  */
 import {
   HealthSchema,
+  PointSchema,
+  type PointInfo,
   RouteResponseSchema,
   RoverPhotosSchema,
   type RoverPhotos,
@@ -12,6 +14,8 @@ import {
   type RouteResponse,
   SiteDetailSchema,
   SitesSchema,
+  TerrainIndexSchema,
+  type TerrainIndex,
   type Health,
   type SiteDetail,
   type Sites,
@@ -88,6 +92,49 @@ export async function fetchSiteDetail(siteId: string): Promise<SiteDetail | null
     // 404 mientras la descarga no terminó: degradar, no romper.
     return null;
   }
+}
+
+/**
+ * Qué hay en un punto del mapa. Sin backend no hay nada que consultar: devuelve
+ * null y el inspector lo dice, en vez de inventar una elevación.
+ */
+export async function fetchPoint(
+  siteId: string,
+  lat: number,
+  lon: number,
+  signal?: AbortSignal,
+): Promise<PointInfo | null> {
+  if (usingFixtures) return null;
+  const q = new URLSearchParams({ lat: String(lat), lon: String(lon) });
+  const res = await fetch(`/api/sites/${siteId}/point?${q}`, {
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok) return null;
+  const parsed = PointSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error(`/api/sites/${siteId}/point no cumple el contrato: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+/**
+ * Índice de las capas de relieve del sitio (pipeline/precompute.py). null =
+ * el pipeline todavía no corrió para este sitio: las capas quedan esperando.
+ * `no-cache` porque nginx manda `expires 1h` en /tiles/ y, después de volver a
+ * correr el pipeline, el navegador seguiría con el índice viejo.
+ */
+export async function fetchTerrain(siteId: string): Promise<TerrainIndex | null> {
+  if (usingFixtures) return null;
+  const path = `/tiles/${siteId}/terrain.json`;
+  const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  const parsed = TerrainIndexSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 
 /**

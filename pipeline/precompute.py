@@ -6,7 +6,10 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   slope.tif         pendiente en grados, COG, misma grilla que el DTM
   hillshade.tif     sombreado del relieve, COG (solo visual)
   contours.geojson  curvas de nivel en lon/lat planetocéntricas (este positivo)
-  terrain.json      procedencia, parámetros y estado de cada capa
+  slope/, hillshade/  tiles XYZ PNG para el mapa (pipeline/tiles.py); la pendiente, con los
+                    colores de la leyenda de web/src/map/layers.ts
+  terrain.json      procedencia, parámetros, estado de cada capa y zoom/límites de los tiles.
+                    El frontend lo lee para saber qué capa puede prender.
 
 El código no depende del sitio: todo sale de sites/<id>.json y del manifest.
 
@@ -42,6 +45,7 @@ from rasterio.windows import Window
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import terrain_shadows as ts  # noqa: E402
+import tiles  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent          # carpeta raíz del repo
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))   # donde están raw/ y output/ en el server
@@ -62,6 +66,12 @@ BAD_Z_M = 1e5              # |z| mayor que esto es basura (los DTM marcan nodata
 STRIP_PX = 8_000_000       # píxeles por franja al calcular la pendiente (~32 MB por arreglo)
 JAC_STEP = 64              # cada cuántas filas se calcula el píxel sobre el suelo (se interpola entre medio)
 MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DTM, se avisa
+
+# Capas que se teselan para el mapa: carpeta de salida y rampa de color de tiles.py.
+# La carpeta es CONTRATO: el último segmento de la plantilla `tiles` de web/src/map/layers.ts.
+TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None)}
+# La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
+ORTHO_LAYER = "base-ortho"
 
 GTIFF_OPTS = ["-co", "TILED=YES", "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER"]
 COG_OPTS = ["-of", "COG", "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=YES", "-co", "BIGTIFF=IF_SAFER"]
@@ -266,6 +276,13 @@ def main(argv=None):
     ap.add_argument("--out", help="carpeta base de salida (default: DATA_DIR/output, o DATA_DIR/prueba con --prueba)")
     ap.add_argument("--prueba", action="store_true",
                     help=f"procesar solo un recorte de {PRUEBA_PX}x{PRUEBA_PX} px del centro")
+    ap.add_argument("--no-tiles", action="store_true", help="no generar los tiles PNG del mapa")
+    ap.add_argument("--ortho", action="store_true",
+                    help="teselar también la ortoimagen del sitio. Va aparte porque es la capa "
+                         "más cara: en Jezero son 7,4 GB a 25 cm/px y tarda horas")
+    ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
+                    help="tope de zoom al teselar; por defecto lo deduce gdal2tiles del tamaño "
+                         "del píxel. Para la ortoimagen conviene ponerlo")
     args = ap.parse_args(argv)
 
     t0 = time.time()
@@ -329,7 +346,10 @@ def main(argv=None):
         publish(work / "slope.tif", out / "slope.tif")
         px_e, px_n = info["pixel_ground_m"]
         index["grid"] = {"shape": info["shape"], "pixel_ground_m": info["pixel_ground_m"]}
-        layers["relief-slope"].update(resolution=f"{px_e:.2f} x {px_n:.2f} m/px")
+        # Hillshade y curvas salen de la misma grilla: comparten la resolución.
+        resolution = f"{px_e:.2f} m (E-O) x {px_n:.2f} m (N-S) por píxel"
+        for layer_id in ("relief-slope", "relief-hillshade", "relief-contours"):
+            layers[layer_id]["resolution"] = resolution
         if info["column_variation"] > MAX_COL_VARIATION:
             index["warnings"].append(
                 f"El tamaño del píxel este-oeste cambia {info['column_variation']:.1%} a lo ancho del DTM; "
@@ -393,6 +413,52 @@ def main(argv=None):
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
+    # 5. Tiles PNG para el mapa, desde los COG que quedaron bien.
+    missing_tools = tiles.faltan_herramientas()
+    for layer_id, (folder, color) in TILED_LAYERS.items():
+        layer = layers[layer_id]
+        if args.no_tiles or layer.get("status") != "ok":
+            continue
+        if missing_tools:
+            failed = True
+            layer["tiles"] = {"status": "error", "error": "Faltan herramientas de GDAL: " + ", ".join(missing_tools)}
+            continue
+        try:
+            layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(
+                out / layer["file"], out / folder, color=color, max_zoom=args.max_zoom)}
+        except Exception as e:  # seguir con la próxima capa
+            failed = True
+            log(f"Falló el teselado de {layer_id}: {e}")
+            layer["tiles"] = {"status": "error", "error": str(e)[:400]}
+
+    # 6. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
+    #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
+    #    25 cm/px y teselarla compite por disco y CPU con la descarga.
+    ortho_entry = next((f for f in site["files"] if f["key"] == "ortho"), None)
+    if args.ortho and not args.no_tiles:
+        layers[ORTHO_LAYER] = {
+            "file": "ortho", "unit": None, "provenance": "OBSERVED",
+            "mission": (ortho_entry or {}).get("mission"),
+            "desc": (ortho_entry or {}).get("desc"),
+            "note": "Imagen real, sin realce. Recortada al bbox del sitio.",
+            "assumptions": ["Recortada al bbox de sites/<sitio>.json: afuera no hay imagen."],
+        }
+        try:
+            if ortho_entry is None:
+                raise DataNotReady(f"sites/{site['id']}.json no declara un archivo con key 'ortho'")
+            if missing_tools:
+                raise RuntimeError("Faltan herramientas de GDAL: " + ", ".join(missing_tools))
+            bbox = site["bbox"]
+            te = [bbox["lon_min"], bbox["lat_min"], bbox["lon_max"], bbox["lat_max"]]
+            info = tiles.raster_a_tiles(Path(find_input(site, "ortho")), out / "ortho",
+                                        max_zoom=args.max_zoom, te=te)
+            layers[ORTHO_LAYER].update(status="ok", tiles={"status": "ok", **info})
+        except Exception as e:
+            failed = True
+            log(f"Falló el teselado de {ORTHO_LAYER}: {e}")
+            layers[ORTHO_LAYER].update(status="error", error=str(e)[:400])
+
     (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
     publish(work / "terrain.json", out / "terrain.json")
     shutil.rmtree(work, ignore_errors=True)
@@ -400,10 +466,16 @@ def main(argv=None):
     log("Listo. Archivos generados:")
     for layer in layers.values():
         p = out / layer["file"]
-        if layer.get("status") == "ok" and p.exists():
+        if layer.get("status") == "ok" and p.is_dir():
+            log(f"  {p.name + '/':17s} {'solo tiles':>13s}")  # la ortoimagen no deja un archivo
+        elif layer.get("status") == "ok" and p.exists():
             log(f"  {p.name:17s} {p.stat().st_size / 1e6:8.1f} MB")
         else:
             log(f"  {layer['file']:17s} ERROR")
+        t = layer.get("tiles")
+        if t:
+            log(f"    tiles: {t['template']} zoom {t['minzoom']}-{t['maxzoom']}, {t['count']} PNG"
+                if t["status"] == "ok" else f"    tiles: ERROR {t['error']}")
     for w in index["warnings"]:
         log(f"Aviso: {w}")
     log(f"Tiempo total: {(time.time() - t0) / 60:.1f} min")
