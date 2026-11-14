@@ -1,18 +1,25 @@
 """Planificador 4D de POST /api/route: A* sobre la grilla del sitio, con costo según la
 hora estimada de llegada a cada celda.
 
-Modelo de costo (decisión del equipo, docs/context.md §5):
+Modelo de costo (docs/seguridad.md, decisión en docs/context.md §5):
 
-    costo de un paso = tiempo de caminata × factor de pendiente × factor de sombra
-    tiempo           = largo sobre el terreno (horizontal / cos pendiente) / velocidad
-    pendiente        = media de la celda; mismos cortes que SLOPE_CLASSES de web/:
-                       < 10° ×1 · 10–20° ×1.5 · 20–30° ×3 · ≥ 30° no se pisa · sin dato ×2
-    sombra           = banda de shadow_hourly.tif más cercana a la hora de llegada a
-                       la celda: en sombra ×2; al sol o sin dato ×1
+    costo de un paso = Δt · (1 + Σ_k w_k · r_k(celda, hora de llegada))
+    Δt               = largo sobre el terreno (horizontal / cos pendiente) / velocidad
+    r_pendiente      = pendiente media de la celda / pendiente máxima (límite duro);
+                       ≥ el límite no se pisa; sin dato = 1
+    r_sombra         = banda de shadow_hourly.tif más cercana a la hora de llegada a
+                       la celda: en sombra 1; al sol o sin dato 0
+    r_contacto       = sin línea de vista al hábitat 1 (sin dato también); con vista 0
+    rugosidad, suelo suelto y radiación por terreno tienen peso pero todavía no tienen
+    capa: quedan inactivos y la respuesta lo dice
 
-Todos los factores son ≥ 1, así que la distancia octile / velocidad nunca sobreestima
-lo que falta: la heurística es admisible y consistente, y el A* da la ruta de menor
-costo de la grilla. Aproximación declarada: la hora de llegada a cada celda es la de
+El "1 +" es el tiempo puro: como cada paso cuesta al menos Δt, la distancia octile /
+velocidad nunca sobreestima lo que falta; la heurística es admisible y consistente, y
+el A* da la ruta de menor costo de la grilla. Los pesos son visibles en la respuesta
+(`cost`), con cuántos minutos-equivalentes aporta cada factor.
+
+La seguridad de la ruta (límites duros, puntaje, robustez y veredicto) sale de
+api/safety.py sobre la ruta ya resuelta. Aproximación declarada: la hora de llegada a cada celda es la de
 la ruta de menor costo hasta ella (A* clásico, no un A* dependiente del tiempo exacto).
 
 Para que responda en pocos segundos, cada tramo se resuelve en una ventana con margen
@@ -34,21 +41,44 @@ from pathlib import Path
 
 import numpy as np
 
+from . import safety
 from .consumables import SOURCE as SUIT_SOURCE
 from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg, pandolf_watts,
                           segment_consumption)
+from .contact import ASSUMPTIONS as CONTACT_ASSUMPTIONS
+from .contact import ContactField
 from .illumination import (NODATA_U8, SHADOW, ShadowStack, apply_affine, parse_utc, sample_on_points,
                            stack_for_time)
-from .terrain import MARS_LONGLAT, MARS_RADIUS_M, _norm_lon, haversine_m
+from .terrain import MARS_LONGLAT, MARS_RADIUS_M, _norm_lon, densify, haversine_m
 
 SPEED_M_S = 0.8          # el mismo default de /api/route/consumables
-RESERVE_MIN = 30.0       # reserva mínima al llegar, igual que el planificador de ejemplo
 
-SLOPE_CUTS = (10.0, 20.0, 30.0)  # = SLOPE_CLASSES (web/src/map/layers.ts) y RAMPAS (pipeline/tiles.py)
-CLASSES = ("ok", "caution", "limit", "blocked")
-SLOPE_FACTOR = (1.0, 1.5, 3.0, math.inf)
-UNKNOWN_SLOPE_FACTOR = 2.0
-SHADOW_FACTOR = 2.0
+# = SLOPE_CLASSES (web/src/map/layers.ts) y RAMPAS (pipeline/tiles.py). El último corte es el
+# límite duro de pendiente: lo que el mapa pinta "no transitable" es lo que el A* no pisa.
+SLOPE_CUTS = (10.0, 20.0, safety.Limits().max_slope_deg)
+CLASSES = ("ok", "caution", "limit", "blocked")   # solo para colorear el tramo
+
+
+@dataclass(frozen=True)
+class CostWeights:
+    """Pesos w_k del costo. Defaults documentados en docs/seguridad.md."""
+    slope: float = 2.0
+    shadow: float = 1.0
+    contact: float = 1.0
+    roughness: float = 1.0
+    loose_soil: float = 1.0
+    radiation: float = 1.0
+
+
+# id, etiqueta, por qué no está activo (None = tiene capa)
+COST_FACTORS: tuple[tuple[str, str, str | None], ...] = (
+    ("slope", "Pendiente", None),
+    ("shadow", "Sombra / frío", None),
+    ("contact", "Sin contacto con el hábitat", None),
+    ("roughness", "Rugosidad", "Falta la capa de rugosidad en el pipeline."),
+    ("loose_soil", "Suelo suelto (THEMIS)", "Falta la inercia térmica de THEMIS procesada."),
+    ("radiation", "Radiación por terreno", "Falta la dosis por terreno: la tasa de base es igual en todas las celdas."),
+)
 
 MAX_CELLS_SIDE = 300
 MIN_MARGIN_M = 300.0
@@ -93,13 +123,30 @@ def _pixel_ground_m(ds, row: int, col: int) -> tuple[float, float]:
 
 @dataclass
 class Grid:
-    """Ventana de trabajo de un tramo: pendiente media por celda y su georreferencia."""
-    slope: np.ndarray        # grados, NaN = sin dato
-    cls: np.ndarray          # índice en CLASSES, -1 = sin dato
+    """Ventana de trabajo de un tramo: pendiente por celda y su georreferencia.
+
+    Cada celda junta f × f píxeles de slope.tif. `slope` es la media (para el costo y
+    el estiramiento del paso); `peak` es la pendiente que no se puede esquivar dentro
+    de la celda (para lo que no se pisa, el límite duro y la clase del tramo).
+
+    `peak` es la f-ésima pendiente más alta de la celda: cruzarla de lado a lado pisa
+    al menos f píxeles, así que una franja empinada que la atraviesa (≥ f píxeles) no
+    se diluye en el promedio, y una roca o un píxel ruidoso suelto (< f píxeles) no
+    bloquea una celda de 30 m. Con f = 1 es el valor del píxel. Así lo que se puede
+    pisar no depende del largo del tramo (que fija f).
+    """
+    slope: np.ndarray        # grados, media por celda, NaN = sin dato
+    cls: np.ndarray          # índice en CLASSES según `peak`, -1 = sin dato
     transform: object        # Affine celda → CRS del raster
     crs: object
     dx_m: float
     dy_m: float
+    contact: np.ndarray | None = None   # 1 con vista al hábitat, 0 tapado, -1 sin dato
+    slope_peak: np.ndarray | None = None  # grados, f-ésima más alta por celda; None = igual a la media
+
+    @property
+    def peak(self) -> np.ndarray:
+        return self.slope if self.slope_peak is None else self.slope_peak
 
     def cell_of(self, x: float, y: float) -> tuple[int, int]:
         c, r = apply_affine(~self.transform, x, y)
@@ -112,7 +159,8 @@ class Grid:
 
 
 def build_grid(ds, a_xy: tuple[float, float], b_xy: tuple[float, float], leg_m: float) -> Grid:
-    """Lee la pendiente alrededor de un tramo y la promedia a celdas de trabajo."""
+    """Lee la pendiente alrededor de un tramo y la junta en celdas de trabajo (media y la
+    f-ésima más alta, ver Grid)."""
     from rasterio.transform import Affine
     from rasterio.windows import Window
 
@@ -138,6 +186,9 @@ def build_grid(ds, a_xy: tuple[float, float], b_xy: tuple[float, float], leg_m: 
     nr, nc = -(-h // f), -(-w // f)
     sums = np.zeros((nr, nc))
     counts = np.zeros((nr, nc))
+    peaks = np.full((nr, nc), -np.inf)      # máximo por celda
+    unavoid = np.full((nr, nc), -np.inf)    # f-ésima más alta por celda
+    n = f * f
     nodata = ds.nodata
     strip = f * max(1, (STRIP_PX // w) // f)
     for rs in range(0, h, strip):
@@ -149,18 +200,28 @@ def build_grid(ds, a_xy: tuple[float, float], b_xy: tuple[float, float], leg_m: 
         ph = -(-rh // f) * f
         vals = np.zeros((ph, nc * f))
         mask = np.zeros((ph, nc * f))
+        tops = np.full((ph, nc * f), -np.inf)
         vals[:rh, :w] = np.where(valid, a, 0.0)
         mask[:rh, :w] = valid
+        tops[:rh, :w] = np.where(valid, a, -np.inf)
         i0 = rs // f
-        sums[i0:i0 + ph // f] += vals.reshape(ph // f, f, nc, f).sum(axis=(1, 3))
-        counts[i0:i0 + ph // f] += mask.reshape(ph // f, f, nc, f).sum(axis=(1, 3))
+        blk = (ph // f, f, nc, f)
+        sums[i0:i0 + ph // f] += vals.reshape(blk).sum(axis=(1, 3))
+        counts[i0:i0 + ph // f] += mask.reshape(blk).sum(axis=(1, 3))
+        np.maximum(peaks[i0:i0 + ph // f], tops.reshape(blk).max(axis=(1, 3)), out=peaks[i0:i0 + ph // f])
+        # La franja tiene filas de celdas enteras (strip es múltiplo de f): cada celda cae entera acá.
+        cells = tops.reshape(blk).transpose(0, 2, 1, 3).reshape(ph // f, nc, n)
+        unavoid[i0:i0 + ph // f] = np.partition(cells, n - f, axis=2)[..., n - f]
 
     slope = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+    # Celdas incompletas (borde de la ventana o del DTM, huecos): no se sabe cuántos píxeles hay que
+    # pisar para cruzarlas, así que va el máximo, que es lo conservador.
+    slope_peak = np.where(counts >= n, unavoid, np.where(counts > 0, peaks, np.nan))
     cls = np.full(slope.shape, -1, dtype=np.int8)
-    known = np.isfinite(slope)
-    cls[known] = np.searchsorted(SLOPE_CUTS, slope[known], side="right")
+    known = np.isfinite(slope_peak)
+    cls[known] = np.searchsorted(SLOPE_CUTS, slope_peak[known], side="right")
     transform = ds.window_transform(Window(c0, r0, w, h)) * Affine.scale(f)
-    return Grid(slope, cls, transform, ds.crs, px_e * f, px_n * f)
+    return Grid(slope, cls, transform, ds.crs, px_e * f, px_n * f, slope_peak=slope_peak)
 
 
 # ------------------------------------------------------------------ sombra
@@ -204,20 +265,39 @@ class ShadowSampler:
 # ------------------------------------------------------------------ A*
 
 
+def cell_terms(grid: Grid, max_slope: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Por celda: r_pendiente, r_contacto y si se puede pisar. Lo usan astar() y los tests.
+
+    r_pendiente sale de la media (cuánto cuesta cruzar la celda); si se puede pisar sale
+    del máximo (el límite duro no se promedia)."""
+    known = np.isfinite(grid.slope)
+    r_slope = np.where(known, np.clip(np.nan_to_num(grid.slope) / max_slope, 0.0, 1.0), 1.0)
+    passable = ~np.isfinite(grid.peak) | (np.nan_to_num(grid.peak) < max_slope)
+    if grid.contact is None:
+        r_contact = np.zeros(grid.slope.shape)
+    else:
+        r_contact = (grid.contact != 1).astype(np.float64)
+    return r_slope, r_contact, passable
+
+
 def astar(grid: Grid, start: tuple[int, int], goal: tuple[int, int], t0: float,
-          speed: float = SPEED_M_S, shadow: ShadowSampler | None = None):
+          speed: float = SPEED_M_S, shadow: ShadowSampler | None = None,
+          weights: CostWeights = CostWeights(), max_slope: float = safety.Limits().max_slope_deg):
     """Ruta de menor costo entre dos celdas. Devuelve ([(r, c)], [hora de llegada]) o None.
 
-    Las celdas ≥ 30° no se pisan, salvo la de salida y la de llegada (si una estación
-    está en una pendiente así, la ruta sale `blocked` y el veredicto lo dice).
+    Las celdas con pendiente ≥ `max_slope` (límite duro) no se pisan, salvo la de
+    llegada: si una estación está en una pendiente así, la ruta llega y el límite de
+    pendiente sale roto en el veredicto.
     """
     rows, cols = grid.cls.shape
     dx, dy = grid.dx_m, grid.dy_m
     dd = math.hypot(dx, dy)
     moves = [(0, 1, dx), (0, -1, dx), (1, 0, dy), (-1, 0, dy),
              (1, 1, dd), (1, -1, dd), (-1, 1, dd), (-1, -1, dd)]
-    factor_by_cls = np.array(SLOPE_FACTOR + (UNKNOWN_SLOPE_FACTOR,))  # índice -1 = sin dato
-    sfac = factor_by_cls[grid.cls].ravel().tolist()
+    r_slope, r_contact, passable = cell_terms(grid, max_slope)
+    static = (1.0 + weights.slope * r_slope + weights.contact * r_contact).ravel().tolist()
+    ok = passable.ravel().tolist()
+    w_shadow = weights.shadow
     stretch = (1.0 / np.cos(np.radians(np.nan_to_num(grid.slope, nan=0.0)))).ravel().tolist()
 
     s, g_idx = start[0] * cols + start[1], goal[0] * cols + goal[1]
@@ -251,15 +331,13 @@ def astar(grid: Grid, start: tuple[int, int], goal: tuple[int, int], t0: float,
             v = rr * cols + cc
             if closed[v]:
                 continue
-            fac = sfac[v]
-            if fac == math.inf:
-                if v != g_idx:
-                    continue
-                fac = SLOPE_FACTOR[2]
+            if not ok[v] and v != g_idx:
+                continue
+            fac = static[v]
             step_t = length * stretch[v] / speed
             ta = tu + step_t
-            if shadow is not None and shadow.at(ta, v) == SHADOW:
-                fac *= SHADOW_FACTOR
+            if shadow is not None and w_shadow and shadow.at(ta, v) == SHADOW:
+                fac += w_shadow
             ng = gu + step_t * fac
             if ng < g[v]:
                 g[v], tarr[v], parent[v] = ng, ta, u
@@ -319,23 +397,49 @@ class LegPlan:
     resolution: str | None = None
     notes: list[str] = field(default_factory=list)
     duration_s: float = 0.0
+    slopes: list[float | None] = field(default_factory=list)    # por paso, al final del paso
+    visible: list[bool | None] = field(default_factory=list)    # por paso, al final del paso
+    cost_s: dict[str, float] = field(default_factory=dict)      # aporte de cada factor (s)
 
 
-def _straight_leg(a, b, note: str) -> LegPlan:
-    d = haversine_m(a[0], a[1], b[0], b[1])
-    return LegPlan([a, b], [Step(d, 0.0)], [None, None], "unknown", None, None, False, note)
+def _straight_leg(a, b, note: str, contact: ContactField | None = None) -> LegPlan:
+    """Tramo en línea recta, sin terreno. Si hay DTM, igual se calcula la línea de vista
+    cada ~celda, para no contar todo el tramo como sin contacto."""
+    if contact is None:
+        d = haversine_m(a[0], a[1], b[0], b[1])
+        return LegPlan([a, b], [Step(d, 0.0)], [None, None], "unknown", None, None, False, note,
+                       slopes=[None], visible=[None])
+    pts = densify(a[0], a[1], b[0], b[1], max(contact.cell_m, 10.0))
+    steps = [Step(haversine_m(*pts[j], *pts[j + 1]), 0.0) for j in range(len(pts) - 1)]
+    vis = contact.visible_latlon(pts[1:])
+    return LegPlan([a, b], steps, [None, None], "unknown", None, None, False, note,
+                   slopes=[None] * len(steps), visible=vis)
 
 
-def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack | None) -> LegPlan:
+def _contact_on_grid(grid: Grid, contact: ContactField) -> np.ndarray:
+    xs, ys = grid.centers()
+    if contact.crs != grid.crs:
+        from rasterio.warp import transform
+        tx, ty = transform(grid.crs, contact.crs, xs.ravel().tolist(), ys.ravel().tolist())
+        xs, ys = np.asarray(tx), np.asarray(ty)
+    return contact.visible_xy(xs, ys).reshape(grid.cls.shape)
+
+
+def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack | None,
+              contact: ContactField | None = None, weights: CostWeights = CostWeights(),
+              limits: safety.Limits = safety.Limits()) -> LegPlan:
     leg_m = haversine_m(a[0], a[1], b[0], b[1])
     (xa, xb), (ya, yb) = _to_xy(slope_ds.crs, [a, b])
     grid = build_grid(slope_ds, (xa, ya), (xb, yb), leg_m)
+    if contact is not None:
+        grid.contact = _contact_on_grid(grid, contact)
     start, goal = grid.cell_of(xa, ya), grid.cell_of(xb, yb)
     sampler = ShadowSampler(stack, shadow_ds, grid) if stack is not None and shadow_ds is not None else None
-    found = astar(grid, start, goal, t0, SPEED_M_S, sampler)
+    found = astar(grid, start, goal, t0, SPEED_M_S, sampler, weights, limits.max_slope_deg)
     res = f"celdas de {grid.dx_m:.0f} × {grid.dy_m:.0f} m"
     if found is None:
-        plan = _straight_leg(a, b, "No hay paso con pendiente menor a 30° dentro de la zona evaluada.")
+        plan = _straight_leg(a, b, f"No hay paso con pendiente menor a {limits.max_slope_deg:.0f}° "
+                                   "dentro de la zona evaluada.", contact)
         plan.cls, plan.resolution = "blocked", res
         return plan
     path, times = found
@@ -369,18 +473,37 @@ def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack |
         leg_cls = "unknown"
     else:
         leg_cls = CLASSES[worst] if worst is not None else "unknown"
-    slopes = [float(grid.slope[r, c]) for r, c in path if np.isfinite(grid.slope[r, c])]
+    peak = grid.peak
+    slopes = [float(peak[r, c]) for r, c in path if np.isfinite(peak[r, c])]
 
     shadow_fraction = None
+    cols_n = grid.cls.shape[1]
+    shade = [None] * len(path)
     if sampler is not None:
-        cols_n = grid.cls.shape[1]
-        vals = [sampler.at(t, r * cols_n + c) for (r, c), t in zip(path, times)]
-        seen = [v for v in vals if v is not None]
+        shade = [sampler.at(t, r * cols_n + c) for (r, c), t in zip(path, times)]
+        seen = [v for v in shade if v is not None]
         if seen:
             shadow_fraction = sum(v == SHADOW for v in seen) / len(seen)
 
+    # Desglose del costo: el mismo que minimizó astar(), paso por paso.
+    r_slope, r_contact, _ = cell_terms(grid, limits.max_slope_deg)
+    cost = {"base": 0.0, "slope": 0.0, "shadow": 0.0, "contact": 0.0}
+    for j in range(1, len(path)):
+        (r0, c0), (r1, c1) = path[j - 1], path[j]
+        dt_s = times[j] - times[j - 1]
+        cost["base"] += dt_s
+        cost["slope"] += dt_s * weights.slope * r_slope[r1, c1]
+        cost["contact"] += dt_s * weights.contact * r_contact[r1, c1]
+        if shade[j] == SHADOW:
+            cost["shadow"] += dt_s * weights.shadow
+    if grid.contact is not None:
+        vis = [None if grid.contact[r, c] < 0 else bool(grid.contact[r, c]) for r, c in path[1:]]
+    else:
+        vis = [None] * (len(path) - 1)
+    step_slopes = [float(peak[r, c]) if np.isfinite(peak[r, c]) else None for r, c in path[1:]]
+
     plan = LegPlan(latlon, steps, elev, leg_cls, max(slopes) if slopes else None, shadow_fraction, True,
-                   resolution=res)
+                   resolution=res, slopes=step_slopes, visible=vis, cost_s=cost)
     missing_z = sum(z is None for z in elev)
     if missing_z:
         plan.notes.append(f"{missing_z} de {len(elev)} puntos sin cota del DTM: ahí se tomó el terreno plano")
@@ -417,8 +540,117 @@ def _dose_rate_msv_per_h(repo_dir: Path) -> tuple[float | None, dict]:
                                   "Sin blindaje del terreno ni eventos solares"]}
 
 
+SCORE_SRC = {
+    "provenance": "MODELED", "mission": None, "instrument": None,
+    "source": "Eslabón más débil: 100 · min(1 − usado/límite) sobre los límites duros (api/safety.py)",
+    "assumptions": ["Los valores de los límites (o la parte que los arma, como la reserva o el margen "
+                    "antes del atardecer) son del equipo, ver docs/seguridad.md",
+                    "Cuenta márgenes, no es una probabilidad"],
+}
+
+ASSUMED = {"provenance": "ASSUMED", "mission": None, "instrument": None, "source": safety.ASSUMED_SOURCE}
+
+LIMIT_ROUND = {"terrain": 1, "o2": 3, "battery": 1, "daylight": 1, "contact": 1, "dose": 3, "calories": 0}
+
+
+def _limit_sources(slope_src: dict, dose_src: dict, contact: ContactField | None) -> dict[str, dict]:
+    contact_src = {"provenance": "MODELED", "mission": "MRO", "instrument": "HiRISE DTM",
+                   "source": "Línea de vista al hábitat sobre el DTM (api/contact.py) y tiempos de caminata",
+                   "assumptions": CONTACT_ASSUMPTIONS + ["La salida es el hábitat"]}
+    if contact is not None:
+        contact_src["resolution"] = contact.resolution
+    return {
+        "terrain": {**slope_src, "assumptions": [
+            "Peor celda pisada, con la pendiente que no se puede esquivar dentro de cada celda de trabajo "
+            "(la f-ésima más alta de f × f píxeles de slope.tif)",
+            "La pendiente de slope.tif es por píxel: no ve escalones más chicos que el píxel"]},
+        "o2": MODEL, "battery": MODEL, "calories": MODEL,
+        "daylight": {**MODEL, "assumptions": list(MODEL["assumptions"]) + [
+            "Atardecer sobre horizonte plano, del index.json de la pila de sombras"]},
+        "contact": contact_src, "dose": dose_src,
+    }
+
+
+def _limit_bound_sources(stack: ShadowStack | None, limits: safety.Limits) -> dict[str, dict]:
+    """Procedencia del valor de cada límite. ASSUMED solo cuando el número entero lo eligió
+    el equipo; si sale de un dato (atardecer) o de un parámetro del traje (capacidad), se dice
+    eso y la parte elegida por el equipo va en `assumptions`."""
+    reserve = (f"Reserva del {100 * limits.reserve_fraction:.0f} % fijada por el equipo, "
+               "sin fuente citable todavía (docs/seguridad.md)")
+    suit = {"provenance": "MODELED", "mission": None, "instrument": None,
+            "source": "Capacidad del traje menos la reserva · EMU de la ISS (docs/consumibles del traje.md)",
+            "assumptions": [reserve]}
+    margin_note = (f"Margen de {limits.sunset_margin_min:.0f} min antes del atardecer fijado por el equipo, "
+                   "sin fuente citable todavía (docs/seguridad.md)")
+    if stack is not None:
+        sun = stack.provenance()
+        daylight = {**sun, "provenance": "MODELED",
+                    "source": f"Atardecer − margen − salida · {sun['source']}",
+                    "assumptions": list(sun.get("assumptions") or []) + [
+                        "Atardecer sobre horizonte plano", margin_note]}
+    else:
+        daylight = {**ASSUMED, "assumptions": [margin_note]}
+    return {"terrain": ASSUMED, "o2": suit, "battery": suit, "daylight": daylight,
+            "contact": ASSUMED, "dose": ASSUMED, "calories": ASSUMED}
+
+
+def _limit_out(r: "safety.LimitResult", used_src: dict[str, dict], limit_src: dict[str, dict]) -> dict:
+    label, unit = safety.LIMIT_LABELS[r.id]
+    nd = LIMIT_ROUND[r.id]
+    rnd = (lambda v: None if v is None else round(v, nd))
+    return {
+        "id": r.id, "label": label, "status": r.status if r.defined else "undefined",
+        "complete": r.complete, "note": r.note,
+        "margin": None if r.margin is None else round(max(r.margin, -1.0), 3),
+        "used": _mv(rnd(r.used), unit, used_src[r.id]),
+        "limit": _mv(rnd(r.limit), unit, limit_src[r.id]),
+    }
+
+
+def _robustness_out(a: "safety.Assessment") -> dict:
+    passed, total = a.robustness
+    scenarios = []
+    for sc in a.scenarios:
+        ev = sc.evaluation
+        lim = None
+        if ev is not None:
+            lim = min(ev.broken, key=lambda r: r.margin) if ev.broken else ev.limiting
+        scenarios.append({
+            "id": sc.id, "label": sc.label, "status": sc.status,
+            "limiting_factor": lim.id if lim is not None else None,
+            "score": None if ev is None or ev.score is None else round(ev.score),
+            "note": sc.note,
+        })
+    return {"passed": passed, "evaluated": total, "scenarios": scenarios}
+
+
+def _cost_out(legs_plan: list[LegPlan], w: CostWeights, has_contact: bool, has_shadow: bool) -> dict:
+    total = {k: sum(plan.cost_s.get(k, 0.0) for plan in legs_plan) for k in ("base", "slope", "shadow", "contact")}
+    planned = any(plan.planned for plan in legs_plan)
+    factors = []
+    for fid, label, missing in COST_FACTORS:
+        if missing is None and fid == "contact" and not has_contact:
+            missing = "Falta el DTM para la línea de vista."
+        if missing is None and fid == "shadow" and not has_shadow:
+            missing = "Falta la pila de sombras de ese sol."
+        if missing is None and not planned:
+            missing = "Ningún tramo se resolvió sobre el terreno."
+        active = missing is None
+        factors.append({"id": fid, "label": label, "weight": getattr(w, fid), "active": active,
+                        "minutes": round(total[fid] / 60.0, 1) if active else None, "note": missing})
+    active_min = sum(f["minutes"] or 0.0 for f in factors)
+    return {
+        "formula": "costo = Σ celdas Δt · (1 + Σ_k w_k · r_k)",
+        "unit": "min",
+        "base_minutes": round(total["base"] / 60.0, 1) if planned else None,
+        "total_minutes": round(total["base"] / 60.0 + active_min, 1) if planned else None,
+        "factors": factors,
+    }
+
+
 def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: Path, repo_dir: Path,
-               params: SuitParams | None = None) -> dict:
+               params: SuitParams | None = None, weights: CostWeights = CostWeights(),
+               limits: safety.Limits = safety.Limits()) -> dict:
     """Arma la respuesta de POST /api/route (contrato en docs/context.md §4)."""
     import rasterio
 
@@ -437,6 +669,12 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     slope_ds = rasterio.open(slope_path) if slope_path else None
     dtm_ds = rasterio.open(dtm_path) if dtm_path else None
     shadow_ds = rasterio.open(stack.tif) if stack else None
+    # La línea de vista tiene que cubrir la ventana del A* del tramo más largo (ver build_grid).
+    longest = max(haversine_m(*pts[i], *pts[i + 1]) for i in range(len(pts) - 1))
+    contact = (ContactField.from_dtm(dtm_ds, pts[0], pts, max(MIN_MARGIN_M, MARGIN_FRACTION * longest))
+               if dtm_ds is not None else None)
+    if contact is None:
+        caveats.append("no se evaluó el contacto con el hábitat: falta el DTM en la salida")
     try:
         legs_plan: list[LegPlan] = []
         t = t_depart
@@ -446,12 +684,13 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         state = [(0.0, 0.0, 0.0)]  # O2 usado, batería usada, segundos desde la salida, por estación
         for i in range(len(pts) - 1):
             if slope_ds is None:
-                plan = _straight_leg(pts[i], pts[i + 1], "Falta slope.tif: no se evaluó el terreno.")
+                plan = _straight_leg(pts[i], pts[i + 1], "Falta slope.tif: no se evaluó el terreno.", contact)
             else:
                 try:
-                    plan = _plan_leg(pts[i], pts[i + 1], t, slope_ds, dtm_ds, shadow_ds, stack)
+                    plan = _plan_leg(pts[i], pts[i + 1], t, slope_ds, dtm_ds, shadow_ds, stack,
+                                     contact, weights, limits)
                 except LegNotPlannable as e:
-                    plan = _straight_leg(pts[i], pts[i + 1], str(e))
+                    plan = _straight_leg(pts[i], pts[i + 1], str(e), contact)
             legs_plan.append(plan)
             seg = segment_consumption(plan.steps, SPEED_M_S, p)
             plan.duration_s = seg["duration_s"]
@@ -481,7 +720,6 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     bat_rate_wh_s = battery_wh(1.0, p)
     o2_margin = o2_left / o2_rate / 60.0 if o2_rate > 0 else math.inf
     bat_margin = bat_left / bat_rate_wh_s / 60.0 if bat_rate_wh_s > 0 else math.inf
-    limiting = "o2" if o2_margin <= bat_margin else "battery"
     margin = min(o2_margin, bat_margin)
     margin_mv = _mv(round(margin, 1), "min", MODEL, ["Reserva al ritmo de consumo medio de la travesía"])
 
@@ -511,7 +749,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             "max_slope": _mv(None if plan.max_slope is None else round(plan.max_slope, 1), "°",
                              {**slope_src, "resolution": plan.resolution} if plan.planned else
                              {**slope_src, "source": plan.note or slope_src["source"]},
-                             [f"Pendiente media por celda ({plan.resolution}): no ve escalones más chicos"]
+                             [f"Pendiente que no se puede esquivar en cada celda ({plan.resolution}): la f-ésima "
+                              "más alta de sus f × f píxeles. Una franja que la cruza no se diluye; una roca "
+                              "suelta no la bloquea"]
                              if plan.planned else None),
         }
         if stack is not None:
@@ -535,37 +775,46 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             "margin": margin_mv,
         })
 
-    # ---- veredicto: terreno, luz, reserva
-    blocked = next((leg for leg in legs if leg["class"] == "blocked"), None)
-    if blocked is not None:
-        status, factor = "NO_GO", "terrain"
-        summary = (f"No hay paso entre la estación {blocked['from']} y la {blocked['to']}: "
-                   "pendiente de 30° o más.")
-    elif stack is not None and stack.sunrise is not None and t_depart < stack.sunrise:
-        status, factor = "NO_GO", "daylight"
-        summary = f"Sale antes del amanecer ({_hhmm_utc(stack.sunrise)})."
-    elif stack is not None and stack.sunset is not None and t_end > stack.sunset:
-        status, factor = "NO_GO", "daylight"
-        summary = f"Llega después del atardecer ({_hhmm_utc(stack.sunset)})."
-    elif margin < RESERVE_MIN:
-        status, factor = "NO_GO", limiting
-        recurso = "El O2" if limiting == "o2" else "La batería"
-        # Margen negativo: el recurso que limita (el que se agota primero) no alcanza.
-        if margin <= 0:
-            summary = f"{recurso} se agota antes de terminar la travesía."
-        else:
-            summary = f"{recurso} no deja la reserva mínima de {RESERVE_MIN:.0f} min al llegar."
+    # ---- seguridad: límites duros, puntaje, robustez (api/safety.py)
+    dwells = [max(0.0, float(w.get("dwell_min") or 0)) * 60.0 for w in waypoints[1:-1]]
+    track = safety.Track(
+        legs=[safety.TrackLeg(plan.steps, plan.slopes, plan.visible) for plan in legs_plan],
+        dwell_s=dwells,
+        station_visible=[plan.visible[-1] if plan.visible else None for plan in legs_plan],
+        contact_evaluated=contact is not None,
+        blocked_legs=[i for i, plan in enumerate(legs_plan) if plan.cls == "blocked"],
+    )
+    cond = safety.Conditions(
+        depart_s=t_depart, speed_m_s=SPEED_M_S, params=p,
+        sunrise_s=stack.sunrise if stack is not None else None,
+        sunset_s=stack.sunset if stack is not None else None,
+        dose_rate_msv_h=dose_rate,
+    )
+    assessment = safety.assess(track, cond, limits)
+    base = assessment.base
+    if assessment.status == "NO_GO":
+        factor = min(base.broken, key=lambda r: r.margin).id
     else:
-        status, factor = "GO", limiting
-        recurso = "el O2" if limiting == "o2" else "la batería"
-        summary = f"Alcanza. Lo que se acaba primero es {recurso}."
+        lim = base.limiting
+        factor = lim.id if lim is not None else None
+    summary = safety.summary(assessment)
+    if assessment.reasons and assessment.status == "CAUTION":
+        summary += " Cuidado: " + "; ".join(assessment.reasons) + "."
     if any(leg["class"] == "unknown" for leg in legs) and slope_path is not None:
         caveats.append("hay tramos con terreno sin evaluar")
     if caveats:
         summary += " Ojo: " + "; ".join(caveats) + "."
 
-    out = {"site": site_id, "depart_utc": depart_utc, "legs": legs, "stops": stops,
-           "verdict": {"status": status, "limiting_factor": factor, "summary": summary, "margin": margin_mv}}
+    used_src = _limit_sources(slope_src, dose_src, contact)
+    limit_src = _limit_bound_sources(stack, limits)
+    verdict = {
+        "status": assessment.status, "limiting_factor": factor, "summary": summary, "margin": margin_mv,
+        "score": _mv(None if base.score is None else round(base.score), "pts", SCORE_SRC),
+        "limits": [_limit_out(r, used_src, limit_src) for r in base.limits],
+        "robustness": _robustness_out(assessment),
+    }
+    out = {"site": site_id, "depart_utc": depart_utc, "legs": legs, "stops": stops, "verdict": verdict,
+           "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None)}
     if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
         out["_profile_inputs"] = ([plan.steps for plan in legs_plan], [legs_plan[0].elev[0]]
                                   + [plan.elev[-1] for plan in legs_plan])
