@@ -9,7 +9,16 @@ ENV_FILE=/etc/mapeando.env
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y git nginx python3-venv python3-pip gdal-bin python3-gdal unzip curl jq
+apt-get install -y git nginx python3-venv python3-pip gdal-bin python3-gdal unzip curl jq rsync gnupg
+
+# Node 22 (para compilar web/). El de Ubuntu 24.04 es 18 y Vite 7 pide 20.19+.
+if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
+  install -d -m 755 /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+  apt-get update -y
+  apt-get install -y nodejs
+fi
 
 # AWS CLI v2 (para sincronizar con S3)
 if ! command -v aws >/dev/null; then
@@ -38,6 +47,8 @@ for u in mapeando-api.service mapeando-autodeploy.service mapeando-autodeploy.ti
   install -m 644 "$REPO_DIR/deploy/$u" "/etc/systemd/system/$u"
 done
 systemctl daemon-reload
+# Frontend: si el build falla, nginx sigue sirviendo la release anterior
+bash "$REPO_DIR/deploy/build-web.sh" || echo "AVISO: falló el build de web/; queda la versión anterior"
 nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
