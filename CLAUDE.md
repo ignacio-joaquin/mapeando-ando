@@ -5,9 +5,9 @@ Este archivo lo lee Claude Code en cada sesión de forma automática.
 
 ## Leé esto primero, siempre
 
-@context.md
+@docs/context.md
 
-Ese archivo es la fuente única de contexto del proyecto: core value, arquitectura, stack, reglas duras, cómo trabajamos y decisiones abiertas. **No repitas su contenido acá**: si una decisión del proyecto cambia, se edita `context.md`.
+Ese archivo es la fuente única de contexto del proyecto: core value, arquitectura, stack, reglas duras, cómo trabajamos y decisiones abiertas. **No repitas su contenido acá**: si una decisión del proyecto cambia, se edita `docs/context.md`.
 
 ---
 
@@ -18,7 +18,7 @@ Ese archivo es la fuente única de contexto del proyecto: core value, arquitectu
 3. **Datos de la NASA.** Antes de escribir cualquier cosa que haga pedidos HTTP a servidores de la NASA/USGS/PDS, leé la skill `mapeando-geodata`. El `Crawl-delay` no es opcional.
 4. **No inventes datos.** Si falta un valor científico, decí que falta. Jamás rellenes con una estimación presentada como medición.
 5. **Contratos.** `files[].key` de `sites/*.json`, los ids de capa del mapa y las rutas `/api/*` los consume más de una pieza: si cambiás uno, actualizá todas las puntas en el mismo PR.
-6. **Cambios de alcance.** Si lo que te piden implica una decisión de arquitectura o toca una de las "decisiones abiertas" de `context.md`, pará y preguntá antes de escribir código.
+6. **Cambios de alcance.** Si lo que te piden implica una decisión de arquitectura o toca una de las "decisiones abiertas" de `docs/context.md`, pará y preguntá antes de escribir código.
 
 ## Idioma
 
@@ -62,4 +62,4 @@ Si el trabajo cruza áreas, aplican varias: tocar el mapa suele ser `mapeando-ma
 
 - Skills externas: están **copiadas**, no linkeadas. Para actualizarlas, `bash .claude/update-skills.sh` y revisar el diff en un PR.
 - Skill nueva o cambio en una propia: usá `skill-creator` y mandalo por PR. Nadie edita `.claude/skills/` solo en su máquina.
-- Decisión nueva del proyecto: va a `context.md`, no acá.
+- Decisión nueva del proyecto: va a `docs/context.md`, no acá.

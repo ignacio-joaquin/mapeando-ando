@@ -12,6 +12,7 @@ Plan y tareas: proyecto **Mapa Marciano — Space Apps 2026** en Linear (equipo 
 | `pipeline/` | Python que descarga y precomputa (rasterio, numpy, spiceypy, GDAL). |
 | `api/` | FastAPI: estado, inventario de datos y, después, point queries y `/api/route`. |
 | `web/` | Frontend. Hoy es una página de estado; acá va el mapa (React + MapLibre). |
+| `docs/` | Documentación del proyecto. `context.md` es la fuente única de contexto para el equipo y para la IA. |
 | `deploy/` | Bootstrap del servidor, nginx, systemd y auto-deploy. |
 
 ## Servidor
@@ -57,13 +58,13 @@ Todo el equipo trabaja con el mismo contexto y las mismas skills, versionados en
 
 | Archivo | Qué es |
 |---|---|
-| `context.md` | **Fuente única de contexto**: core value, arquitectura, stack, reglas duras, cómo trabajamos, decisiones abiertas. Si cambia una decisión del proyecto, se edita acá en el mismo PR. |
-| `CLAUDE.md` | Lo que lee Claude Code en cada sesión: carga `context.md` y dice qué skill usar en cada área. |
+| `docs/context.md` | **Fuente única de contexto**: core value, arquitectura, stack, reglas duras, cómo trabajamos, decisiones abiertas. Si cambia una decisión del proyecto, se edita acá en el mismo PR. |
+| `CLAUDE.md` | Lo que lee Claude Code en cada sesión: carga `docs/context.md` y dice qué skill usar en cada área. |
 | `.claude/skills/` | Skills propias (`mapeando-*`, `linear-task`) + skills curated de [Gentleman-Skills](https://github.com/Gentleman-Programming/Gentleman-Skills) copiadas. |
 | `.claude/settings.json` | Permisos del proyecto (incluye no pushear a `main`). |
 | `.claude/update-skills.sh` | Vuelve a traer las skills externas desde upstream. Se revisa el diff y va por PR. |
 
-Si usás otro asistente (Cursor, Copilot, Gemini CLI), apuntalo a `context.md`: es el mismo contenido.
+Si usás otro asistente (Cursor, Copilot, Gemini CLI), apuntalo a `docs/context.md`: es el mismo contenido.
 
 ---
 Prototipo educativo, no software de vuelo.

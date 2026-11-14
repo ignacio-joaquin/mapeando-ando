@@ -1,4 +1,4 @@
-# context.md · Mapa Marciano
+# docs/context.md · Mapa Marciano
 
 > Contexto compartido del proyecto para todo el equipo y para cualquier asistente de IA.
 > `CLAUDE.md` lo carga en cada sesión. Si cambia una decisión del proyecto, **se cambia acá** y en el mismo PR; no en la cabeza de una persona ni en un chat.
@@ -32,6 +32,7 @@ api/        FastAPI: estado, inventario y (en camino) point query + /api/route
 web/        Frontend. Hoy: página de estado en HTML plano. Va: React 19 + MapLibre
 deploy/     bootstrap, nginx, systemd, auto-deploy
 reference/  tablas de referencia versionadas (ej. dosis en superficie)
+docs/       documentación del proyecto (este archivo)
 ```
 
 **El flujo de datos, en una línea:** `sites/*.json` declara qué bajar → `pipeline/` baja a `/data/raw/` y precomputa a `/data/output/` → nginx sirve eso en `/tiles/` → la API lee `/data/manifest.json` y responde consultas puntuales → `web/` dibuja.
@@ -80,7 +81,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 - [ ] Si toca un contrato (id de capa, `files[].key`, forma de una respuesta): frontend y API actualizados en el mismo PR.
 - [ ] Si toca `api/` o `pipeline/`: tests de pytest, incluyendo el caso "datos todavía no están".
 - [ ] Nada escribe en el repo, cero secretos en el diff.
-- [ ] `context.md` actualizado si cambió una decisión del proyecto.
+- [ ] `docs/context.md` actualizado si cambió una decisión del proyecto.
 
 ### Nombres y contratos compartidos
 
