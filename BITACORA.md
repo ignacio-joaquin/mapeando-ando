@@ -82,7 +82,7 @@ El mapa de cobertura (`/data/output/coverage/`) muestra dónde hay terreno 1 m r
 | Térmico | THEMIS IR día/noche, 100 m, recortado (DN 8 bits, no calibrado → DERIVED) | ✅ | ✅ | `raw/<sitio>/themis/` |
 | Espectral | CRISM MTRDR browse (resúmenes minerales) | ✅ 8 obs. | ✅ 29 obs. | `raw/<sitio>/crism/` + `index.json` |
 | Químico | SuperCam MOC + PIXL óxidos / ChemCam MOC + APXS | ✅ | ✅ (APXS: solo inventario) | `raw/jezero/{supercam,pixl}/`, `raw/gale/{chemcam,apxs}/` |
-| Geofísico | RIMFAX (Jezero) / campo magnético Langlais 2019 (Gale) | ⏳ bajando | ✅ (coeficientes) | `raw/jezero/rimfax/`, `raw/common/magnetic_langlais2019/` |
+| Geofísico | RIMFAX (Jezero) / campo magnético Langlais 2019 (Gale) | ✅ 1393 archivos, 1.1 GB | ✅ (coeficientes) | `raw/jezero/rimfax/`, `raw/common/magnetic_langlais2019/` |
 
 ### Datos de apoyo
 
@@ -93,7 +93,7 @@ El mapa de cobertura (`/data/output/coverage/`) muestra dónde hay terreno 1 m r
 | Cráteres de Robbins & Hynek 2012 (≥1 km, sitio ±1°) | Landmarks: 45 en Jezero, 55 en Gale | ✅ `raw/<sitio>/landmarks/` |
 | Waypoints MMGIS | Tracks del rover (e Ingenuity en Jezero) | ✅ |
 | Mars 2020 rover places | Posición del rover por sol, para cruzar con la química | ✅ `raw/jezero/rover_places/` |
-| NASA DONKI WSA-Enlil | Clima espacial, impactos en Marte | ⚠️ Parcial: solo nov–dic 2025. Falta `NASA_API_KEY`. |
+| NASA DONKI WSA-Enlil | Clima espacial, impactos en Marte | ❌ Vacío: la última corrida sin API key pisó los datos parciales (ya corregido en el script). Falta `NASA_API_KEY`. |
 | SWIM 2.0 | Capa de agua (Could). En Jezero y Gale la consistencia de hielo es ~0. | ✅ `raw/common/swim2/` |
 | Fotos del rover por estación | Foto real en cada estación | Se buscan por posición cuando el usuario arma la ruta (MAP-14). No se descargan de antemano. |
 | Mars Trek WMTS | Mapa base | Se consume en vivo; es geográfico (EPSG:104905), no Web Mercator. |
@@ -133,27 +133,27 @@ journalctl -u mapeando-x -f
 | MAP-5 Reglas de Space Apps | Done |
 | MAP-6 Roles y equipo en Linear | Done |
 | MAP-7 Elegir sitio | Canceled: vamos con los dos |
-| MAP-8 Revisar Resources del challenge | Todo (manual) |
+| MAP-8 Revisar Resources del challenge | Canceled |
 | MAP-9 Tiles de Mars Trek en MapLibre | Done |
-| MAP-10 Kernels SPICE | Kernels listos; falta el script de cálculo |
+| MAP-10 Kernels SPICE | Done |
 | MAP-11 DTM HiRISE + recorte 200 m | Done |
 | MAP-12 Mapa de cobertura 1 m real | Done |
 | MAP-13 MEDA / REMS | Done (falta extraer la curva diurna, M1) |
 | MAP-14 Fuente de fotos del rover | Done |
 | MAP-15 THEMIS y CRISM | Done |
-| MAP-16 Química y RIMFAX | In Progress: falta terminar RIMFAX |
-| MAP-17 DONKI | Done como verificación; datos parciales |
+| MAP-16 Química y RIMFAX | Done |
+| MAP-17 DONKI | Done como verificación; los datos guardados están vacíos |
 | MAP-18 Scaffold del repo | Done |
 
 ## 7. Pendientes
 
-1. **RIMFAX:** esperar a que termine `mapeando-pds` y cerrar MAP-16.
-2. **DONKI:** cargar `NASA_API_KEY` (gratis en api.nasa.gov) en `/etc/mapeando.env` y volver a correr `fetch_extras.py`.
-3. **APXS:** bajar las tablas de óxidos por sol. Hoy solo está el inventario.
-4. **Manifest:** sumar a `manifest.json` los datos científicos (THEMIS, CRISM, química, clima) para que la API los liste.
-5. **MAP-8:** revisar a mano la pestaña Resources del challenge.
-6. **Seguridad del server:** SSH está abierto a internet con una contraseña compartida y sudo. Opciones: pasar a claves (`ssh-copy-id`) y apagar el login por contraseña, o limitar el puerto 22 a la IP del equipo.
-7. **LICENSE:** el repo todavía no tiene licencia.
+Todo M0 está cerrado en Linear. Quedan estos pendientes de datos e infraestructura:
+
+1. **DONKI:** cargar `NASA_API_KEY` (gratis en api.nasa.gov) en `/etc/mapeando.env` y volver a correr `fetch_extras.py`. Hoy no hay datos guardados.
+2. **APXS:** bajar las tablas de óxidos por sol. Hoy solo está el inventario.
+3. **Manifest:** sumar a `manifest.json` los datos científicos (THEMIS, CRISM, química, clima) para que la API los liste.
+4. **Seguridad del server:** SSH está abierto a internet con una contraseña compartida y sudo. Opciones: pasar a claves (`ssh-copy-id`) y apagar el login por contraseña, o limitar el puerto 22 a la IP del equipo.
+5. **LICENSE:** el repo todavía no tiene licencia.
 
 ---
 
