@@ -94,3 +94,41 @@ Valores de η de referencia: Soule & Goldman (1972), usados en Pandolf et al. (1
 - El DTM no distingue el material: roca firme y arena suelta (η 2,1 en Pandolf) se ven iguales. η mide solo la irregularidad geométrica.
 - Un DTM de 1 m no ve piedras individuales de menos de ~3–5 m: la rugosidad indica zonas con bloques, no detecta rocas.
 - Las anclas son una propuesta del equipo a partir de las referencias; se cambian en las constantes al principio del script.
+
+## Dosis de radiación (`pipeline/radiation.py`)
+
+Badge: **MSL RAD · MODELED**. Lee `dtm.tif` (de `precompute.py`) y `dem200_crop.tif` (de `download.py`) y escribe en `/data/output/<sitio>/`:
+
+```
+python pipeline/radiation.py --site jezero
+```
+
+| Archivo | Unidad | Qué es |
+|---|---|---|
+| `dose_rate.tif` | mGy/día | Dosis absorbida por celda (grilla de 100 m), para el planificador |
+| `skyview.tif` | 0–1 | Fracción del cielo que no tapa el terreno |
+| `radiation.json` | — | Rango real de valores, modo de visualización, tasa por hora, limitaciones |
+
+### Modelo
+`dosis = D0 × sky_view`, con D0 = 0,21 ± 0,04 mGy/día, la dosis absorbida en superficie medida por MSL RAD en Gale (Hassler et al., 2014, *Science* 343:1244797; ver `reference/rad_surface_dose.json`).
+`sky_view = 1 − promedio(sin γ)` sobre 32 azimuts, donde γ es el ángulo del horizonte (mínimo 0°). Supone radiación isótropa desde el cielo. El horizonte se busca hasta 60 km, con el DTM cerca y el DEM global de 200 m lejos, e incluye la curvatura de Marte (radio 3389,5 km).
+
+### Decisión de visualización
+Si la variación espacial (p1–p99) es menor que la incertidumbre de la medición (±19 %), se muestra como **presupuesto de dosis de la travesía** en el panel de la ruta, y el raster queda como capa secundaria. Si se muestra el raster, la escala de colores va fija de 0 a D0, sin estirarla al rango mín–máx.
+
+Presupuesto: `dosis_travesía (mGy) = Σ dose_rate(celda) × horas_en_celda / 24`.
+
+### Resultados
+
+| Sitio | Sky-view mediano | Dosis p1–p99 (mGy/día) | Variación | Regla automática | Tasa mediana |
+|---|---|---|---|---|---|
+| Jezero | 0,95 | 0,172–0,205 | 16,3 % | presupuesto | 8,3 µGy/h (EVA 4 h ≈ 33 µGy) |
+| Gale | 0,92 | 0,163–0,200 | 19,2 % | capa (por 0,2 puntos) | 8,0 µGy/h (EVA 4 h ≈ 32 µGy) |
+
+**Decisión: presupuesto de dosis en ambos sitios**, con el raster como capa secundaria. En Gale la regla da "capa" por 0,2 puntos (empate técnico con la incertidumbre de RAD), y el modelo isótropo sobreestima el apantallamiento, así que la variación real es menor. La única variación apreciable está al pie de Mount Sharp, donde la dosis baja hasta un ~15 %: se aclara en la leyenda de la capa secundaria. (El `radiation.json` de Gale muestra el resultado de la regla automática; la decisión final es la de este README.)
+
+### Limitaciones
+- D0 se midió en el piso de Gale, que tiene algo de horizonte propio: se usa como valor de cielo abierto. El error es de pocos %, menor que la incertidumbre.
+- Cerca del horizonte, la radiación atraviesa más atmósfera y llega menos: el modelo isótropo **sobreestima** el apantallamiento del terreno (es una cota superior).
+- No incluye eventos de partículas solares, ciclo solar ni variación estacional de presión: cambian D0 en el tiempo, no en el espacio.
+- No incluye secundarios del suelo (neutrones de albedo).
