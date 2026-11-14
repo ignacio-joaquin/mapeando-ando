@@ -52,3 +52,45 @@ Dentro del server, los datos están en `/data` y el repo en `/opt/mapeando-ando`
 
 ---
 Prototipo educativo, no software de vuelo.
+## Capas de terreno para EVA (`pipeline/terrain_layers.py`)
+
+Responde "¿piso caminable o terreno con bloques?" con capas separadas, para combinarlas después con otras fuentes. Lee `dtm.tif` y `slope.tif` de `precompute.py` y escribe en la misma carpeta (`/data/output/<sitio>/`). Badge: **MRO HiRISE · DERIVED**.
+
+```
+python pipeline/terrain_layers.py --site jezero
+```
+
+| Archivo | Unidad | Qué es |
+|---|---|---|
+| `roughness.tif` | m | Rugosidad pura: desvío estándar en 5 m de los residuos del DTM tras restar el promedio en 15 m |
+| `terrain_factor.tif` | η (adimensional) | Factor de terreno de Pandolf, **solo por rugosidad** |
+| `impassable.tif` | 0/1 | 1 = no transitable a pie |
+| `terrain_layers.json` | — | Unidades, umbrales, leyenda, resumen por sitio |
+
+**Solo geometría:** no incluye gravedad, traje ni carga (se aplican en otra etapa).
+
+### Por qué rugosidad "pura"
+La diferencia entre vecinos (`gdaldem roughness`) crece en cualquier ladera, aunque sea lisa, y repite la pendiente. Restando primero la tendencia local (promedio en 15 m), en una ladera lisa el residuo es ~0 y solo quedan bloques y escalones. Es el mismo criterio de "detrended terrain ruggedness" usado para analizar las travesías de Apollo 15 y 16 (Jacob et al., LPSC, NASA NTRS 20250011301). La ventana de 5 m coincide con la resolución horizontal real de un DTM HiRISE, que no es mejor que 3–5 píxeles (Kirk, MSL Landing Site Workshop).
+
+### Pendiente y Pandolf
+En Pandolf la pendiente entra como el grado **G**, separada de η. Por eso `terrain_factor` no incluye la pendiente: si la incluyera, se contaría dos veces. G depende de la dirección de marcha y tiene signo (subida o bajada), así que lo calcula el planificador sobre la ruta con `dtm.tif`: `G = 100 · Δz / Δd`.
+
+### Umbrales y justificación
+
+**η de Pandolf según rugosidad** (interpolación lineal; fuera de rango se satura):
+
+| Rugosidad pura | η | Equivalente en Pandolf |
+|---|---|---|
+| ≤ 0,1 m | 1,1 | Camino de tierra: el regolito nunca es asfalto (1,0). Por debajo de 0,1 m es ruido del DTM |
+| 0,3 m | 1,2 | Matorral liviano: irregularidad apenas por encima del ruido |
+| 0,5 m | 1,5 | Matorral denso: obliga a esquivar obstáculos |
+| ≥ 1,0 m | 1,8 | Pantano: bloques o escalones de ~1 m |
+
+Valores de η de referencia: Soule & Goldman (1972), usados en Pandolf et al. (1977). Precisión vertical de los DTM HiRISE de 1 m: decenas de cm (Sutton et al., 2022, *Remote Sensing* 14:2403), por eso la rugosidad por debajo de ~0,3 m se toma como poco confiable.
+
+**No transitable a pie:** pendiente > 30° **o** rugosidad > 1,0 m. Los astronautas de Apollo caminaron en pendientes de menos de 15° (Iqbal et al., 2024, *Acta Astronautica*), y la planificación de caminatas en el polo sur lunar limita las travesías a menos de 20°. Se toma 30° como límite físico (más allá, no es caminable aunque cueste más), y 1 m como escalón que obliga a trepar. Pandolf no modela lo imposible: por eso es una máscara aparte.
+
+### Limitaciones
+- El DTM no distingue el material: roca firme y arena suelta (η 2,1 en Pandolf) se ven iguales. η mide solo la irregularidad geométrica.
+- Un DTM de 1 m no ve piedras individuales de menos de ~3–5 m: la rugosidad indica zonas con bloques, no detecta rocas.
+- Las anclas son una propuesta del equipo a partir de las referencias; se cambian en las constantes al principio del script.
