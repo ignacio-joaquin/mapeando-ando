@@ -6,7 +6,7 @@
 - Modelo de campo magnético cortical de Langlais et al. 2019 (Zenodo) -> dato geofísico de Gale.
 - SWIM 2.0: composites globales de hielo subsuperficial (opcional, Could).
 
-Uso: python3 pipeline/fetch_extras.py [--sync]   (DATA_DIR y BUCKET opcionales)
+Uso: python3 pipeline/fetch_extras.py [--sync]   (DATA_DIR, BUCKET y NASA_API_KEY opcionales)
 """
 import datetime as dt
 import json
@@ -72,9 +72,10 @@ def donki():
     sims, mars = [], []
     while start <= end:
         stop = min(start + dt.timedelta(days=59), end)
-        # Endpoint directo del CCMC: mismos datos que api.nasa.gov, sin clave ni límite de DEMO_KEY
-        url = ("https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/WSAEnlilSimulations"
-               f"?startDate={start}&endDate={stop}")
+        # El endpoint del CCMC no es alcanzable desde AWS; api.nasa.gov con NASA_API_KEY
+        # (gratis en api.nasa.gov) o DEMO_KEY, que tiene límite por hora: se espera y reintenta.
+        url = ("https://api.nasa.gov/DONKI/WSAEnlilSimulations"
+               f"?startDate={start}&endDate={stop}&api_key={os.environ.get('NASA_API_KEY', 'DEMO_KEY')}")
         page = []
         for attempt in range(6):  # DEMO_KEY tiene límite de tasa: reintento con espera creciente
             try:
@@ -82,7 +83,7 @@ def donki():
                 break
             except Exception as e:
                 log(f"DONKI {start}..{stop} intento {attempt+1}: {e}")
-                time.sleep(30 * (attempt + 1))
+                time.sleep(600)
         time.sleep(5)
         sims += page
         for s in page:

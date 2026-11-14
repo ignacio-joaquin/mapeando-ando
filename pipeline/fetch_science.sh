@@ -69,27 +69,18 @@ done
 
 # --- Químico y geofísico: Jezero ---
 J=$RAW/jezero
-mkdir -p "$J/supercam" "$J/pixl" "$J/rimfax" "$J/rover_places"
+mkdir -p "$J/supercam"
 log "SuperCam MOC"
 for f in supercam_libs_moc.csv supercam_libs_moc.xml; do
   curl -sf --retry 5 -o "$J/supercam/$f" "$GEO/m2020/urn-nasa-pds-mars2020_supercam/data_derived_spectra/$f" || log "ERROR $f"
 done
-log "PIXL oxides"
-wget -q -r -np -nH --cut-dirs=3 -R 'index.html*' -A 'csv,xml' -P "$J/pixl" "$GEO/m2020/urn-nasa-pds-mars2020_pixl/data_oxides_pmc/"
-log "RIMFAX browse radargrams"
-wget -q -r -np -nH --cut-dirs=3 -R 'index.html*' -A 'png,jpg,xml,csv' -P "$J/rimfax" "$GEO/m2020/urn-nasa-pds-mars2020_rimfax/browse_radargram/"
-log "Mars 2020 rover places (localizaciones)"
-wget -q -r -np -nH --cut-dirs=3 -R 'index.html*' -A 'csv,xml' -P "$J/rover_places" "$GEO/m2020/urn-nasa-pds-mars2020_rover_places/data_localizations/"
+# PIXL, RIMFAX y rover places: ver pipeline/fetch_pds.py (descarga dirigida con Crawl-delay)
 
 # --- Químico: Gale ---
 G=$RAW/gale
-mkdir -p "$G/chemcam" "$G/apxs"
-log "ChemCam MOC"
-wget -q -r -np -nH --cut-dirs=4 -R 'index.html*' -P "$G/chemcam" "$GEO/msl/msl-m-chemcam-libs-4_5-rdr-v1/mslccm_1xxx/data/moc/"
-log "APXS (índices, extras e inventario)"
-for sub in index extras; do
-  wget -q -r -np -nH --cut-dirs=4 -R 'index.html*' -P "$G/apxs" "$GEO/msl/msl-m-apxs-4_5-rdr-v1/mslapx_1xxx/$sub/"
-done
+mkdir -p "$G/apxs"
+# ChemCam MOC: ver pipeline/fetch_pds.py
+log "APXS inventario"
 curl -sf -o "$G/apxs/collection_data_inventory.csv" "$GEO/msl/msl-m-apxs-4_5-rdr-v1/mslapx_1xxx/data/collection_data_inventory.csv" || true
 
 if [ -n "${BUCKET:-}" ]; then
