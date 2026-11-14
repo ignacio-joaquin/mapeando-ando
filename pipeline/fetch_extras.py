@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -45,14 +46,19 @@ def robbins(site):
     pad = 1.0  # landmarks visibles en el horizonte, más allá del DTM
     bbox = f"{b['lon_min']-pad},{b['lat_min']-pad},{b['lon_max']+pad},{b['lat_max']+pad}"
     base = "https://astrogeology.usgs.gov/pygeoapi/collections/mars/robbinsv1/items"
-    feats, offset = [], 0
-    while True:
-        d = get_json(f"{base}?f=json&bbox={bbox}&limit=1000&offset={offset}")
-        page = d.get("features", [])
-        feats += page
-        if len(page) < 1000:
+    # El servidor limita el tamaño de página: se siguen los links "next" hasta agotar.
+    feats, url, seen = [], f"{base}?f=json&bbox={bbox}&limit=500", set()
+    while url and url not in seen:
+        seen.add(url)
+        d = get_json(url)
+        feats += d.get("features", [])
+        nxt = [l["href"] for l in d.get("links", []) if l.get("rel") == "next"]
+        if not nxt or not d.get("features"):
             break
-        offset += 1000
+        href = nxt[0]
+        url = href if href.startswith("http") else "https://astrogeology.usgs.gov/pygeoapi" + href
+        if "f=json" not in url:
+            url += "&f=json"
     out = RAW / site["id"] / "landmarks" / "robbins_craters.geojson"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"type": "FeatureCollection", "bbox_query": bbox,
@@ -69,11 +75,15 @@ def donki():
         stop = min(start + dt.timedelta(days=59), end)
         url = ("https://api.nasa.gov/DONKI/WSAEnlilSimulations"
                f"?startDate={start}&endDate={stop}&api_key={NASA_KEY}")
-        try:
-            page = get_json(url) or []
-        except Exception as e:
-            log(f"DONKI {start}..{stop} ERROR {e}")
-            page = []
+        page = []
+        for attempt in range(6):  # DEMO_KEY tiene límite de tasa: reintento con espera creciente
+            try:
+                page = get_json(url) or []
+                break
+            except Exception as e:
+                log(f"DONKI {start}..{stop} intento {attempt+1}: {e}")
+                time.sleep(30 * (attempt + 1))
+        time.sleep(5)
         sims += page
         for s in page:
             for imp in s.get("impactList") or []:
