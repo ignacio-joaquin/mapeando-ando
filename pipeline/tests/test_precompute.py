@@ -277,3 +277,27 @@ def test_a_failed_layer_does_not_stop_the_others(data_dir, monkeypatch):
     assert index["layers"]["relief-contours"]["status"] == "error"
     assert index["layers"]["relief-slope"]["status"] == "ok"
     assert not (out / "contours.geojson").exists() and not (out / ".work").exists()
+
+
+# ------------------------------------------------------------------ ortoimagen
+
+@needs_gdal
+def test_sin_ortho_no_aparece_la_capa(data_dir):
+    """Sin --ortho no se registra base-ortho: el mapa no muestra una capa fantasma."""
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    assert precompute.main(["--site", "jezero"]) == 0
+    index = json.loads((data_dir / "output" / "jezero" / "terrain.json").read_text())
+    assert "base-ortho" not in index["layers"]
+
+
+@needs_gdal
+def test_ortho_sin_descargar_no_frena_el_relieve(data_dir):
+    """Con --ortho pero sin la imagen bajada: la capa queda en error y el resto sale igual."""
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")  # el manifest solo tiene el DTM
+    assert precompute.main(["--site", "jezero", "--ortho"]) == 1
+    index = json.loads((data_dir / "output" / "jezero" / "terrain.json").read_text())
+    assert index["layers"]["base-ortho"]["status"] == "error"
+    assert index["layers"]["relief-slope"]["status"] == "ok"
+    assert index["layers"]["relief-hillshade"]["tiles"]["status"] == "ok"

@@ -70,6 +70,8 @@ MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DT
 # Capas que se teselan para el mapa: carpeta de salida y rampa de color de tiles.py.
 # La carpeta es CONTRATO: el último segmento de la plantilla `tiles` de web/src/map/layers.ts.
 TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None)}
+# La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
+ORTHO_LAYER = "base-ortho"
 
 GTIFF_OPTS = ["-co", "TILED=YES", "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER"]
 COG_OPTS = ["-of", "COG", "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=YES", "-co", "BIGTIFF=IF_SAFER"]
@@ -275,6 +277,12 @@ def main(argv=None):
     ap.add_argument("--prueba", action="store_true",
                     help=f"procesar solo un recorte de {PRUEBA_PX}x{PRUEBA_PX} px del centro")
     ap.add_argument("--no-tiles", action="store_true", help="no generar los tiles PNG del mapa")
+    ap.add_argument("--ortho", action="store_true",
+                    help="teselar también la ortoimagen del sitio. Va aparte porque es la capa "
+                         "más cara: en Jezero son 7,4 GB a 25 cm/px y tarda horas")
+    ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
+                    help="tope de zoom al teselar; por defecto lo deduce gdal2tiles del tamaño "
+                         "del píxel. Para la ortoimagen conviene ponerlo")
     args = ap.parse_args(argv)
 
     t0 = time.time()
@@ -416,11 +424,40 @@ def main(argv=None):
             layer["tiles"] = {"status": "error", "error": "Faltan herramientas de GDAL: " + ", ".join(missing_tools)}
             continue
         try:
-            layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(out / layer["file"], out / folder, color=color)}
+            layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(
+                out / layer["file"], out / folder, color=color, max_zoom=args.max_zoom)}
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
+
+    # 6. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
+    #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
+    #    25 cm/px y teselarla compite por disco y CPU con la descarga.
+    ortho_entry = next((f for f in site["files"] if f["key"] == "ortho"), None)
+    if args.ortho and not args.no_tiles:
+        layers[ORTHO_LAYER] = {
+            "file": "ortho", "unit": None, "provenance": "OBSERVED",
+            "mission": (ortho_entry or {}).get("mission"),
+            "desc": (ortho_entry or {}).get("desc"),
+            "note": "Imagen real, sin realce. Recortada al bbox del sitio.",
+            "assumptions": ["Recortada al bbox de sites/<sitio>.json: afuera no hay imagen."],
+        }
+        try:
+            if ortho_entry is None:
+                raise DataNotReady(f"sites/{site['id']}.json no declara un archivo con key 'ortho'")
+            if missing_tools:
+                raise RuntimeError("Faltan herramientas de GDAL: " + ", ".join(missing_tools))
+            bbox = site["bbox"]
+            te = [bbox["lon_min"], bbox["lat_min"], bbox["lon_max"], bbox["lat_max"]]
+            info = tiles.raster_a_tiles(Path(find_input(site, "ortho")), out / "ortho",
+                                        max_zoom=args.max_zoom, te=te)
+            layers[ORTHO_LAYER].update(status="ok", tiles={"status": "ok", **info})
+        except Exception as e:
+            failed = True
+            log(f"Falló el teselado de {ORTHO_LAYER}: {e}")
+            layers[ORTHO_LAYER].update(status="error", error=str(e)[:400])
 
     (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
     publish(work / "terrain.json", out / "terrain.json")
@@ -429,7 +466,9 @@ def main(argv=None):
     log("Listo. Archivos generados:")
     for layer in layers.values():
         p = out / layer["file"]
-        if layer.get("status") == "ok" and p.exists():
+        if layer.get("status") == "ok" and p.is_dir():
+            log(f"  {p.name + '/':17s} {'solo tiles':>13s}")  # la ortoimagen no deja un archivo
+        elif layer.get("status") == "ok" and p.exists():
             log(f"  {p.name:17s} {p.stat().st_size / 1e6:8.1f} MB")
         else:
             log(f"  {layer['file']:17s} ERROR")

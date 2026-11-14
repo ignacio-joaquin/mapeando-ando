@@ -71,7 +71,7 @@ def faltan_herramientas():
     return [t for t in HERRAMIENTAS if shutil.which(t) is None]
 
 
-def a_crs_web(src: Path, dest: Path, resampling: str = "bilinear") -> None:
+def a_crs_web(src: Path, dest: Path, resampling: str = "bilinear", te=None) -> None:
     """Deja un raster marciano listo para el esquema XYZ del navegador.
 
     MapLibre solo entiende el esquema de tiles de Web Mercator terrestre. No hay
@@ -84,9 +84,15 @@ def a_crs_web(src: Path, dest: Path, resampling: str = "bilinear") -> None:
     Por eso NINGUNA medición sale del mapa: las distancias las calcula
     web/src/mars/geo.ts y las elevaciones api/terrain.py, los dos sobre la
     esfera marciana real. Ver la limitación anotada en web/src/map/MapView.tsx.
+
+    `te` recorta en lon/lat (lon_min, lat_min, lon_max, lat_max) antes de
+    teselar. Se usa con la ortoimagen, que cubre más que el sitio y teselarla
+    entera cuesta horas y llena el disco.
     """
-    run(["gdalwarp", "-q", "-overwrite", "-t_srs", MARS_LONGLAT, "-r", resampling,
-         *GTIFF_OPTS, src, dest])
+    cmd = ["gdalwarp", "-q", "-overwrite", "-t_srs", MARS_LONGLAT, "-r", resampling]
+    if te:
+        cmd += ["-te", *[f"{v:.6f}" for v in te]]
+    run([*cmd, *GTIFF_OPTS, src, dest])
     # Solo reescribe la etiqueta del CRS; no mueve ni un pixel.
     run(["gdal_edit.py", "-a_srs", "EPSG:4326", dest])
 
@@ -137,7 +143,7 @@ def publicar_carpeta(nueva: Path, destino: Path) -> None:
     shutil.rmtree(vieja, ignore_errors=True)
 
 
-def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoom=None) -> dict:
+def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoom=None, te=None) -> dict:
     """Tesela `src` en `outdir` y devuelve lo que el mapa necesita para pedir los tiles.
 
     Los intermedios van a una carpeta oculta al lado de `outdir` y se borran al final.
@@ -149,7 +155,7 @@ def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoo
     work.mkdir(parents=True)
     try:
         web = work / "web.tif"
-        a_crs_web(src, web)
+        a_crs_web(src, web, te=te)
         if color:
             coloreado = work / "color.tif"
             colorear(web, coloreado, color)
