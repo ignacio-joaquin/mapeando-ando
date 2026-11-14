@@ -2,11 +2,11 @@
 
 Con los supuestos actuales, caminar en terreno plano a 0.8 m/s gasta unos 600 W. El O2 primario alcanza para unas 3.6 h y la batería para unas 7.3 h: **el O2 es el recurso que limita la EVA.**
 
-El modelo calcula, tramo por tramo, el gasto metabólico del astronauta y lo convierte en O2 y batería consumidos, con los acumulados desde la salida. Lo devuelve `POST /api/route` y todo lleva el badge **MODELED**: es una estimación, no una medición.
+El modelo calcula, tramo por tramo, el gasto metabólico del astronauta y lo convierte en O2 y batería consumidos, con los acumulados desde la salida. Lo devuelve `POST /api/route/consumables` y todo lleva el badge **MODELED**: es una estimación, no una medición.
 
 - Valores: [`api/consumables.py`](../api/consumables.py), clase `SuitParams`.
 - Lectura del DTM: [`api/terrain.py`](../api/terrain.py).
-- Contrato del endpoint: [README](../README.md#consumibles-del-traje-apiroute--modeled).
+- Contrato del endpoint: [README](../README.md#consumibles-del-traje-apirouteconsumables--modeled).
 
 > Este archivo es la fuente de los supuestos. Si cambiás un valor en el código, actualizalo acá en el mismo commit.
 

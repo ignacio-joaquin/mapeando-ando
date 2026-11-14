@@ -12,15 +12,15 @@ Contexto, decisiones, datos y estado del proyecto: [BITACORA.md](BITACORA.md).
 |---|---|
 | `sites/` | Un JSON por sitio (Jezero, Gale) + `common.json`. Sumar un sitio = sumar un archivo. |
 | `pipeline/` | Python que descarga y precomputa (rasterio, numpy, spiceypy, GDAL). |
-| `api/` | FastAPI: estado, inventario de datos y `/api/route` (consumibles del traje). Después, point queries y pathfinding. |
-| `web/` | Frontend. Hoy es una página de estado; acá va el mapa (React + MapLibre). |
+| `api/` | FastAPI: estado, inventario de datos, point query, `/api/route` (planificador 4D, `api/planner.py`) y `/api/route/consumables` (consumibles del traje). |
+| `web/` | Frontend React + MapLibre (Vite). El server lo compila solo en cada deploy (`deploy/build-web.sh`). |
 | `docs/` | Documentación del proyecto. `context.md` es la fuente única de contexto para el equipo y para la IA. |
 | `deploy/` | Bootstrap del servidor, nginx, systemd y auto-deploy. |
 
 ## Servidor
 
 - AWS EC2 en **us-east-2 (Ohio)**, Ubuntu 24.04. La IP pública está en Linear.
-- `http://<IP>/` sirve `web/`, `/api/*` va a FastAPI y `/tiles/*` sirve `/data/output/`.
+- `http://<IP>/` sirve el build de `web/`, `/api/*` va a FastAPI y `/tiles/*` sirve `/data/output/`.
 - Datos crudos en `/data/raw/<sitio>/`, salidas en `/data/output/<sitio>/`, inventario en `/data/manifest.json`.
 - Copia de los datos crudos en S3: `s3://<bucket>/raw/` (nombre en `/etc/mapeando.env`).
 
@@ -39,15 +39,31 @@ sudo systemctl start mapeando-download        # volver a correr la descarga
 journalctl -u mapeando-download -f             # ver el progreso
 ```
 
+## Relieve: DTM, pendiente, sombreado y curvas
+
+`pipeline/precompute.py --site <id>` toma el DTM del sitio (del manifest, o de S3 si no está en disco) y deja en `/data/output/<id>/` el DTM en COG, la pendiente en grados (misma grilla que el DTM), el sombreado, las curvas de nivel cada 10 m en GeoJSON y un `terrain.json` con la procedencia, los parámetros y el estado de cada capa. También tesela la pendiente y el sombreado en PNG para el mapa (`slope/`, `hillshade/`, con `pipeline/tiles.py`) y anota en `terrain.json` el zoom y los límites de esos tiles: el frontend lee ese archivo para saber qué capa puede prender. `--prueba` procesa un recorte de 2×2 km en `/data/prueba/`, fuera de lo que sirve nginx; `--no-tiles` saltea el teselado.
+
+```
+cd /opt/mapeando-ando && sudo .venv-pipeline/bin/python pipeline/precompute.py --site jezero   # y después --site gale
+```
+
+La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangular con paralelo estándar en el ecuador, y en Jezero un "metro" de la proyección mide 0,948 m hacia el este. gdaldem da 28,7° donde hay 30°. El script usa el tamaño de píxel real sobre la esfera de 3396190 m, fila por fila.
+
+## Sol y sombra con terreno
+
+`pipeline/illumination.py` precomputa, por sol, una pila de máscaras de sol/sombra por hora LTST y el amanecer/atardecer de cada píxel con el terreno (DTM 1 m + DEM 200 m para el borde del cráter + efemérides SPICE). Funciona con cualquier DTM. Uso, formato de salida, método y límites: [docs/illumination.md](docs/illumination.md).
+
 ## Consumibles del traje (`/api/route`) · MODELED
 
-`POST /api/route` recibe una ruta ya armada y devuelve, por tramo, el gasto metabólico, el O2 y la batería, con los valores acumulados desde la salida. Todavía no hace pathfinding: cuando exista, le va a pasar sus puntos a esta misma función. Todo lo que devuelve lleva el badge **MODELED**.
+`POST /api/route/consumables` recibe una ruta ya armada y devuelve, por tramo, el gasto metabólico, el O2 y la batería, con los valores acumulados desde la salida. No hace pathfinding: eso lo hace `POST /api/route` (planificador 4D), que usa estas mismas funciones de consumo sobre la ruta que encuentra. Todo lo que devuelve lleva el badge **MODELED**.
 
 ```jsonc
 // Pedido
 {
   "site_id": "jezero",                       // obligatorio si los puntos no traen elev_m
   "points": [{"lat": 18.444, "lon": 77.450}, {"lat": 18.460, "lon": 77.420}],
+                                              // un punto intermedio puede traer "dwell_min" (0–600):
+                                              // minutos de trabajo parado en esa estación
   "speed_m_s": 0.8,                           // default 0.8 (~2.9 km/h)
   "cargo_kg": 0,                              // carga extra transportada (feature de carga del equipo, M2)
   "sample_step_m": 10,                        // paso de muestreo del DTM
@@ -59,12 +75,15 @@ journalctl -u mapeando-download -f             # ver el progreso
   "elevation_source": "dtm:jezero",           // o "request" si los puntos traían elev_m
   "segments": [{"index": 0, "distance_m": 1935, "elev_gain_m": 60, "duration_s": 2425,
                 "metabolic_w": 674, "o2_kg": 0.116, "o2_cum_kg": 0.116, "o2_remaining_pct": 78.9,
-                "battery_wh": 41.2, "battery_cum_wh": 41.2, "battery_remaining_pct": 90.8, ...}],
+                "battery_wh": 41.2, "battery_cum_wh": 41.2, "battery_remaining_pct": 90.8,
+                "dwell_s": 0, "dwell_o2_kg": 0, "dwell_battery_wh": 0, "dwell_energy_kj": 0, ...}],
   "totals": {..., "o2_exhausted_at_segment": null, "battery_exhausted_at_segment": null},
   "assumptions": {...},                       // los valores efectivamente usados
   "warnings": [...], "model_notes": [...]
 }
 ```
+
+**Permanencia.** La permanencia en un punto intermedio se suma al tramo que llega a ese punto: los `dwell_*` de ese tramo dicen cuánto se gastó parado (gasto de reposo de Pandolf más el consumo fijo del PLSS), y sus acumulados (`elapsed_s`, `*_cum_*`, `*_remaining_pct`) ya la incluyen. Si un recurso se agota durante la permanencia, `*_exhausted_at_segment` y `warnings` marcan ese tramo. En la salida y en la llegada final no cuenta, igual que en `POST /api/route`, que usa la misma función (`dwell_consumption`).
 
 **Elevación.** Si todos los puntos traen `elev_m`, se usan esas cotas y cada tramo es una recta. Si no trae ninguno, la API densifica cada tramo cada `sample_step_m` y lee el DTM de 1 m del sitio (el que figura como `dtm` en el manifest). Mezclar puntos con y sin `elev_m` da 422, igual que un punto fuera del DTM o sobre nodata.
 
