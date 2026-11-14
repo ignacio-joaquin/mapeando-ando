@@ -81,6 +81,14 @@ def battery_wh(duration_s: float, p: SuitParams) -> float:
     return p.base_power_w * duration_s / 3600.0 / p.battery_efficiency
 
 
+def dwell_consumption(duration_s: float, p: SuitParams) -> dict:
+    """Consumo de una permanencia en una estación: el astronauta trabaja parado (gasto de
+    reposo de Pandolf, sin velocidad ni pendiente) y el PLSS sigue andando."""
+    energy = pandolf_watts(0.0, 0.0, p) * duration_s
+    return {"duration_s": duration_s, "energy_kj": energy / 1000.0,
+            "o2_kg": o2_kg(energy, duration_s, p), "battery_wh": battery_wh(duration_s, p)}
+
+
 @dataclass
 class Step:
     """Sub-paso de un tramo: distancia horizontal (m) y desnivel (m)."""
@@ -120,18 +128,29 @@ def segment_consumption(steps: list[Step], speed_m_s: float, p: SuitParams) -> d
 PANDOLF_GRADE_LIMIT_PCT = 25.0  # rango aproximado en el que se validaron Pandolf y Santee
 
 
-def route_consumption(segments: list[list[Step]], speed_m_s: float, p: SuitParams) -> dict:
-    """Consumo por tramo con O2 y batería acumulados desde la salida."""
+def route_consumption(segments: list[list[Step]], speed_m_s: float, p: SuitParams,
+                      dwell_s: list[float] | None = None) -> dict:
+    """Consumo por tramo con O2 y batería acumulados desde la salida.
+
+    `dwell_s[i]` es la permanencia (s) en el punto de llegada del tramo i, antes de seguir.
+    Se suma a ese tramo: sus acumulados ya la incluyen, y si un recurso se agota durante la
+    permanencia, el aviso lo marca en ese tramo.
+    """
     o2_cap, bat_cap = p.o2_capacity_kg, p.battery_capacity_wh
     out, o2_cum, bat_cum, t_cum = [], 0.0, 0.0, 0.0
     warnings = []
     for i, steps in enumerate(segments):
         seg = segment_consumption(steps, speed_m_s, p)
-        o2_cum += seg["o2_kg"]
-        bat_cum += seg["battery_wh"]
-        t_cum += seg["duration_s"]
+        stay = dwell_consumption(dwell_s[i] if dwell_s else 0.0, p)
+        o2_cum += seg["o2_kg"] + stay["o2_kg"]
+        bat_cum += seg["battery_wh"] + stay["battery_wh"]
+        t_cum += seg["duration_s"] + stay["duration_s"]
         seg.update({
             "index": i,
+            "dwell_s": stay["duration_s"],
+            "dwell_energy_kj": stay["energy_kj"],
+            "dwell_o2_kg": stay["o2_kg"],
+            "dwell_battery_wh": stay["battery_wh"],
             "elapsed_s": t_cum,
             "o2_cum_kg": o2_cum,
             "o2_remaining_pct": 100.0 * (1 - o2_cum / o2_cap),
@@ -160,7 +179,7 @@ def route_consumption(segments: list[list[Step]], speed_m_s: float, p: SuitParam
         "totals": {
             "distance_m": sum(s["distance_m"] for s in out),
             "duration_s": t_cum,
-            "energy_kj": sum(s["energy_kj"] for s in out),
+            "energy_kj": sum(s["energy_kj"] + s["dwell_energy_kj"] for s in out),
             "o2_kg": o2_cum,
             "battery_wh": bat_cum,
             "o2_remaining_pct": 100.0 * (1 - o2_cum / o2_cap),

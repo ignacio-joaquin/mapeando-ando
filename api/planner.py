@@ -35,7 +35,8 @@ from pathlib import Path
 import numpy as np
 
 from .consumables import SOURCE as SUIT_SOURCE
-from .consumables import Step, SuitParams, battery_wh, o2_kg, pandolf_watts, segment_consumption
+from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg, pandolf_watts,
+                          segment_consumption)
 from .illumination import (NODATA_U8, SHADOW, ShadowStack, apply_affine, parse_utc, sample_on_points,
                            stack_for_time)
 from .terrain import MARS_LONGLAT, MARS_RADIUS_M, _norm_lon, haversine_m
@@ -460,11 +461,10 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             arrivals.append(t)
             state.append((o2_used, bat_used, t - t_depart))
             if i + 1 < len(pts) - 1:
-                dwell = max(0.0, float(waypoints[i + 1].get("dwell_min") or 0)) * 60.0
-                energy = pandolf_watts(0.0, 0.0, p) * dwell
-                o2_used += o2_kg(energy, dwell, p)
-                bat_used += battery_wh(dwell, p)
-                t += dwell
+                stay = dwell_consumption(max(0.0, float(waypoints[i + 1].get("dwell_min") or 0)) * 60.0, p)
+                o2_used += stay["o2_kg"]
+                bat_used += stay["battery_wh"]
+                t += stay["duration_s"]
                 departures.append(t)
             else:
                 departures.append(None)
@@ -550,7 +550,11 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     elif margin < RESERVE_MIN:
         status, factor = "NO_GO", limiting
         recurso = "El O2" if limiting == "o2" else "La batería"
-        summary = f"{recurso} no deja la reserva mínima de {RESERVE_MIN:.0f} min al llegar."
+        # Margen negativo: el recurso que limita (el que se agota primero) no alcanza.
+        if margin <= 0:
+            summary = f"{recurso} se agota antes de terminar la travesía."
+        else:
+            summary = f"{recurso} no deja la reserva mínima de {RESERVE_MIN:.0f} min al llegar."
     else:
         status, factor = "GO", limiting
         recurso = "el O2" if limiting == "o2" else "la batería"
