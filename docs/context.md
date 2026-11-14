@@ -133,8 +133,8 @@ Código, ids, endpoints y nombres de archivo en **inglés**. Comentarios, docs, 
 Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
 
 - **Build del frontend y deploy.** nginx sirve `/opt/mapeando-ando/web` directo y `deploy/update.sh` **no corre `npm build`**. Al pasar a React hay que decidir: build en CI y commitear `web/dist` (hoy está en `.gitignore`), o agregar el build al auto-deploy en `deploy/update.sh` y apuntar nginx a `web/dist`. Hoy no está resuelto: si se mergea React a `main` sin esto, el sitio se rompe.
-- **Formato de tiles de salida**: COG + PMTiles vs raster pre-teselado.
-- **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa.
+- **Formato de tiles de salida**: COG + PMTiles vs raster pre-teselado. Parcial (2026-11-14): sol y sombra se guardan como COG + `index.json` en `/data/output/<sitio>/illumination/`; el teselado para el mapa sigue abierto.
+- **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa. Parcial (2026-11-14): sol y sombra se precomputan por sol, con fecha y cantidad de soles como parámetros (`--start`, `--sols`) y paso de 1 h LTST. Falta decidir qué soles usa la demo. Ver `docs/illumination.md`.
 - **Modelo de rutas**: qué pesa en el costo (pendiente, rugosidad, dosis, luz) y con qué datos se valida.
 
 ---
