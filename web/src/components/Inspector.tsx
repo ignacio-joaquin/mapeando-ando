@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
 import { formatLatLon, formatDistance, marsDistanceM } from "../mars/geo";
-import type { LatLonDto } from "../api/schemas";
+import type { LatLonDto, PointInfo } from "../api/schemas";
+import { fetchPoint } from "../api/client";
 import { LOCAL_GEOMETRY } from "../domain/provenance";
 import { Measure } from "./Measure";
 import { ProvenanceBadge } from "./ProvenanceBadge";
@@ -15,12 +17,29 @@ import { ProvenanceBadge } from "./ProvenanceBadge";
  */
 interface Props {
   readonly center: LatLonDto;
+  readonly siteId: string;
 }
 
-export function Inspector({ center }: Props) {
+export function Inspector({ center, siteId }: Props) {
   const cursor = useStore((s) => s.cursor);
   const picked = useStore((s) => s.picked);
   const setPicked = useStore((s) => s.setPicked);
+  const [point, setPoint] = useState<PointInfo | null>(null);
+  const [cargando, setCargando] = useState(false);
+
+  // Al fijar un punto, preguntarle a la API qué hay ahí. Se cancela si el
+  // usuario hace otro clic antes de que conteste.
+  useEffect(() => {
+    setPoint(null);
+    if (!picked) return;
+    const ctrl = new AbortController();
+    setCargando(true);
+    fetchPoint(siteId, picked.lat, picked.lon, ctrl.signal)
+      .then(setPoint)
+      .catch(() => setPoint(null))
+      .finally(() => setCargando(false));
+    return () => ctrl.abort();
+  }, [picked, siteId]);
 
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -73,11 +92,52 @@ export function Inspector({ center }: Props) {
                 />
               </dd>
             </div>
-            <p className="mt-1 rounded border border-line bg-panel/60 p-2 text-[11px] text-warn">
-              Elevacion, pendiente y valor por capa: faltan el point query de la
-              API y las salidas del pipeline. No se muestra ningun valor
-              estimado.
-            </p>
+            <div className="flex justify-between gap-2">
+              <dt className="text-muted">Elevación</dt>
+              <dd>
+                {point ? (
+                  <Measure data={point.elevation} />
+                ) : (
+                  <span className="font-mono text-xs text-muted">
+                    {cargando ? "consultando…" : "—"}
+                  </span>
+                )}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt className="text-muted">Pendiente</dt>
+              <dd>
+                {point ? (
+                  <Measure data={point.slope} />
+                ) : (
+                  <span className="font-mono text-xs text-muted">
+                    {cargando ? "consultando…" : "—"}
+                  </span>
+                )}
+              </dd>
+            </div>
+
+            {point?.layers.map((capa) => (
+              <div key={capa.id} className="flex justify-between gap-2">
+                <dt className="text-muted">{capa.label}</dt>
+                <dd>
+                  <Measure data={capa} />
+                </dd>
+              </div>
+            ))}
+
+            {/* Por qué falta el dato, siempre explicado. Nunca un valor inventado. */}
+            {point?.note ? (
+              <p className="mt-1 rounded border border-line bg-panel/60 p-2 text-[11px] text-warn">
+                {point.note}
+              </p>
+            ) : null}
+            {!point && !cargando ? (
+              <p className="mt-1 rounded border border-line bg-panel/60 p-2 text-[11px] text-warn">
+                Sin backend conectado: no hay de dónde leer la elevación. No se
+                muestra ningún valor estimado.
+              </p>
+            ) : null}
           </dl>
         ) : (
           <p className="text-xs text-muted">

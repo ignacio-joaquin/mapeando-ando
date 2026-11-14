@@ -196,7 +196,26 @@ export type LatLonDto = z.infer<typeof LatLonSchema>;
 export type Bbox = z.infer<typeof BboxSchema>;
 export type Health = z.infer<typeof HealthSchema>;
 export type SiteSummary = z.infer<typeof SiteSummarySchema>;
+/**
+ * GET /api/sites/{site_id}/point?lat=&lon=
+ *
+ * Qué hay en un punto. Degrada en vez de romper: sin DTM descargado, fuera del
+ * raster o sobre nodata devuelve 200 con `value: null` y una `note` que explica
+ * por qué. `layers` se llena cuando el pipeline precompute las capas de
+ * supervivencia; hoy viene vacío.
+ */
+export const PointSchema = z.object({
+  site: z.string(),
+  lat: z.number(),
+  lon: z.number(),
+  elevation: MeasuredValueSchema,
+  slope: MeasuredValueSchema,
+  layers: z.array(MeasuredValueSchema.extend({ id: z.string(), label: z.string() })),
+  note: z.string().optional(),
+});
+
 export type Sites = z.infer<typeof SitesSchema>;
+export type PointInfo = z.infer<typeof PointSchema>;
 export type SiteDetail = z.infer<typeof SiteDetailSchema>;
 export type ManifestFile = z.infer<typeof ManifestFileSchema>;
 export type MeasuredValue = z.infer<typeof MeasuredValueSchema>;

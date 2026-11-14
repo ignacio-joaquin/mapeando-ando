@@ -157,7 +157,7 @@ export function App() {
                 Inspector
               </h2>
               {site ? (
-                <Inspector center={site.center} />
+                <Inspector center={site.center} siteId={site.id} />
               ) : (
                 <p className="text-xs text-muted">—</p>
               )}

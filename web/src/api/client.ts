@@ -5,6 +5,8 @@
  */
 import {
   HealthSchema,
+  PointSchema,
+  type PointInfo,
   RouteResponseSchema,
   RoverPhotosSchema,
   type RoverPhotos,
@@ -88,6 +90,30 @@ export async function fetchSiteDetail(siteId: string): Promise<SiteDetail | null
     // 404 mientras la descarga no terminó: degradar, no romper.
     return null;
   }
+}
+
+/**
+ * Qué hay en un punto del mapa. Sin backend no hay nada que consultar: devuelve
+ * null y el inspector lo dice, en vez de inventar una elevación.
+ */
+export async function fetchPoint(
+  siteId: string,
+  lat: number,
+  lon: number,
+  signal?: AbortSignal,
+): Promise<PointInfo | null> {
+  if (usingFixtures) return null;
+  const q = new URLSearchParams({ lat: String(lat), lon: String(lon) });
+  const res = await fetch(`/api/sites/${siteId}/point?${q}`, {
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok) return null;
+  const parsed = PointSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error(`/api/sites/${siteId}/point no cumple el contrato: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 
 /**

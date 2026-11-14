@@ -6,6 +6,7 @@ Expone el estado del servidor, el inventario de datos por sitio y
 las point queries y el pathfinding.
 """
 import json
+import math
 import os
 import subprocess
 from pathlib import Path
@@ -15,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .consumables import Step, SuitParams, route_consumption
-from .terrain import TerrainError, densify, haversine_m, sample_dtm
+from .terrain import MARS_RADIUS_M, TerrainError, densify, haversine_m, sample_dtm
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 REPO_DIR = Path(__file__).resolve().parent.parent
@@ -161,6 +162,123 @@ def route_consumables(req: ConsumablesRequest):
         seg["to"] = {"lat": b.lat, "lon": b.lon, "elev_m": elev[i + 1]}
     result["elevation_source"] = elev_source
     return result
+
+
+# Distancia del muestreo con el que se estima la pendiente. La pendiente depende
+# de sobre qué largo se mide: a 5 m da la rugosidad que le importa a quien camina,
+# a 50 m daría la del terreno general. Va en el supuesto del badge.
+SLOPE_BASELINE_M = 5.0
+
+
+def _value(value, unit, provenance, *, mission=None, instrument=None,
+           resolution=None, source=None, assumptions=None):
+    """Valor con procedencia, el formato de docs/context.md §4. `value=None` = falta."""
+    out = {"value": value, "unit": unit, "provenance": provenance,
+           "mission": mission, "instrument": instrument}
+    if resolution:
+        out["resolution"] = resolution
+    if source:
+        out["source"] = source
+    if assumptions:
+        out["assumptions"] = assumptions
+    return out
+
+
+def _dtm_entry(site_id: str):
+    """Entrada del DTM en el manifest, o None si todavía no está. No levanta:
+    el inspector tiene que poder contestar aunque la descarga no haya terminado."""
+    m = _manifest()
+    if m is None or site_id not in m["sites"]:
+        return None
+    return next((f for f in m["sites"][site_id]["files"]
+                 if f["key"] == "dtm" and f["status"] == "ok"), None)
+
+
+def _slope_deg(dtm_path: Path, lat: float, lon: float) -> float:
+    """Pendiente en grados por diferencias finitas sobre el DTM.
+
+    Se muestrean cuatro vecinos a ±SLOPE_BASELINE_M en el terreno y se arma el
+    gradiente. No usa `slope.tif` a propósito: así el inspector funciona con solo
+    el DTM descargado, sin depender del precómputo. Puede diferir en unas décimas
+    de la capa de pendiente del mapa, que se calcula con el método de Horn sobre
+    toda la grilla; para eso está el supuesto en el badge.
+    """
+    dlat = math.degrees(SLOPE_BASELINE_M / MARS_RADIUS_M)
+    coslat = max(math.cos(math.radians(lat)), 1e-6)
+    dlon = dlat / coslat
+
+    norte, sur, este, oeste = sample_dtm(
+        dtm_path,
+        [(lat + dlat, lon), (lat - dlat, lon), (lat, lon + dlon), (lat, lon - dlon)],
+    )
+    dz_dy = (norte - sur) / (2 * SLOPE_BASELINE_M)
+    dz_dx = (este - oeste) / (2 * SLOPE_BASELINE_M)
+    return math.degrees(math.atan(math.hypot(dz_dx, dz_dy)))
+
+
+@app.get("/api/sites/{site_id}/point")
+def point(site_id: str, lat: float, lon: float):
+    """Qué hay en un punto: elevación y pendiente, cada una con su procedencia.
+
+    Degrada en vez de romper. Si el DTM no está descargado, si el punto cae fuera
+    del raster o si cae en nodata, devuelve `value: null` y una nota que explica
+    por qué. Nunca estima un valor para llenar el hueco.
+    """
+    m = _manifest()
+    if m is not None and site_id not in m["sites"]:
+        raise HTTPException(404, f"No conozco el sitio '{site_id}'.")
+
+    entry = _dtm_entry(site_id)
+    meta = entry or {}
+    px = (meta.get("raster") or {}).get("pixel_size")
+    fuente = {
+        "mission": meta.get("mission") or "MRO",
+        "instrument": "HiRISE DTM",
+        # La resolución sale del raster, no hardcodeada: Gale no es Jezero.
+        "resolution": f"{abs(px):g} m/px" if px else None,
+        "source": meta.get("desc"),
+    }
+
+    def vacio(nota):
+        return {
+            "site": site_id, "lat": lat, "lon": lon,
+            "elevation": _value(None, "m", "OBSERVED", **fuente),
+            "slope": _value(None, "°", "DERIVED", **fuente),
+            "layers": [],
+            "note": nota,
+        }
+
+    if entry is None:
+        return vacio("El DTM de este sitio todavía no está descargado.")
+
+    path = DATA_DIR / entry["path"]
+    try:
+        elev = sample_dtm(path, [(lat, lon)])[0]
+    except TerrainError as e:
+        return vacio(str(e))
+    except (OSError, ValueError) as e:
+        raise HTTPException(503, f"No se pudo leer el DTM: {e}")
+
+    try:
+        slope = _slope_deg(path, lat, lon)
+    except TerrainError:
+        # El punto está dentro pero algún vecino no: sin pendiente, con elevación.
+        slope = None
+
+    return {
+        "site": site_id, "lat": lat, "lon": lon,
+        "elevation": _value(round(elev, 2), "m", "OBSERVED", **fuente),
+        "slope": _value(
+            None if slope is None else round(slope, 2), "°", "DERIVED", **fuente,
+            assumptions=[
+                f"Diferencias finitas sobre el DTM a ±{SLOPE_BASELINE_M:g} m",
+                "El valor depende de ese largo: a mayor distancia, pendiente más suave",
+            ] + ([] if slope is not None else ["El punto está en el borde del DTM"]),
+        ),
+        # Peligro, refugio, dosis y sombras se suman acá cuando el pipeline las
+        # precompute: se muestrean de su COG igual que la elevación.
+        "layers": [],
+    }
 
 
 @app.post("/api/route")
