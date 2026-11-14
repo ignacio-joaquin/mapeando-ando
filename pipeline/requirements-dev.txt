@@ -1,0 +1,2 @@
+# Solo para desarrollo y CI; el server no lo necesita para correr el pipeline.
+pytest==8.3.4
