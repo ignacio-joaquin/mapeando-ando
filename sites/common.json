@@ -4,6 +4,11 @@
     "url": "https://planetarymaps.usgs.gov/mosaic/Mars/HRSC_MOLA_Blend/Mars_HRSC_MOLA_BlendDEM_Global_200mp_v2.tif",
     "radius_m": 3396190
   },
+  "dem463": {
+    "desc": "MOLA DEM global 463 m (MGS MOLA, USGS). Solo altimetría láser, sin mezcla HRSC; se recorta por sitio con lectura remota (~2,1 GB entero).",
+    "url": "https://planetarymaps.usgs.gov/mosaic/Mars_MGS_MOLA_DEM_mosaic_global_463m.tif",
+    "radius_m": 3396190
+  },
   "files": [
     {"key": "spice_lsk", "kind": "spice", "desc": "Leap seconds", "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls"},
     {"key": "spice_pck", "kind": "spice", "desc": "Planetary constants", "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc"},

@@ -94,9 +94,16 @@ def donki():
                                  "arrivalTime": imp.get("arrivalTime"), "isGlancingBlow": imp.get("isGlancingBlow"),
                                  "link": s.get("link")})
         start = stop + dt.timedelta(days=1)
-    (out / "wsa_enlil_simulations.json").write_text(json.dumps(sims))
-    (out / "mars_impacts.json").write_text(json.dumps(mars, indent=1))
-    log(f"DONKI: {len(sims)} simulaciones, {len(mars)} impactos en Marte")
+    # Se fusiona con lo ya guardado: una corrida con ventanas fallidas nunca borra datos previos.
+    def merge(path, new, key):
+        old = json.loads(path.read_text()) if path.exists() else []
+        seen = {(x.get("simulationID"), x.get(key)) for x in old}
+        old += [x for x in new if (x.get("simulationID"), x.get(key)) not in seen]
+        path.write_text(json.dumps(old, indent=1))
+        return len(old)
+    n_sims = merge(out / "wsa_enlil_simulations.json", sims, "modelCompletionTime")
+    n_mars = merge(out / "mars_impacts.json", mars, "arrivalTime")
+    log(f"DONKI: +{len(sims)} simulaciones nuevas; total {n_sims} simulaciones, {n_mars} impactos en Marte")
 
 
 def langlais():
