@@ -11,7 +11,15 @@ import { MARS24 } from "./domain/provenance";
 import { RoutePlanner } from "./components/route/RoutePlanner";
 import { ElevationProfile } from "./components/route/ElevationProfile";
 import { CuffChecklist } from "./components/route/CuffChecklist";
-import { fetchHealth, fetchSites, fetchTerrain, tileExists, usingFixtures } from "./api/client";
+import {
+  fetchCoverage,
+  fetchHealth,
+  fetchPlaces,
+  fetchSites,
+  fetchTerrain,
+  tileExists,
+  usingFixtures,
+} from "./api/client";
 import type { Health, SiteSummary, TerrainIndex } from "./api/schemas";
 import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
@@ -25,6 +33,8 @@ export function App() {
   const setActiveSite = useStore((s) => s.setActiveSite);
   const setAvailability = useStore((s) => s.setAvailability);
   const setTerrain = useStore((s) => s.setTerrain);
+  const setPlaces = useStore((s) => s.setPlaces);
+  const setCoverage = useStore((s) => s.setCoverage);
   const view = useStore((s) => s.view);
   const plan = useFreshRoute();
 
@@ -53,6 +63,7 @@ export function App() {
     let alive = true;
     setTerrain(null);
     setAvailability({});
+    setCoverage(null);
     void (async () => {
       let terrain: TerrainIndex | null = null;
       try {
@@ -60,6 +71,14 @@ export function App() {
         if (alive) setTerrain(terrain);
       } catch (e) {
         if (alive) setTerrain(null, e instanceof Error ? e.message : String(e));
+      }
+      // La huella del DTM, para rechazar destinos sin terreno de 1 m. Si falla,
+      // el planificador sigue y avisa que no pudo verificar.
+      try {
+        const coverage = await fetchCoverage(activeSiteId, terrain);
+        if (alive) setCoverage(coverage);
+      } catch {
+        if (alive) setCoverage(null);
       }
       const available: Record<string, boolean> = {};
       for (const spec of LAYERS) {
@@ -72,7 +91,23 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [activeSiteId, setAvailability, setTerrain]);
+  }, [activeSiteId, setAvailability, setTerrain, setCoverage]);
+
+  // Lugares del sitio para el buscador de destinos (pipeline/places.py).
+  useEffect(() => {
+    let alive = true;
+    setPlaces(null);
+    fetchPlaces(activeSiteId)
+      .then((p) => {
+        if (alive) setPlaces(p);
+      })
+      .catch((e: unknown) => {
+        if (alive) setPlaces(null, e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeSiteId, setPlaces]);
 
   const site = sites.find((s) => s.id === activeSiteId) ?? sites[0];
 

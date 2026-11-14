@@ -1,12 +1,16 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { planRoute } from "../../api/client";
 import { EXAMPLE_PARAMS } from "../../api/routeFixture";
 import type { MeasuredValue, RouteLeg, RouteStop } from "../../api/schemas";
 import { MARS24_LTST } from "../../domain/provenance";
 import { LEG_CLASS_COLOR, LEG_CLASS_LABEL, waypointLabel } from "../../map/route";
 import { formatLatLon } from "../../mars/geo";
+import { insideCoverage, UNVERIFIED_MESSAGE } from "../../map/coverage";
 import { planKey, useFreshRoute, usePlan, type Waypoint } from "../../state/plan";
+import { encodePlan, writePlanToUrl } from "../../state/share";
 import { useStore } from "../../state/store";
+import { DestinationSearch } from "./DestinationSearch";
+import { PlaceCard } from "./PlaceCard";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { VerdictCard } from "./VerdictCard";
@@ -24,10 +28,12 @@ import {
 /**
  * Planificador de travesía: la pantalla central de la demo.
  *
- * Funciona como Google Maps: clic en el mapa pone la salida (A), después la
- * llegada (B) y después estaciones en el medio. Cada cambio (puntos, tareas,
+ * Funciona como Google Maps: el primer clic marca el hábitat (A, de donde se
+ * sale); el destino (B) se elige buscando, con un lugar sugerido o con otro
+ * clic; después se suman paradas en el medio. Cada cambio (puntos, permanencia,
  * hora de salida) recalcula contra /api/route; mientras el server no lo tenga,
- * usa el planificador de ejemplo y lo dice.
+ * usa el planificador de ejemplo y lo dice. La travesía queda en la URL para
+ * compartirla.
  */
 export function RoutePlanner() {
   const siteId = useStore((s) => s.activeSiteId);
@@ -36,12 +42,24 @@ export function RoutePlanner() {
   const clickMode = usePlan((s) => s.clickMode);
   const result = useFreshRoute();
   const status = usePlan((s) => s.status);
-  const { setDepartAt, setClickMode, setResult, setStatus, clear, reverse } = usePlan.getState();
+  const notice = usePlan((s) => s.notice);
+  const coverage = useStore((s) => s.coverage);
+  const { setDepartAt, setClickMode, setResult, setStatus, setNotice, clear, reverse } =
+    usePlan.getState();
 
-  // Cambiar de sitio arranca una travesía nueva.
+  // Cambiar de sitio arranca una travesía nueva (salvo la que trajo un enlace).
   useEffect(() => {
-    usePlan.getState().clear();
+    usePlan.getState().switchSite(siteId);
   }, [siteId]);
+
+  // La travesía vive también en la URL: copiar el enlace es compartirla.
+  useEffect(() => {
+    writePlanToUrl(
+      waypoints.length === 0
+        ? `?site=${encodeURIComponent(siteId)}`
+        : encodePlan(siteId, departAt, waypoints),
+    );
+  }, [siteId, departAt, waypoints]);
 
   // Recalcular ante cualquier cambio, con un respiro para no pedir por tecla.
   useEffect(() => {
@@ -93,6 +111,26 @@ export function RoutePlanner() {
 
   return (
     <div className="flex flex-col gap-3 text-sm">
+      {notice ? (
+        <p
+          role="alert"
+          className="flex items-start justify-between gap-2 rounded border-2 border-alert bg-alert/15 p-2 text-xs text-fg"
+        >
+          <span>
+            <strong className="text-alert">✕ </strong>
+            {notice}
+          </span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            aria-label="Cerrar aviso"
+            className="shrink-0 text-muted hover:text-fg"
+          >
+            ✕
+          </button>
+        </p>
+      ) : null}
+
       <header className="flex items-center justify-between gap-2">
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
           Planificar travesía
@@ -106,6 +144,11 @@ export function RoutePlanner() {
           </ModeButton>
         </div>
       </header>
+
+      <DestinationSearch />
+      {waypoints.length > 0 && coverage === null ? (
+        <p className="text-[11px] text-warn">⚠ {UNVERIFIED_MESSAGE}</p>
+      ) : null}
 
       {/* Hora de salida */}
       <section className="rounded border border-line p-2">
@@ -149,18 +192,21 @@ export function RoutePlanner() {
         <>
           <VerdictCard verdict={route.verdict} />
           {result?.example ? <ExampleNotice /> : null}
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="rounded border border-line px-2 py-1.5 text-xs text-fg hover:border-rust"
-          >
-            Imprimir tira de la travesía
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="flex-1 rounded border border-line px-2 py-1.5 text-xs text-fg hover:border-rust"
+            >
+              Imprimir tira
+            </button>
+            <ShareButton />
+          </div>
         </>
       ) : waypoints.length === 1 ? (
-        <Hint>Ahora hacé clic donde querés llegar (B).</Hint>
+        <Hint>Ahora elegí el destino (B): buscalo, tocá un lugar sugerido o hacé clic en el mapa.</Hint>
       ) : waypoints.length === 0 ? (
-        <Hint>Hacé clic en el mapa para poner la salida (A).</Hint>
+        <Hint>Hacé clic en el mapa para marcar el hábitat (A): es de donde salís.</Hint>
       ) : (
         // Sin veredicto mientras se recalcula: el anterior era de otra ruta.
         <p
@@ -192,7 +238,19 @@ export function RoutePlanner() {
 
           <ol className="flex flex-col">
             {waypoints.map((w, i) => (
-              <li key={w.id}>
+              <li
+                key={w.id}
+                // Soltar una tarjeta encima de otra la deja en ese lugar.
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes(DRAG_TYPE)) e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  const id = e.dataTransfer.getData(DRAG_TYPE);
+                  if (!id) return;
+                  e.preventDefault();
+                  usePlan.getState().movePointTo(id, i);
+                }}
+              >
                 <StopCard
                   waypoint={w}
                   index={i}
@@ -208,7 +266,10 @@ export function RoutePlanner() {
           </ol>
 
           {waypoints.length >= 2 ? (
-            <Hint>Clic en el mapa agrega una estación antes de la llegada. Los marcadores se pueden arrastrar.</Hint>
+            <Hint>
+              Clic en el mapa agrega una parada antes del destino. Las paradas se reordenan
+              arrastrando ⠿ (o con ↑ ↓) y los marcadores se pueden mover en el mapa.
+            </Hint>
           ) : null}
         </section>
       ) : null}
@@ -219,6 +280,33 @@ export function RoutePlanner() {
 }
 
 /* ——— partes ——— */
+
+/** Tipo propio del arrastre: solo las tarjetas de la lista se pueden soltar ahí. */
+const DRAG_TYPE = "application/x-mapeando-waypoint";
+
+/** Copia el enlace de la travesía (la URL ya tiene sitio, hora y puntos). */
+function ShareButton() {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard
+          .writeText(window.location.href)
+          .then(() => setState("copied"))
+          .catch(() => setState("failed"));
+        setTimeout(() => setState("idle"), 2500);
+      }}
+      className="flex-1 rounded border border-line px-2 py-1.5 text-xs text-fg hover:border-rust"
+    >
+      {state === "copied"
+        ? "✓ Enlace copiado"
+        : state === "failed"
+          ? "Copialo de la barra de direcciones"
+          : "Copiar enlace"}
+    </button>
+  );
+}
 
 /**
  * Badge en línea de un valor de la lista. La fila de referencia (la primera)
@@ -319,6 +407,9 @@ function StopCard({
   const { updatePoint, removePoint, shiftPoint, setOpenStop } = usePlan.getState();
   const open = usePlan((s) => s.openStop === index);
   const siteId = useStore((s) => s.activeSiteId);
+  const place = useStore((s) => s.places?.places.find((p) => p.id === waypoint.placeId) ?? null);
+  const coverage = useStore((s) => s.coverage);
+  const outside = coverage !== null && !insideCoverage(coverage, waypoint);
   const label = waypointLabel(index, total);
   const isStation = label.kind === "station";
 
@@ -337,6 +428,18 @@ function StopCard({
       onFocus={() => setOpenStop(index)}
     >
       <div className="flex items-start gap-2">
+        <span
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData(DRAG_TYPE, waypoint.id);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          title="Arrastrar para reordenar"
+          aria-hidden
+          className="cursor-grab self-center px-0.5 text-muted select-none active:cursor-grabbing"
+        >
+          ⠿
+        </span>
         <button
           type="button"
           onClick={() => setOpenStop(open ? null : index)}
@@ -347,7 +450,10 @@ function StopCard({
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-semibold">{label.long}</span>
+            <span className="font-semibold">
+              {label.long}
+              {place ? <span className="font-normal text-muted"> · {place.name}</span> : null}
+            </span>
             <span className="flex gap-1 text-[11px] text-muted">
               <IconButton label="Subir" disabled={index === 0} onClick={() => shiftPoint(waypoint.id, -1)}>
                 ↑
@@ -365,8 +471,20 @@ function StopCard({
             </span>
           </div>
           <p className="font-mono text-[11px] text-muted">{formatLatLon(waypoint)}</p>
+          {waypoint.placeId && !place ? (
+            <p className="text-[11px] text-muted">Lugar {waypoint.placeId} (el índice de lugares no cargó)</p>
+          ) : null}
         </div>
       </div>
+
+      {outside ? (
+        <p role="alert" className="mt-2 rounded border border-alert bg-alert/15 p-1.5 text-[11px] text-fg">
+          <strong className="text-alert">✕ Sin terreno de 1 m real.</strong> Este punto queda fuera
+          del DTM HiRISE: movelo o quitalo antes de confiar en la ruta.
+        </p>
+      ) : null}
+
+      {place && open ? <PlaceCard place={place} /> : null}
 
       <div className="mt-2 flex gap-1.5">
         <input

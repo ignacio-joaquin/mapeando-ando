@@ -1,12 +1,15 @@
 /**
- * Estado del planificador de travesía, estilo Google Maps: una salida, una
- * llegada y estaciones en el medio, en orden. Separado de store.ts para que el
- * planificador se pueda leer de punta a punta en un archivo.
+ * Estado del planificador de travesía, estilo Google Maps: el hábitat (salida),
+ * el destino (llegada) y paradas en el medio, en orden. Separado de store.ts
+ * para que el planificador se pueda leer de punta a punta en un archivo.
+ *
+ * El hábitat no es un punto fijo del sitio: lo marca el usuario cada vez.
  */
 import { create } from "zustand";
 import type { LatLon } from "../mars/geo";
 import type { PlannedRoute } from "../api/client";
 import { useStore } from "./store";
+import { planFromUrl } from "./share";
 
 export interface Waypoint extends LatLon {
   readonly id: string;
@@ -14,6 +17,8 @@ export interface Waypoint extends LatLon {
   readonly task: string;
   /** Minutos de permanencia. En la salida no cuenta: se sale a la hora elegida. */
   readonly dwellMin: number;
+  /** Lugar de places.json elegido con el buscador o un chip. null = clic en el mapa. */
+  readonly placeId: string | null;
 }
 
 export type ClickMode = "add" | "inspect";
@@ -24,6 +29,8 @@ type Status =
   | { readonly kind: "error"; readonly message: string };
 
 interface PlanState {
+  /** Sitio al que pertenecen los puntos. Al cambiar de sitio se arranca de cero. */
+  readonly siteId: string;
   readonly waypoints: readonly Waypoint[];
   readonly departAt: Date;
   readonly clickMode: ClickMode;
@@ -33,11 +40,20 @@ interface PlanState {
   readonly status: Status;
   /** Estación abierta en el panel (índice en waypoints). */
   readonly openStop: number | null;
-  addPoint: (p: LatLon) => void;
+  /** Aviso para el usuario (ej. un punto rechazado por falta de terreno). */
+  readonly notice: string | null;
+  /** Clic en el mapa: 1ro = hábitat, 2do = destino, después paradas antes del destino. */
+  addPoint: (p: LatLon, placeId?: string | null) => void;
+  /** Pone o cambia el destino. Necesita el hábitat marcado. */
+  setDestination: (p: LatLon, placeId?: string | null) => void;
+  /** Suma una parada justo antes del destino. Necesita hábitat y destino. */
+  addStop: (p: LatLon, placeId?: string | null) => void;
   movePoint: (id: string, p: LatLon) => void;
   updatePoint: (id: string, patch: Partial<Pick<Waypoint, "task" | "dwellMin">>) => void;
   removePoint: (id: string) => void;
   shiftPoint: (id: string, delta: -1 | 1) => void;
+  /** Mueve un punto a otra posición de la lista (arrastrar y soltar). */
+  movePointTo: (id: string, toIndex: number) => void;
   reverse: () => void;
   clear: () => void;
   setDepartAt: (d: Date) => void;
@@ -45,6 +61,9 @@ interface PlanState {
   setResult: (r: PlannedRoute | null, key?: string | null) => void;
   setStatus: (s: Status) => void;
   setOpenStop: (i: number | null) => void;
+  setNotice: (notice: string | null) => void;
+  /** Al cambiar de sitio: borra la travesía si era de otro. */
+  switchSite: (siteId: string) => void;
 }
 
 let seq = 0;
@@ -53,28 +72,59 @@ const newId = () => `wp-${++seq}`;
 /** Duración por defecto de una estación nueva, editable en el panel. */
 const DEFAULT_DWELL_MIN = 15;
 
+const point = (p: LatLon, placeId: string | null, dwellMin = 0): Waypoint => ({
+  id: newId(),
+  lat: p.lat,
+  lon: p.lon,
+  task: "",
+  dwellMin,
+  placeId,
+});
+
+const insertStop = (wps: readonly Waypoint[], wp: Waypoint): Waypoint[] => [
+  ...wps.slice(0, -1),
+  { ...wp, dwellMin: DEFAULT_DWELL_MIN },
+  ...wps.slice(-1),
+];
+
+// Un enlace compartido (?site=&depart=&pts=) arranca con esa travesía.
+const shared = planFromUrl();
+
 export const usePlan = create<PlanState>((set) => ({
-  waypoints: [],
-  departAt: new Date(),
+  siteId: useStore.getState().activeSiteId,
+  waypoints: (shared?.points ?? []).map((p) => point(p, p.placeId, p.dwellMin)),
+  departAt: shared?.departAt ?? new Date(),
   clickMode: "add",
   result: null,
   resultKey: null,
   status: { kind: "idle" },
   openStop: null,
+  notice: null,
 
-  // 1er clic = salida, 2do = llegada, los siguientes = estaciones antes de la llegada.
-  addPoint: (p) =>
+  addPoint: (p, placeId = null) =>
     set((s) => {
-      const wp: Waypoint = { id: newId(), lat: p.lat, lon: p.lon, task: "", dwellMin: 0 };
-      if (s.waypoints.length < 2) return { waypoints: [...s.waypoints, wp] };
-      const station = { ...wp, dwellMin: DEFAULT_DWELL_MIN };
-      return {
-        waypoints: [...s.waypoints.slice(0, -1), station, ...s.waypoints.slice(-1)],
-      };
+      const wp = point(p, placeId);
+      if (s.waypoints.length < 2) return { waypoints: [...s.waypoints, wp], notice: null };
+      return { waypoints: insertStop(s.waypoints, wp), notice: null };
     }),
+  setDestination: (p, placeId = null) =>
+    set((s) => {
+      if (s.waypoints.length === 0) return { notice: "Primero marcá el hábitat en el mapa: es de donde salís." };
+      const wp = point(p, placeId);
+      if (s.waypoints.length === 1) return { waypoints: [...s.waypoints, wp], notice: null };
+      return { waypoints: [...s.waypoints.slice(0, -1), wp], notice: null, openStop: null };
+    }),
+  addStop: (p, placeId = null) =>
+    set((s) => {
+      if (s.waypoints.length < 2) return { notice: "Para sumar una parada, primero elegí el destino." };
+      return { waypoints: insertStop(s.waypoints, point(p, placeId)), notice: null };
+    }),
+  // Arrastrar el marcador deja el punto en otro lado: ya no es el lugar con nombre.
   movePoint: (id, p) =>
     set((s) => ({
-      waypoints: s.waypoints.map((w) => (w.id === id ? { ...w, lat: p.lat, lon: p.lon } : w)),
+      waypoints: s.waypoints.map((w) =>
+        w.id === id ? { ...w, lat: p.lat, lon: p.lon, placeId: null } : w,
+      ),
     })),
   updatePoint: (id, patch) =>
     set((s) => ({ waypoints: s.waypoints.map((w) => (w.id === id ? { ...w, ...patch } : w)) })),
@@ -89,14 +139,47 @@ export const usePlan = create<PlanState>((set) => ({
       [next[i], next[j]] = [next[j]!, next[i]!];
       return { waypoints: next, openStop: null };
     }),
+  movePointTo: (id, toIndex) =>
+    set((s) => {
+      const from = s.waypoints.findIndex((w) => w.id === id);
+      const to = Math.min(Math.max(0, toIndex), s.waypoints.length - 1);
+      if (from < 0 || from === to) return s;
+      const next = [...s.waypoints];
+      const [moved] = next.splice(from, 1);
+      if (!moved) return s;
+      next.splice(to, 0, moved);
+      return { waypoints: next, openStop: null };
+    }),
   reverse: () => set((s) => ({ waypoints: [...s.waypoints].reverse(), openStop: null })),
   clear: () =>
-    set({ waypoints: [], result: null, resultKey: null, status: { kind: "idle" }, openStop: null }),
+    set({
+      waypoints: [],
+      result: null,
+      resultKey: null,
+      status: { kind: "idle" },
+      openStop: null,
+      notice: null,
+    }),
   setDepartAt: (departAt) => set({ departAt }),
   setClickMode: (clickMode) => set({ clickMode }),
   setResult: (result, key = null) => set({ result, resultKey: result ? key : null }),
   setStatus: (status) => set({ status }),
   setOpenStop: (openStop) => set({ openStop }),
+  setNotice: (notice) => set({ notice }),
+  switchSite: (siteId) =>
+    set((s) =>
+      s.siteId === siteId
+        ? s
+        : {
+            siteId,
+            waypoints: [],
+            result: null,
+            resultKey: null,
+            status: { kind: "idle" },
+            openStop: null,
+            notice: null,
+          },
+    ),
 }));
 
 /**

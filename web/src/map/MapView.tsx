@@ -20,6 +20,7 @@ import { useStore } from "../state/store";
 import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
+import { checkCoverage } from "./coverage";
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -112,8 +113,14 @@ export function MapView({ center, bbox, siteId }: Props) {
       const p = { lat: e.lngLat.lat, lon: e.lngLat.lng };
       // El modo se lee al momento del clic: el handler se registra una sola vez.
       const plan = usePlan.getState();
-      if (plan.clickMode === "add") plan.addPoint(p);
-      else setPicked(p);
+      if (plan.clickMode !== "add") {
+        setPicked(p);
+        return;
+      }
+      // Sin terreno de 1 m real no hay ruta que valga: se rechaza y se dice por qué.
+      const check = checkCoverage(useStore.getState().coverage, p);
+      if (check.kind === "outside") plan.setNotice(check.message);
+      else plan.addPoint(p);
     });
     mapRef.current = map;
     return () => {
@@ -275,7 +282,17 @@ export function MapView({ center, bbox, siteId }: Props) {
           .addTo(map);
         m.on("dragend", () => {
           const ll = m?.getLngLat();
-          if (ll) usePlan.getState().movePoint(w.id, { lat: ll.lat, lon: ll.lng });
+          if (!ll) return;
+          const p = { lat: ll.lat, lon: ll.lng };
+          const plan = usePlan.getState();
+          if (checkCoverage(useStore.getState().coverage, p).kind === "outside") {
+            // Vuelve a donde estaba: soltarlo afuera no mueve el punto.
+            const prev = plan.waypoints.find((x) => x.id === w.id);
+            if (prev) m?.setLngLat([prev.lon, prev.lat]);
+            plan.setNotice("No se movió: ahí no hay terreno de 1 m real (DTM HiRISE).");
+            return;
+          }
+          plan.movePoint(w.id, p);
         });
         el.addEventListener("click", (ev) => {
           // Abrir la estación sin agregar un punto nuevo debajo.

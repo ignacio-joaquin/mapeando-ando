@@ -4,7 +4,11 @@
  * mismo origen. El build de producción no necesita ninguna variable.
  */
 import {
+  CoverageSchema,
+  type Coverage,
   HealthSchema,
+  PlacesIndexSchema,
+  type PlacesIndex,
   PointSchema,
   type PointInfo,
   RouteResponseSchema,
@@ -135,6 +139,36 @@ export async function fetchTerrain(siteId: string): Promise<TerrainIndex | null>
     throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
   }
   return parsed.data;
+}
+
+/**
+ * Un JSON que escribe el pipeline en /tiles/. null = todavía no existe (404).
+ * `no-cache` por lo mismo que terrain.json: nginx manda `expires 1h`.
+ */
+async function getPipelineJson<T>(path: string, schema: ZodType<T>): Promise<T | null> {
+  const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  const parsed = schema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  return parsed.data;
+}
+
+/** Lugares del sitio para el buscador (pipeline/places.py). null = el pipeline no corrió. */
+export async function fetchPlaces(siteId: string): Promise<PlacesIndex | null> {
+  if (usingFixtures) return null;
+  return getPipelineJson(`/tiles/${siteId}/places.json`, PlacesIndexSchema);
+}
+
+/**
+ * Huella del DTM de 1 m (capa `coverage` de terrain.json). Solo se pide si el
+ * índice dice que salió bien; si no, null y el planificador avisa que no
+ * puede verificar el terreno.
+ */
+export async function fetchCoverage(siteId: string, terrain: TerrainIndex | null): Promise<Coverage | null> {
+  const layer = terrain?.layers["coverage"];
+  if (usingFixtures || layer?.status !== "ok") return null;
+  return getPipelineJson(`/tiles/${siteId}/${layer.file}`, CoverageSchema);
 }
 
 /**
