@@ -6,11 +6,18 @@ Responde **"¿salgo o no salgo, y qué es lo que me limita?"**. Es la base del v
 
 ## 1. Límites duros: si se rompe uno, es NO-GO
 
-No se compensan con nada. Los valores los fija el equipo y **todavía no tienen fuente citable**: viajan con procedencia `ASSUMED` (badge propio en la UI) hasta que la tengan (trajes EMU, análisis de Apollo, etc.). Se cambian en `Limits` de `api/safety.py` **y en esta tabla**.
+No se compensan con nada. Los valores los fija el equipo y **todavía no tienen fuente citable** (trajes EMU, análisis de Apollo, etc.). Se cambian en `Limits` de `api/safety.py` **y en esta tabla**.
+
+Procedencia del valor del límite (`limit` en la respuesta):
+
+- **`ASSUMED`** (badge propio en la UI) cuando el número entero lo eligió el equipo: pendiente, contacto, dosis y calorías.
+- **`MODELED`** cuando sale de un parámetro del traje o de un dato, y la parte del equipo va en `assumptions`:
+  - O2 y batería: capacidad del EMU × 0,8, con la reserva del 20 % como supuesto.
+  - Luz: atardecer de la pila de sombras (MRO, HiRISE DTM + SPICE) − 30 min − salida, con el margen de 30 min como supuesto. Sin pila de sombras va `ASSUMED`.
 
 | Id | Límite | Valor | Qué se mide en la ruta | De dónde sale lo medido |
 |---|---|---|---|---|
-| `terrain` | Pendiente máxima transitable | **25°** | máximo de `slope.tif` en la peor celda pisada | `slope.tif` (HiRISE DTM) · DERIVED |
+| `terrain` | Pendiente máxima transitable | **25°** | pendiente que no se puede esquivar en la peor celda pisada (ver abajo) | `slope.tif` (HiRISE DTM) · DERIVED |
 | `o2` | Reserva de O2 al volver | **20 %** de la capacidad | O2 consumido (Pandolf) vs. capacidad × 0,8 | `api/consumables.py` · MODELED |
 | `battery` | Reserva de batería al volver | **20 %** de la capacidad | batería consumida vs. capacidad × 0,8 | `api/consumables.py` · MODELED |
 | `daylight` | Volver antes del atardecer, con margen | **30 min** antes | duración vs. (atardecer − 30 min − salida) | atardecer plano del `index.json` de la pila de sombras |
@@ -20,11 +27,25 @@ No se compensan con nada. Los valores los fija el equipo y **todavía no tienen 
 
 Notas:
 
-- **Pendiente.** Ojo: Pandolf (el modelo de consumo) se validó hasta ±25 % *de grado* (~14°), no hasta 25°. El límite de 25° es solo un supuesto de transitabilidad a pie. El A\* tampoco pisa celdas que lo superan: antes cortaba en 30°.
-- **Máximo, no media.** El A\* trabaja con celdas que juntan f × f píxeles de `slope.tif` (≈ 6 m en un tramo de 1 km, ≈ 30 m en uno de 5 km). Por cada celda se guardan dos valores:
+- **Pendiente.** Ojo: Pandolf (el modelo de consumo) se validó hasta ±25 % *de grado* (~14°), no hasta 25°. El límite de 25° es solo un supuesto de transitabilidad a pie. Es el mismo corte en todos lados (decidido 2026-11-14):
+  - el A\*: no pisa celdas que lo superan;
+  - la clase `blocked` del tramo (`SLOPE_CUTS` de `api/planner.py`);
+  - la leyenda del mapa: "> 25° no transitable" (`SLOPE_CLASSES` de `web/src/map/layers.ts`);
+  - los tiles de pendiente (`RAMPAS` de `pipeline/tiles.py`).
+
+  Antes cortaba en 30°. **Los tiles de pendiente que ya están en el server hay que regenerarlos** (correr `precompute.py`) para que el mapa pinte el corte nuevo.
+- **Pendiente que no se puede esquivar, no media ni máximo.** El A\* trabaja con celdas que juntan f × f píxeles de `slope.tif` (≈ 6 m en un tramo de 1 km, ≈ 30 m en uno de 5 km). Por cada celda se guardan dos valores:
   - La **media** se usa solo para el costo (`r_pendiente`).
-  - El **máximo** decide qué celdas no se pisan, el límite duro, el `max_slope` del tramo y su color.
-  - Así, una franja de 40° más angosta que la celda no se diluye en el promedio ni da un margen falso.
+  - La **f-ésima pendiente más alta** de la celda decide qué celdas no se pisan, el límite duro, el `max_slope` del tramo y su color. Cruzar la celda de lado a lado pisa al menos f píxeles, así que:
+    - una franja de 40° que la atraviesa (≥ f píxeles) no se diluye en el promedio ni da un margen falso;
+    - una roca o un píxel ruidoso suelto (< f píxeles) no bloquea una celda de 30 m. Con el máximo, lo que se podía pisar dependía del largo del tramo: el mismo terreno daba NO-GO en un tramo de 5 km y GO partido en dos.
+  - Con f = 1 es el valor del píxel. Las celdas incompletas (borde de la ventana o del DTM, huecos) usan el máximo, que es lo conservador.
+- **Contacto sin dato.** Un paso sin dato de visibilidad (por ejemplo, un tramo en línea recta fuera del DTM) no es "sin contacto". Se calculan dos rachas:
+  - la **medida**, solo con pasos sin vista confirmada;
+  - la **pesimista**, que también cuenta los pasos sin dato.
+
+  Solo la medida puede romper el límite. Si la pesimista lo pasa y la medida no, el límite queda incompleto: CAUTION, con una nota de cuántos minutos faltan. Si ni la pesimista lo pasa, se cumple seguro y solo se avisa.
+- **Ventana de la línea de vista.** `ContactField` lee el DTM con el mismo margen que la ventana del A\* del tramo más largo (tope 3 km). Así ninguna celda que el A\* puede elegir queda sin dato de visibilidad.
 - **Calorías.** Se calculan y se muestran siempre, pero mientras el tope esté en `null` el límite sale `undefined`: no cuenta en el puntaje ni fuerza CAUTION.
 - **Hábitat.** Es la salida (`waypoints[0]`). La reserva se mide al final de la ruta, sea o no el hábitat.
 
@@ -91,7 +112,7 @@ Geometría sobre el DTM, con estos supuestos (todos van en `assumptions`):
 - Radio en línea de vista directa, sin repetidores ni difracción.
 - Antena del hábitat a 3 m sobre el suelo y la del traje a 2 m.
 - Se descuenta la curvatura de Marte.
-- El DTM se lee una vez por pedido, promediado (lado ≤ 1500 celdas) en una ventana que cubre todas las estaciones más 1 km. Los obstáculos más chicos que la celda no se ven.
+- El DTM se lee una vez por pedido, promediado (lado ≤ 1500 celdas) en una ventana que cubre todas las estaciones más el margen del A\* del tramo más largo (entre 1 y 3 km). Los obstáculos más chicos que la celda no se ven.
 - Hasta 128 muestras por rayo.
 
 Rendimiento medido en una laptop: 0,44 s para 90 000 celdas (una grilla de A\* de 300 × 300).
@@ -100,3 +121,5 @@ Rendimiento medido en una laptop: 0,44 s para 90 000 celdas (una grilla de A\* d
 
 - `api/tests/test_safety.py`: lógica pura, sin rasters. Incluye el caso **MAP-25**: la misma ruta a tres horas de salida da GO, CAUTION y NO-GO.
 - `api/tests/test_planner.py::TestSeguridad`: de punta a punta, con rasters sintéticos. Una loma corta el contacto, la hora de salida cambia el veredicto, el desglose del costo suma el total y una pendiente entre 25° y 30° bloquea.
+- `api/tests/test_planner.py::TestPendienteMaxima`: una franja angosta que cruza la celda bloquea; rocas sueltas en celdas gruesas no.
+- `api/tests/test_planner.py::TestVeredictoPorReserva`: si O2 o batería no alcanzan, el veredicto culpa al que se agota primero.

@@ -214,18 +214,26 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
     energy = o2 = bat = 0.0
     max_slope: float | None = None
     slope_gaps = 0
-    run = max_run = 0.0
+    # Dos rachas sin contacto: la confirmada (solo pasos sin vista medida) y la pesimista
+    # (también los pasos sin dato). Solo la confirmada puede romper el límite: un hueco de
+    # datos no se presenta como un límite roto (lo fuerza a CAUTION, ver más abajo).
+    run = max_run = 0.0          # confirmada
+    run_p = max_run_p = 0.0      # pesimista
     unknown_vis_s = 0.0
 
     def contact(dt: float, vis: bool | None) -> None:
-        nonlocal run, max_run, unknown_vis_s
+        nonlocal run, max_run, run_p, max_run_p, unknown_vis_s
+        if vis is True:
+            run = run_p = 0.0
+            return
         if vis is None:
             unknown_vis_s += dt
-        if vis is True:
-            run = 0.0
-        else:  # sin contacto o sin dato: se cuenta como sin contacto (conservador, se avisa)
+            run = 0.0            # no se sabe: corta la racha confirmada
+        else:
             run += dt
             max_run = max(max_run, run)
+        run_p += dt
+        max_run_p = max(max_run_p, run_p)
 
     for i, leg in enumerate(track.legs):
         for s, sl, vis in zip(leg.steps, leg.slopes, leg.visible):
@@ -308,13 +316,24 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
                                    note="Sin DTM no se puede calcular la línea de vista al hábitat."))
         max_run_min = None
     else:
-        max_run_min = max_run / 60.0
-        r = LimitResult("contact", max_run_min, limits.max_no_contact_min,
-                        _margin(max_run_min, limits.max_no_contact_min))
-        if unknown_vis_s > 0:
-            r.complete = False
-            r.note = (f"{unknown_vis_s / 60.0:.0f} min sin dato de visibilidad: "
-                      "se contaron como sin contacto.")
+        cap = limits.max_no_contact_min
+        confirmed_min, pessimistic_min = max_run / 60.0, max_run_p / 60.0
+        unknown_min = unknown_vis_s / 60.0
+        if unknown_vis_s <= 0 or pessimistic_min <= cap:
+            # Sin huecos, o con huecos que ni contados como sin contacto rompen el límite.
+            max_run_min = pessimistic_min
+            r = LimitResult("contact", max_run_min, cap, _margin(max_run_min, cap))
+            if unknown_vis_s > 0:
+                r.note = (f"{unknown_min:.0f} min sin dato de visibilidad: se contaron como sin contacto "
+                          "y aun así no pasa el límite.")
+        else:
+            # Los huecos podrían romperlo: se evalúa con lo medido y queda incompleto (CAUTION).
+            max_run_min = confirmed_min
+            r = LimitResult("contact", max_run_min, cap, _margin(max_run_min, cap))
+            if not r.broken:
+                r.complete = False
+                r.note = (f"{unknown_min:.0f} min sin dato de visibilidad: contándolos como sin contacto, "
+                          f"la racha llegaría a {pessimistic_min:.0f} min. No se sabe si se rompe el límite.")
         results.append(r)
 
     # Dosis: tasa de base por tiempo afuera.

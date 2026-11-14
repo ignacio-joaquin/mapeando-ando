@@ -159,8 +159,10 @@ export const LimitingFactorSchema = z.enum([
 
 /**
  * Un límite duro evaluado en el peor punto de la ruta. `margin` = 1 − usado/límite
- * (< 0 = roto, recortado a −1). `limit` viaja con procedencia ASSUMED hasta que el
- * equipo tenga una fuente citable. `undefined` = el equipo todavía no fijó el valor.
+ * (< 0 = roto, recortado a −1). `limit` viaja ASSUMED cuando el número entero lo eligió
+ * el equipo (pendiente, contacto, dosis, calorías); O2, batería y luz salen MODELED
+ * (capacidad del traje o atardecer) con la parte del equipo en `assumptions`.
+ * `undefined` = el equipo todavía no fijó el valor.
  */
 export const SafetyLimitSchema = z.object({
   id: LimitingFactorSchema,

@@ -324,11 +324,19 @@ class TestSeguridad:
         write_shadow_stack(site)
         return site
 
-    def test_trae_limites_con_badge_assumed(self, client, con_loma):
+    def test_trae_limites_con_su_procedencia(self, client, con_loma):
         v = client.post("/api/route", json=request(band_time(11))).json()["verdict"]
         ids = [lim["id"] for lim in v["limits"]]
         assert ids == ["terrain", "o2", "battery", "daylight", "contact", "dose", "calories"]
-        assert all(lim["limit"]["provenance"] == "ASSUMED" for lim in v["limits"])
+        prov = {lim["id"]: lim["limit"] for lim in v["limits"]}
+        # ASSUMED solo si el número entero lo eligió el equipo.
+        assert all(prov[k]["provenance"] == "ASSUMED" for k in ("terrain", "contact", "dose", "calories"))
+        # O2, batería y luz salen de la capacidad del traje o del atardecer; la parte del equipo va declarada.
+        for k, team_part in (("o2", "Reserva del 20 %"), ("battery", "Reserva del 20 %"),
+                             ("daylight", "Margen de 30 min")):
+            assert prov[k]["provenance"] == "MODELED"
+            assert any(a.startswith(team_part) for a in prov[k]["assumptions"])
+        assert prov["daylight"]["mission"] == "MRO"
         assert v["score"]["unit"] == "pts" and 0 <= v["score"]["value"] <= 100
 
     def test_la_loma_corta_el_contacto_y_limita(self, client, con_loma):
@@ -417,14 +425,53 @@ class TestPendienteMaxima:
         assert terrain["used"]["value"] == pytest.approx(20.0)
         assert terrain["margin"] == pytest.approx(1 - 20 / 25, abs=1e-3)
 
-    def test_build_grid_guarda_media_y_maximo(self, celdas_gruesas):
+    @staticmethod
+    def _grid(site, slope):
         import rasterio
-        slope = flat()
-        slope[:, 100] = 40.0
-        out = write_terrain(celdas_gruesas, slope)
+        out = write_terrain(site, slope)
         with rasterio.open(out / "slope.tif") as ds:
             from .rasters import LAT0, LON0, R
             xa, ya = R * math.radians(LON0) - 300, R * math.radians(LAT0)
-            grid = planner.build_grid(ds, (xa, ya), (xa + 600, ya), 600)
+            return planner.build_grid(ds, (xa, ya), (xa + 600, ya), 600)
+
+    def test_build_grid_guarda_media_y_maximo(self, celdas_gruesas):
+        slope = flat()
+        slope[:, 100] = 40.0
+        grid = self._grid(celdas_gruesas, slope)
         assert np.nanmax(grid.peak) == pytest.approx(40.0)
         assert np.nanmax(grid.slope) < 25.0
+
+    def test_un_pixel_suelto_no_es_la_pendiente_de_la_celda(self, celdas_gruesas):
+        slope = flat()
+        slope[101, 101] = 40.0        # una roca: se esquiva dentro de la celda
+        grid = self._grid(celdas_gruesas, slope)
+        assert np.nanmax(grid.peak) == pytest.approx(2.0)
+        assert np.nanmax(grid.slope) > 2.0          # el costo sí la ve
+
+    def test_rocas_sueltas_no_bloquean_celdas_gruesas(self, client, celdas_gruesas):
+        """Review del PR #14: con el máximo, un píxel empinado en cada celda bloqueaba todo el tramo,
+        y el mismo terreno partido en tramos más cortos (celdas más finas) daba GO."""
+        slope = flat()
+        slope[1::4, 1::4] = 40.0      # un píxel de 40° en cada celda de 4 × 4
+        write_terrain(celdas_gruesas, slope)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        assert body["legs"][0]["class"] != "blocked"
+        terrain = next(lim for lim in body["verdict"]["limits"] if lim["id"] == "terrain")
+        assert terrain["status"] == "ok"
+
+
+def test_la_vista_cubre_la_ventana_del_astar(data_dir, monkeypatch):
+    """Review del PR #14: la ventana de visibilidad tiene que llegar al margen que usa el A*,
+    medido sobre el suelo (en Jezero un metro de la proyección mide 0,95 m hacia el este)."""
+    import rasterio
+
+    from api import contact as contact_mod
+    from .rasters import R
+    monkeypatch.setattr(contact_mod, "MARGIN_M", 10.0)   # el raster de prueba mide 1 km
+    out = write_terrain(data_dir, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+    mid = latlon(100, 100)
+    with rasterio.open(out / "dtm.tif") as ds:
+        field = contact_mod.ContactField.from_dtm(ds, mid, [mid], margin_m=300.0)
+    x_mid = R * math.radians(mid[1])
+    west_ground_m = (x_mid - field.transform.c) * math.cos(math.radians(mid[0]))
+    assert west_ground_m >= 300.0

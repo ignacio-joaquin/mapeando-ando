@@ -23,7 +23,8 @@ from .terrain import MARS_LONGLAT, MARS_RADIUS_M, _norm_lon
 HABITAT_MAST_M = 3.0
 SUIT_ANTENNA_M = 2.0
 MAX_SIDE = 1500        # lado máximo de la grilla promediada
-MARGIN_M = 1000.0      # margen alrededor de las estaciones
+MARGIN_M = 1000.0      # margen mínimo alrededor de las estaciones
+MAX_MARGIN_M = 3000.0  # tope: cubre la ventana del A* de cualquier tramo que se pueda planificar
 MAX_SAMPLES = 128      # muestras por línea de vista
 CHUNK = 4096           # puntos por bloque, para acotar memoria
 
@@ -55,8 +56,12 @@ class ContactField:
         return f"DTM promediado a {self.cell_m:.0f} m"
 
     @classmethod
-    def from_dtm(cls, ds, habitat: tuple[float, float], stations: list[tuple[float, float]]):
-        """Lee el DTM alrededor de las estaciones. None si el hábitat cae fuera del DTM."""
+    def from_dtm(cls, ds, habitat: tuple[float, float], stations: list[tuple[float, float]],
+                 margin_m: float = MARGIN_M):
+        """Lee el DTM alrededor de las estaciones. None si el hábitat cae fuera del DTM.
+
+        `margin_m` tiene que cubrir la ventana donde el A* busca cada tramo: si no, las
+        celdas de afuera quedan sin dato y se cuentan como sin contacto."""
         from rasterio.enums import Resampling
         from rasterio.transform import Affine
         from rasterio.warp import transform as warp
@@ -70,7 +75,10 @@ class ContactField:
         # Tamaño del píxel sobre el suelo: en CRS métricos es el propio paso.
         unit_m = 1.0 if ds.crs and ds.crs.is_projected else math.pi / 180 * MARS_RADIUS_M
         px_m = px * unit_m
-        margin_px = MARGIN_M / px_m
+        # En equirectangular (o lat/lon) un píxel mide px_m · cos(lat) de este a oeste sobre el
+        # suelo: dividir por cos(lat) asegura que la ventana cubra al menos el margen pedido.
+        coslat = max(math.cos(math.radians(max(abs(la) for la in lats))), 0.1)
+        margin_px = min(max(margin_m, MARGIN_M), MAX_MARGIN_M) / (px_m * coslat)
         rows, cols = zip(*(ds.index(x, y, op=math.floor) for x, y in zip(xs, ys)))
         r0 = max(0, int(min(rows) - margin_px))
         r1 = min(ds.height, int(max(rows) + margin_px) + 1)

@@ -117,7 +117,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
   - `stops[]`: `index`, `lat`, `lon`, `task`, `arrive_utc`, `depart_utc` (null en la salida y en la llegada final, respectivamente) y `o2_remaining`, `battery_remaining`, `dose_accumulated`, `margin` (min) como valor con procedencia.
   - `verdict`: `status` (`GO` | `CAUTION` | `NO_GO`), `limiting_factor` (`o2` | `battery` | `dose` | `daylight` | `terrain` | `contact` | `calories` | null), `summary` (una frase en español) y `margin` (min). Además, opcionales (el planificador de ejemplo no los manda):
     - `score`: valor con procedencia, 0–100 pts.
-    - `limits[]`: por límite duro, `id`, `label`, `status` (`ok` | `broken` | `not_evaluated` | `undefined`), `complete`, `note`, `margin` (1 − usado/límite, recortado a −1), y `used` y `limit` como valores con procedencia (`limit` va `ASSUMED`).
+    - `limits[]`: por límite duro, `id`, `label`, `status` (`ok` | `broken` | `not_evaluated` | `undefined`), `complete`, `note`, `margin` (1 − usado/límite, recortado a −1), y `used` y `limit` como valores con procedencia. `limit` va `ASSUMED` cuando el número entero es del equipo; O2, batería y luz van `MODELED` (capacidad del traje, atardecer) con la parte del equipo en `assumptions`.
     - `robustness`: `{ passed, evaluated, scenarios: [{ id, label, status: pass | fail | not_evaluated, limiting_factor, score, note }] }`.
   - `cost` (opcional): `{ formula, unit, base_minutes, total_minutes, factors: [{ id, label, weight, active, minutes, note }] }`, el desglose del costo del A\* por factor.
   - Modelo, valores y pesos: `docs/seguridad.md`.
@@ -155,7 +155,8 @@ Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
   - **A\*** (`api/planner.py`) sobre `slope.tif`, con costo = Σ Δt · (1 + Σ w_k · r_k(celda, hora de llegada)).
   - **Factores activos:** pendiente (w = 2), sombra según la banda de `shadow_hourly.tif` más cercana a la hora de llegada (w = 1) y sin línea de vista al hábitat (w = 1).
   - **Factores con peso pero sin capa todavía:** rugosidad, suelo suelto y radiación por terreno.
-  - **Celdas que no se pisan:** las que superan la pendiente máxima (límite duro, 25°), medida con el **máximo** de `slope.tif` en la celda, no con la media.
+  - **Celdas que no se pisan:** las que superan la pendiente máxima (límite duro, 25°). Se mide con la **f-ésima pendiente más alta** de los f × f píxeles de `slope.tif` de la celda: una franja que la cruza bloquea, una roca suelta no.
+  - **Corte único de 25°** (2026-11-14): el A\*, la clase `blocked` del tramo, la leyenda del mapa y los tiles de pendiente cortan en 25° (antes 30°). Los tiles ya generados hay que regenerarlos con `precompute.py`.
   - **Ventana:** cada tramo se resuelve con margen (≥ 300 m), promediado a ≤ 300 × 300 celdas.
   - **Veredicto** (`api/safety.py`): límites duros sin compensación (pendiente, reserva de O2 y batería, regreso antes del atardecer, minutos sin contacto, dosis, calorías), puntaje = 100 · el margen más chico y robustez en escenarios de estrés. GO / CAUTION / NO-GO.
   - **Pendiente de decidir:** los valores de los límites son `ASSUMED` hasta tener fuente; el equipo tiene que confirmarlos o cambiarlos, incluido el tope de calorías, que hoy está sin definir.

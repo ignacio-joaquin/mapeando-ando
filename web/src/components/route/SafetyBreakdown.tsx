@@ -35,7 +35,7 @@ export function SafetyBreakdown({ verdict, cost }: Props) {
       {limits ? (
         <Section title="Límites duros" open={verdict.status !== "GO"}>
           <p className="mb-1.5 text-muted">
-            Margen = 1 − usado / límite, en el peor punto. Los límites son supuestos del equipo (ASSUMED).
+            Margen = 1 − usado / límite, en el peor punto. Cada límite dice de dónde sale en su badge.
           </p>
           <ul className="flex flex-col gap-2">
             {limits.map((l) => (

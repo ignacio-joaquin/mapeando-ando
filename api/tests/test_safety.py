@@ -80,11 +80,37 @@ class TestContacto:
         assert by_id(ev)["contact"].broken
         assert ev.max_no_contact_min == pytest.approx(16.0, abs=0.01)
 
-    def test_sin_dato_de_vista_se_cuenta_como_tapado_y_se_avisa(self):
+    def test_sin_dato_que_igual_no_pasa_el_limite_se_cuenta_y_se_avisa(self):
+        # 5 min sin dato: contados como sin contacto siguen bajo los 10 min, así que el límite se cumple seguro.
         ev = evaluate(track(leg(240, visible=None)), cond())
         r = by_id(ev)["contact"]
         assert r.used == pytest.approx(5.0, abs=0.01)
-        assert not r.complete and "sin dato" in r.note
+        assert r.complete and not r.broken and "sin dato" in r.note
+
+    def test_un_hueco_de_datos_no_rompe_el_limite_pero_es_caution(self):
+        # Review del PR #14: 15 min de tramo fuera del DTM (sin dato) no pueden dar NO-GO por contacto.
+        t = track(leg(240), leg(720, visible=None), leg(240), station_visible=[True, True, True])
+        a = assess(t, cond())
+        r = by_id(a.base)["contact"]
+        assert not r.broken and not r.complete
+        assert r.used == pytest.approx(0.0)
+        assert "15 min" in r.note and "No se sabe" in r.note
+        assert a.status == "CAUTION"
+
+    def test_racha_medida_sobre_el_limite_rompe_aunque_haya_huecos(self):
+        # 12 min tapados de verdad + 3 min sin dato: lo medido ya rompe el límite.
+        t = track(leg(576, visible=False), leg(144, visible=None), station_visible=[False, False])
+        r = by_id(evaluate(t, cond()))["contact"]
+        assert r.broken
+        assert r.used == pytest.approx(12.0, abs=0.01)
+
+    def test_el_hueco_corta_la_racha_confirmada(self):
+        # 6 tapado + 1 sin dato + 6 tapado: medido son dos rachas de 6, no una de 13.
+        t = track(leg(288, visible=False), leg(48, visible=None), leg(288, visible=False),
+                  station_visible=[False, False, False])
+        r = by_id(evaluate(t, cond()))["contact"]
+        assert not r.broken and not r.complete
+        assert r.used == pytest.approx(6.0, abs=0.01)
 
     def test_sin_dtm_no_se_evalua(self):
         ev = evaluate(track(leg(240), contact_evaluated=False), cond())

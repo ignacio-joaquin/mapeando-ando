@@ -31,8 +31,10 @@ export interface SlopeClass {
 export const SLOPE_CLASSES: readonly SlopeClass[] = [
   { maxDeg: 10, color: "#2f7d4f", label: "0–10° transitable" },
   { maxDeg: 20, color: "#e0a24a", label: "10–20° con cuidado" },
-  { maxDeg: 30, color: "#e07a4a", label: "20–30° límite del rover" },
-  { maxDeg: Infinity, color: "#e0564a", label: "> 30° no transitable" },
+  // 25° es el límite duro de pendiente del planificador (api/safety.py): lo que se pinta
+  // "no transitable" es lo que la ruta no pisa.
+  { maxDeg: 25, color: "#e07a4a", label: "20–25° límite del rover" },
+  { maxDeg: Infinity, color: "#e0564a", label: "> 25° no transitable" },
 ];
 
 /** Clase de una pendiente en grados. Fuera de rango cae en la más severa. */
