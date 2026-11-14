@@ -93,7 +93,7 @@ El mapa de cobertura (`/data/output/coverage/`) muestra dónde hay terreno 1 m r
 | Cráteres de Robbins & Hynek 2012 (≥1 km, sitio ±1°) | Landmarks: 45 en Jezero, 55 en Gale | ✅ `raw/<sitio>/landmarks/` |
 | Waypoints MMGIS | Tracks del rover (e Ingenuity en Jezero) | ✅ |
 | Mars 2020 rover places | Posición del rover por sol, para cruzar con la química | ✅ `raw/jezero/rover_places/` |
-| NASA DONKI WSA-Enlil | Clima espacial, impactos en Marte | ❌ Vacío: la última corrida sin API key pisó los datos parciales (ya corregido en el script). Falta `NASA_API_KEY`. |
+| NASA DONKI WSA-Enlil | Clima espacial, impactos en Marte | ✅ 1230 simulaciones de nov 2025 a hoy; 191 llegan a Marte. `raw/common/donki/` |
 | SWIM 2.0 | Capa de agua (Could). En Jezero y Gale la consistencia de hielo es ~0. | ✅ `raw/common/swim2/` |
 | Fotos del rover por estación | Foto real en cada estación | Se buscan por posición cuando el usuario arma la ruta (MAP-14). No se descargan de antemano. |
 | Mars Trek WMTS | Mapa base | Se consume en vivo; es geográfico (EPSG:104905), no Web Mercator. |
@@ -123,7 +123,7 @@ journalctl -u mapeando-x -f
 - **Ortoimagen de Jezero:** el índice de USGS redirige a S3 sin permiso de listado. Se usa la URL directa.
 - **Kernels SPICE:** el de lunas de Marte cambia de nombre (`mar097` → `mar099s`). Se descubre por patrón.
 - **robots.txt:** PDS Geosciences pide 10 s entre pedidos y no admite crawlers en `/m2020/` ni `/msl/`. Por eso hacemos descarga dirigida y lenta, no `wget -r`.
-- **DONKI:** el endpoint del CCMC no es alcanzable desde AWS, y DEMO_KEY de api.nasa.gov se agota rápido.
+- **DONKI:** el endpoint del CCMC no es alcanzable desde AWS, y DEMO_KEY se agota rápido. El server usa la `NASA_API_KEY` de `/etc/mapeando.env`.
 - **Gale:** parte del DEM es relleno sin detalle (rugosidad 0). No planificar rutas ahí.
 
 ## 6. Estado en Linear (M0 · Preparación)
@@ -142,18 +142,17 @@ journalctl -u mapeando-x -f
 | MAP-14 Fuente de fotos del rover | Done |
 | MAP-15 THEMIS y CRISM | Done |
 | MAP-16 Química y RIMFAX | Done |
-| MAP-17 DONKI | Done como verificación; los datos guardados están vacíos |
+| MAP-17 DONKI | Done, con datos guardados |
 | MAP-18 Scaffold del repo | Done |
 
 ## 7. Pendientes
 
 Todo M0 está cerrado en Linear. Quedan estos pendientes de datos e infraestructura:
 
-1. **DONKI:** cargar `NASA_API_KEY` (gratis en api.nasa.gov) en `/etc/mapeando.env` y volver a correr `fetch_extras.py`. Hoy no hay datos guardados.
-2. **APXS:** bajar las tablas de óxidos por sol. Hoy solo está el inventario.
-3. **Manifest:** sumar a `manifest.json` los datos científicos (THEMIS, CRISM, química, clima) para que la API los liste.
-4. **Seguridad del server:** SSH está abierto a internet con una contraseña compartida y sudo. Opciones: pasar a claves (`ssh-copy-id`) y apagar el login por contraseña, o limitar el puerto 22 a la IP del equipo.
-5. **LICENSE:** el repo todavía no tiene licencia.
+1. **APXS:** bajar las tablas de óxidos por sol. Hoy solo está el inventario.
+2. **Manifest:** sumar a `manifest.json` los datos científicos (THEMIS, CRISM, química, clima) para que la API los liste.
+3. **Seguridad del server:** SSH está abierto a internet con una contraseña compartida y sudo. Opciones: pasar a claves (`ssh-copy-id`) y apagar el login por contraseña, o limitar el puerto 22 a la IP del equipo.
+4. **LICENSE:** el repo todavía no tiene licencia.
 
 ---
 
