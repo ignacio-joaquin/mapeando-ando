@@ -161,7 +161,45 @@ def route_consumables(req: ConsumablesRequest):
         seg["from"] = {"lat": a.lat, "lon": a.lon, "elev_m": elev[i]}
         seg["to"] = {"lat": b.lat, "lon": b.lon, "elev_m": elev[i + 1]}
     result["elevation_source"] = elev_source
+    result["profile"] = _profile(segments, elev)
     return result
+
+
+def _profile(segments: list[list[Step]], vertex_elev: list[float]) -> dict:
+    """Perfil de elevación de la ruta: la serie que ya se muestreó, expuesta.
+
+    `_segments_from_request` densifica cada tramo cada `sample_step_m` y lee el
+    DTM en cada punto; hasta ahora esa serie se usaba para integrar el consumo y
+    se descartaba. Devolverla no cuesta un muestreo más.
+
+    Por muestra: distancia acumulada desde la salida, elevación y pendiente del
+    sub-paso que termina ahí. La pendiente del primer punto es la del primer
+    sub-paso, para que la serie tenga el mismo largo que las otras dos.
+    """
+    dist = [0.0]
+    elev = [vertex_elev[0] if vertex_elev else 0.0]
+    slope = []
+    acumulada = 0.0
+    for seg in segments:
+        for s in seg:
+            acumulada += s.dx_m
+            dist.append(acumulada)
+            elev.append(elev[-1] + s.dz_m)
+            slope.append(math.degrees(math.atan2(s.dz_m, s.dx_m)) if s.dx_m else 0.0)
+    slope.insert(0, slope[0] if slope else 0.0)
+
+    # Dónde empieza cada tramo dentro de la serie, para marcar las estaciones.
+    cortes, k = [0], 0
+    for seg in segments:
+        k += len(seg)
+        cortes.append(k)
+
+    return {
+        "distance_m": [round(d, 1) for d in dist],
+        "elevation_m": [round(z, 2) for z in elev],
+        "slope_deg": [round(s, 2) for s in slope],
+        "leg_starts": cortes,
+    }
 
 
 # Distancia del muestreo con el que se estima la pendiente. La pendiente depende

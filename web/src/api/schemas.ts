@@ -154,12 +154,28 @@ export const VerdictSchema = z.object({
   margin: MeasuredValueSchema,
 });
 
+/**
+ * Perfil de elevación de la ruta. Es la serie que el backend ya muestrea del
+ * DTM al densificar cada tramo (api/main.py, `_profile`): distancia acumulada,
+ * elevación y pendiente por muestra, más dónde arranca cada tramo.
+ *
+ * Opcional a propósito: mientras el planificador no lo mande, el perfil se
+ * dibuja vacío y dice qué falta, en vez de inventar una curva.
+ */
+export const ProfileSchema = z.object({
+  distance_m: z.array(z.number()),
+  elevation_m: z.array(z.number()),
+  slope_deg: z.array(z.number()),
+  leg_starts: z.array(z.number()),
+});
+
 export const RouteResponseSchema = z.object({
   site: z.string(),
   depart_utc: z.string(),
   legs: z.array(RouteLegSchema),
   stops: z.array(RouteStopSchema),
   verdict: VerdictSchema,
+  profile: ProfileSchema.optional(),
 });
 
 /**
@@ -225,6 +241,7 @@ export type RouteStop = z.infer<typeof RouteStopSchema>;
 export type LimitingFactor = z.infer<typeof LimitingFactorSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type RouteResponse = z.infer<typeof RouteResponseSchema>;
+export type Profile = z.infer<typeof ProfileSchema>;
 export type RoverPhoto = z.infer<typeof RoverPhotoSchema>;
 export type RoverPhotos = z.infer<typeof RoverPhotosSchema>;
 

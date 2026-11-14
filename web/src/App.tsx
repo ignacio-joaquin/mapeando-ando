@@ -9,10 +9,12 @@ import { FixtureBanner } from "./components/FixtureBanner";
 import { ProvenanceBadge } from "./components/ProvenanceBadge";
 import { MARS24 } from "./domain/provenance";
 import { RoutePlanner } from "./components/route/RoutePlanner";
+import { ElevationProfile } from "./components/route/ElevationProfile";
 import { CuffChecklist } from "./components/route/CuffChecklist";
 import { fetchHealth, fetchSites, tileExists, usingFixtures } from "./api/client";
 import type { Health, SiteSummary } from "./api/schemas";
 import { useStore } from "./state/store";
+import { useFreshRoute } from "./state/plan";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
@@ -22,6 +24,7 @@ export function App() {
   const setActiveSite = useStore((s) => s.setActiveSite);
   const setAvailable = useStore((s) => s.setAvailable);
   const view = useStore((s) => s.view);
+  const plan = useFreshRoute();
 
   // Estado del server e inventario de sitios.
   useEffect(() => {
@@ -112,7 +115,8 @@ export function App() {
             <RoutePlanner />
           </aside>
 
-          <main className="relative min-w-0 flex-1">
+          <main className="flex min-w-0 flex-1 flex-col">
+            <div className="relative min-h-0 flex-1">
             {site ? (
               <>
                 <MapView center={site.center} bbox={site.bbox} siteId={site.id} />
@@ -134,6 +138,10 @@ export function App() {
                 {error ? "No se pudo leer el inventario de sitios." : "Cargando sitios…"}
               </p>
             )}
+            </div>
+            {/* El perfil va debajo del mapa, como pide el ticket: se lee junto
+                con la ruta dibujada, no en otra pantalla. */}
+            <ElevationProfile profile={plan?.route.profile} />
           </main>
 
           <aside className="w-80 shrink-0 overflow-y-auto border-l border-line bg-panel/40 p-3">
