@@ -115,6 +115,13 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
   - `verdict`: `status` (`GO` | `NO_GO`), `limiting_factor` (`o2` | `battery` | `dose` | `daylight` | `terrain` | null), `summary` (una frase en español) y `margin` (min).
 - Mientras el server responda 404/405/501, el frontend usa un planificador de ejemplo (`web/src/api/routeFixture.ts`) y lo avisa en pantalla.
 
+**`GET /tiles/{site}/terrain.json` (lo escribe `pipeline/precompute.py`, lo lee `web/`).** Índice de las capas de relieve de un sitio; el frontend prende una capa solo si este archivo dice que está lista. Lo valida `TerrainIndexSchema` en `web/src/api/schemas.ts`.
+
+- `{ site, generated_at, mode, source, radius_m, gdal, grid, layers, warnings }`. `layers` va indexado por id de capa (`relief-slope`, `relief-hillshade`, `relief-contours`, más `dtm`).
+- Por capa: `file`, `status` (`ok` | `error`), `error?`, `resolution?` (píxel real sobre el suelo), `provenance`, `assumptions?` y, si va teselada, `tiles`: `{ status: "ok", template, minzoom, maxzoom, bounds: [oeste, sur, este, norte] }` o `{ status: "error", error }`.
+- El nombre de la carpeta de tiles (`slope/`, `hillshade/`) es el último segmento de la plantilla `tiles` de `web/src/map/layers.ts`.
+- Sin `terrain.json` (404), las capas de relieve quedan en "esperando el pipeline".
+
 **`GET /api/sites/{site}/photos?lat=&lon=` (propuesta, MAP-33).** Fotos reales del rover más cercanas a un punto, para la ficha de cada estación. El cruce (punto → waypoint MMGIS → sol → fotos crudas de mars.nasa.gov, prefiriendo Navcam / Mastcam / Mastcam-Z) es del backend; el frontend solo dibuja. Lo valida `RoverPhotosSchema` en `web/src/api/schemas.ts`.
 
 - Sale: `{ photos: [...], note? }`, ordenadas de la más cercana a la más lejana. Por foto: `url`, `url_full?`, `mission`, `rover`, `camera`, `sol`, `taken_utc?`, `credit`, `lat`/`lon` del waypoint y `distance` (valor con procedencia, m) entre el punto pedido y ese waypoint.
@@ -133,7 +140,7 @@ Código, ids, endpoints y nombres de archivo en **inglés**. Comentarios, docs, 
 Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
 
 - **Build del frontend y deploy.** nginx sirve `/opt/mapeando-ando/web` directo y `deploy/update.sh` **no corre `npm build`**. Al pasar a React hay que decidir: build en CI y commitear `web/dist` (hoy está en `.gitignore`), o agregar el build al auto-deploy en `deploy/update.sh` y apuntar nginx a `web/dist`. Hoy no está resuelto: si se mergea React a `main` sin esto, el sitio se rompe.
-- **Formato de tiles de salida**: COG + PMTiles vs raster pre-teselado. Parcial (2026-11-14): sol y sombra se guardan como COG + `index.json` en `/data/output/<sitio>/illumination/`; el teselado para el mapa sigue abierto.
+- **Formato de tiles de salida**: resuelto para el relieve (2026-11-14): raster pre-teselado. El COG es la fuente de valores (point query, perfil) y lo que se dibuja son tiles XYZ PNG en `/data/output/<sitio>/<capa>/{z}/{x}/{y}.png`, que genera `pipeline/tiles.py` (lat/lon de Marte etiquetado como EPSG:4326 + `gdal2tiles --xyz`). `precompute.py` lo corre para pendiente y sombreado y anota zoom y límites en `terrain.json`. Las capas por clases (pendiente) se remuestrean con vecino más cercano en el pipeline y en el mapa, para no inventar colores fuera de la leyenda. Sigue abierto para sol y sombra: hoy son COG + `index.json` en `illumination/`, sin teselar.
 - **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa. Parcial (2026-11-14): sol y sombra se precomputan por sol, con fecha y cantidad de soles como parámetros (`--start`, `--sols`) y paso de 1 h LTST. Falta decidir qué soles usa la demo. Ver `docs/illumination.md`.
 - **Modelo de rutas**: qué pesa en el costo (pendiente, rugosidad, dosis, luz) y con qué datos se valida.
 

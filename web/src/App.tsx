@@ -11,8 +11,9 @@ import { MARS24 } from "./domain/provenance";
 import { RoutePlanner } from "./components/route/RoutePlanner";
 import { ElevationProfile } from "./components/route/ElevationProfile";
 import { CuffChecklist } from "./components/route/CuffChecklist";
-import { fetchHealth, fetchSites, tileExists, usingFixtures } from "./api/client";
-import type { Health, SiteSummary } from "./api/schemas";
+import { fetchHealth, fetchSites, fetchTerrain, tileExists, usingFixtures } from "./api/client";
+import type { Health, SiteSummary, TerrainIndex } from "./api/schemas";
+import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
 import { useFreshRoute } from "./state/plan";
 
@@ -22,7 +23,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const activeSiteId = useStore((s) => s.activeSiteId);
   const setActiveSite = useStore((s) => s.setActiveSite);
-  const setAvailable = useStore((s) => s.setAvailable);
+  const setAvailability = useStore((s) => s.setAvailability);
+  const setTerrain = useStore((s) => s.setTerrain);
   const view = useStore((s) => s.view);
   const plan = useFreshRoute();
 
@@ -44,20 +46,33 @@ export function App() {
     };
   }, []);
 
-  // Una capa se puede prender solo si su salida existe en el server.
+  // Una capa se puede prender solo si su salida existe en el server. Las de
+  // relieve las describe terrain.json; para el resto, solo se pregunta por las
+  // que son un archivo (una plantilla {z}/{x}/{y} no se puede pedir con HEAD).
   useEffect(() => {
     let alive = true;
+    setTerrain(null);
+    setAvailability({});
     void (async () => {
-      for (const spec of LAYERS) {
-        const ok = await tileExists(tileUrl(spec, activeSiteId));
-        if (!alive) return;
-        setAvailable(spec.id, ok);
+      let terrain: TerrainIndex | null = null;
+      try {
+        terrain = await fetchTerrain(activeSiteId);
+        if (alive) setTerrain(terrain);
+      } catch (e) {
+        if (alive) setTerrain(null, e instanceof Error ? e.message : String(e));
       }
+      const available: Record<string, boolean> = {};
+      for (const spec of LAYERS) {
+        const url = tileUrl(spec, activeSiteId);
+        available[spec.id] =
+          availableFromTerrain(spec, terrain) ?? (!url.includes("{z}") && (await tileExists(url)));
+      }
+      if (alive) setAvailability(available);
     })();
     return () => {
       alive = false;
     };
-  }, [activeSiteId, setAvailable]);
+  }, [activeSiteId, setAvailability, setTerrain]);
 
   const site = sites.find((s) => s.id === activeSiteId) ?? sites[0];
 

@@ -162,9 +162,32 @@ class TestSlope:
 
 # ------------------------------------------------------------------ corrida completa
 
-GDAL_TOOLS = ("gdalinfo", "gdal_translate", "gdaldem", "gdal_contour", "ogr2ogr")
+GDAL_TOOLS = ("gdalinfo", "gdal_translate", "gdaldem", "gdal_contour", "ogr2ogr", "gdalwarp",
+              "gdal2tiles.py", "gdal_edit.py")
+# Colores de las clases de pendiente (web/src/map/layers.ts, SLOPE_CLASSES) y transparente.
+LEGEND_RGBA = {(47, 125, 79, 255), (224, 162, 74, 255), (224, 122, 74, 255), (224, 86, 74, 255), (0, 0, 0, 0)}
 needs_gdal = pytest.mark.skipif(not all(shutil.which(t) for t in GDAL_TOOLS),
                                 reason="sin las herramientas de línea de comandos de GDAL")
+
+
+def tile_pixel(folder, z, lon, lat):
+    """RGBA del píxel de un tile XYZ (esquema Web Mercator de MapLibre) que cae en (lon, lat)."""
+    n = 2 ** z
+    fx = (lon + 180) / 360 * n
+    fy = (1 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2 * n
+    x, y = int(fx), int(fy)
+    with rasterio.open(folder / str(z) / str(x) / f"{y}.png") as ds:
+        a = ds.read()
+    return tuple(int(v) for v in a[:, int((fy - y) * 256), int((fx - x) * 256)])
+
+
+def tile_colors(folder):
+    colors = set()
+    for png in folder.rglob("*.png"):
+        with rasterio.open(png) as ds:
+            a = ds.read()
+        colors |= {tuple(int(v) for v in c) for c in a.reshape(a.shape[0], -1).T}
+    return colors
 
 
 def crater(n=300, px=1.0):
@@ -183,8 +206,9 @@ def test_full_run(data_dir):
     assert precompute.main(["--site", "jezero"]) == 0
 
     out = data_dir / "output" / "jezero"
+    # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
-        ["contours.geojson", "dtm.tif", "hillshade.tif", "slope.tif", "terrain.json"]
+        ["contours.geojson", "dtm.tif", "hillshade", "hillshade.tif", "slope", "slope.tif", "terrain.json"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
@@ -197,6 +221,23 @@ def test_full_run(data_dir):
         with rasterio.open(out / name) as ds:
             assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG", name
             assert (ds.width, ds.height) == (300, 300)
+
+    for layer_id, folder in (("relief-slope", "slope"), ("relief-hillshade", "hillshade")):
+        t = index["layers"][layer_id]["tiles"]
+        assert t["status"] == "ok" and t["template"] == f"{folder}/{{z}}/{{x}}/{{y}}.png"
+        assert (out / folder / str(t["maxzoom"])).is_dir() and t["minzoom"] <= t["maxzoom"]
+        w, s, e, n = t["bounds"]
+        assert w == pytest.approx(LON0) and n == pytest.approx(LAT0)
+        assert e == pytest.approx(LON0 + math.degrees(300 / R)) and s == pytest.approx(LAT0 - math.degrees(300 / R))
+
+    # La pendiente se pinta solo con los colores de la leyenda, y en el lugar correcto:
+    # fondo plano del cráter verde, pared norte (~45°) roja.
+    slope_tiles = out / "slope"
+    assert tile_colors(slope_tiles) <= LEGEND_RGBA
+    zmax = index["layers"]["relief-slope"]["tiles"]["maxzoom"]
+    c_lon, c_lat = LON0 + math.degrees(150 / R), LAT0 - math.degrees(150 / R)
+    assert tile_pixel(slope_tiles, zmax, c_lon, c_lat) == (47, 125, 79, 255)
+    assert tile_pixel(slope_tiles, zmax, c_lon, c_lat + math.degrees(90 / R)) == (224, 86, 74, 255)
 
     gj = json.loads((out / "contours.geojson").read_text())
     elevs = {f["properties"]["elev"] for f in gj["features"]}

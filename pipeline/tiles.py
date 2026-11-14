@@ -16,6 +16,9 @@ que ninguno tenga que saber del otro.
   python pipeline/tiles.py --vector /data/output/jezero/contours.gpkg \
                            --out /data/output/jezero/contours.geojson
 
+precompute.py lo llama solo para la pendiente y el sombreado (raster_a_tiles) y anota
+el zoom y los límites en terrain.json; a mano sirve para cualquier otro raster.
+
 El nombre de la carpeta de salida es CONTRATO: tiene que ser el último segmento
 de la plantilla `tiles` de web/src/map/layers.ts (`hillshade/`, `slope/`,
 `ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
@@ -25,6 +28,7 @@ Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr),
 que ya instala deploy/bootstrap.sh.
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -108,6 +112,61 @@ def teselar(src: Path, outdir: Path, resampling="average", max_zoom=None) -> int
     return sum(1 for _ in outdir.rglob("*.png"))
 
 
+def zooms(outdir: Path) -> tuple[int, int]:
+    """Zoom mínimo y máximo que generó gdal2tiles (una carpeta por nivel)."""
+    niveles = sorted(int(p.name) for p in outdir.iterdir() if p.is_dir() and p.name.isdigit())
+    return niveles[0], niveles[-1]
+
+
+def limites(raster: Path) -> list[float]:
+    """[oeste, sur, este, norte] en lon/lat de Marte de un raster ya pasado por a_crs_web()."""
+    out = subprocess.run(["gdalinfo", "-json", str(raster)], capture_output=True, text=True, check=True)
+    esquinas = json.loads(out.stdout)["cornerCoordinates"]
+    oeste, norte = esquinas["upperLeft"]
+    este, sur = esquinas["lowerRight"]
+    return [round(v, 6) for v in (oeste, sur, este, norte)]
+
+
+def publicar_carpeta(nueva: Path, destino: Path) -> None:
+    """Reemplaza `destino` por `nueva` con dos renombres: nginx no sirve una pirámide a medias."""
+    vieja = destino.with_name(f".{destino.name}.vieja")
+    shutil.rmtree(vieja, ignore_errors=True)
+    if destino.exists():
+        os.replace(destino, vieja)
+    os.replace(nueva, destino)
+    shutil.rmtree(vieja, ignore_errors=True)
+
+
+def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoom=None) -> dict:
+    """Tesela `src` en `outdir` y devuelve lo que el mapa necesita para pedir los tiles.
+
+    Los intermedios van a una carpeta oculta al lado de `outdir` y se borran al final.
+    Una capa por clases (`color`) se remuestrea con el vecino más cercano: un promedio
+    mezcla las clases e inventa colores que no están en la leyenda.
+    """
+    work = outdir.parent / f".{outdir.name}.work"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    try:
+        web = work / "web.tif"
+        a_crs_web(src, web)
+        if color:
+            coloreado = work / "color.tif"
+            colorear(web, coloreado, color)
+            web = coloreado
+        remuestreo = resampling or ("near" if color else "average")
+        n = teselar(web, work / "tiles", resampling=remuestreo, max_zoom=max_zoom)
+        if n == 0:
+            raise RuntimeError(f"gdal2tiles no generó ningún tile de {src}")
+        zmin, zmax = zooms(work / "tiles")
+        info = {"template": f"{outdir.name}/{{z}}/{{x}}/{{y}}.png", "minzoom": zmin, "maxzoom": zmax,
+                "bounds": limites(web), "count": n, "resampling": remuestreo}
+        publicar_carpeta(work / "tiles", outdir)
+        return info
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def vector_a_geojson(src: Path, dest: Path, simplify_deg: float = 0.00001) -> None:
     dest.unlink(missing_ok=True)
     run(["ogr2ogr", "-f", "GeoJSON", "-t_srs", MARS_LONGLAT,
@@ -130,8 +189,8 @@ def main():
                     help="rampa de color por rangos (para pendiente)")
     ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
                     help="tope de zoom; por defecto lo deduce gdal2tiles del tamaño del pixel")
-    ap.add_argument("--resampling", default="average",
-                    help="remuestreo entre niveles de zoom (average, near, bilinear...)")
+    ap.add_argument("--resampling", default=None,
+                    help="remuestreo entre niveles de zoom (default: near con --color, average sin)")
     args = ap.parse_args()
 
     faltan = faltan_herramientas()
@@ -152,21 +211,10 @@ def main():
     if not args.input.exists():
         sys.exit(f"No existe {args.input}")
 
-    # Los intermedios van a una carpeta aparte: son descartables, no son salida.
-    tmp = args.out.parent / "_web"
-    tmp.mkdir(parents=True, exist_ok=True)
-    base = args.input.stem
-
-    web = tmp / f"{base}_4326.tif"
-    a_crs_web(args.input, web)
-
-    if args.color:
-        coloreado = tmp / f"{base}_color.tif"
-        colorear(web, coloreado, args.color)
-        web = coloreado
-
-    n = teselar(web, args.out, resampling=args.resampling, max_zoom=args.max_zoom)
-    log(f"{n} tiles en {args.out}")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    info = raster_a_tiles(args.input, args.out, color=args.color, resampling=args.resampling,
+                          max_zoom=args.max_zoom)
+    log(f"{info['count']} tiles en {args.out} (zoom {info['minzoom']}-{info['maxzoom']})")
     log(f"Listo en {(time.time() - t0) / 60:.1f} min")
 
 

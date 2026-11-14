@@ -230,7 +230,47 @@ export const PointSchema = z.object({
   note: z.string().optional(),
 });
 
+/**
+ * GET /tiles/{site}/terrain.json: el índice que escribe pipeline/precompute.py.
+ *
+ * Dice qué capas de relieve están listas y, para las que van en tiles, entre qué
+ * zooms y dentro de qué límites (lon/lat de Marte) hay PNG. Sin este archivo
+ * (404) las capas de relieve quedan en "esperando el pipeline". Las claves de
+ * `layers` son los ids de capa de src/map/layers.ts.
+ */
+export const TileSetSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ok"),
+    template: z.string(),
+    minzoom: z.number().int(),
+    maxzoom: z.number().int(),
+    /** [oeste, sur, este, norte] */
+    bounds: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  }),
+  z.object({ status: z.literal("error"), error: z.string() }),
+]);
+
+export const TerrainLayerSchema = z.object({
+  file: z.string(),
+  status: z.enum(["ok", "error"]),
+  /** Tamaño real del píxel sobre el suelo, cuando el pipeline lo mide. */
+  resolution: z.string().optional(),
+  error: z.string().optional(),
+  tiles: TileSetSchema.optional(),
+});
+
+export const TerrainIndexSchema = z.object({
+  site: z.string(),
+  generated_at: z.string(),
+  mode: z.enum(["completo", "prueba"]),
+  layers: z.record(z.string(), TerrainLayerSchema),
+  warnings: z.array(z.string()),
+});
+
 export type Sites = z.infer<typeof SitesSchema>;
+export type TileSet = z.infer<typeof TileSetSchema>;
+export type TerrainLayer = z.infer<typeof TerrainLayerSchema>;
+export type TerrainIndex = z.infer<typeof TerrainIndexSchema>;
 export type PointInfo = z.infer<typeof PointSchema>;
 export type SiteDetail = z.infer<typeof SiteDetailSchema>;
 export type ManifestFile = z.infer<typeof ManifestFileSchema>;

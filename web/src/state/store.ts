@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import { LAYERS } from "../map/layers";
 import type { LatLon } from "../mars/geo";
+import type { TerrainIndex } from "../api/schemas";
 
 export interface LayerState {
   readonly visible: boolean;
@@ -16,6 +17,10 @@ export interface LayerState {
 interface AppState {
   readonly activeSiteId: string;
   readonly layers: Readonly<Record<string, LayerState>>;
+  /** terrain.json del sitio activo (pipeline/precompute.py). null = todavía no hay. */
+  readonly terrain: TerrainIndex | null;
+  /** terrain.json existe pero no se pudo leer (contrato roto, error del server). */
+  readonly terrainError: string | null;
   /** Posición del cursor sobre el mapa. */
   readonly cursor: LatLon | null;
   /** Punto fijado con un clic (inspector). */
@@ -28,6 +33,9 @@ interface AppState {
   toggleLayer: (id: string) => void;
   setOpacity: (id: string, opacity: number) => void;
   setAvailable: (id: string, available: boolean) => void;
+  /** Disponibilidad de todas las capas de una vez (al cambiar de sitio o de índice). */
+  setAvailability: (available: Readonly<Record<string, boolean>>) => void;
+  setTerrain: (terrain: TerrainIndex | null, error?: string | null) => void;
   setCursor: (p: LatLon | null) => void;
   setPicked: (p: LatLon | null) => void;
   setInstant: (d: Date) => void;
@@ -41,6 +49,8 @@ const initialLayers: Record<string, LayerState> = Object.fromEntries(
 export const useStore = create<AppState>((set) => ({
   activeSiteId: "jezero",
   layers: initialLayers,
+  terrain: null,
+  terrainError: null,
   cursor: null,
   picked: null,
   instant: new Date(),
@@ -64,6 +74,13 @@ export const useStore = create<AppState>((set) => ({
       if (!l) return s;
       return { layers: { ...s.layers, [id]: { ...l, available } } };
     }),
+  setAvailability: (available) =>
+    set((s) => ({
+      layers: Object.fromEntries(
+        Object.entries(s.layers).map(([id, l]) => [id, { ...l, available: available[id] ?? false }]),
+      ),
+    })),
+  setTerrain: (terrain, error = null) => set({ terrain, terrainError: error }),
   setCursor: (cursor) => set({ cursor }),
   setPicked: (picked) => set({ picked }),
   setInstant: (instant) => set({ instant }),

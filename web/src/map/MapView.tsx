@@ -10,6 +10,7 @@ import {
 } from "maplibre-gl";
 import type { Feature, FeatureCollection, LineString, Polygon } from "geojson";
 import { LAYERS, tileUrl } from "./layers";
+import { readyTiles } from "./terrain";
 import { useStore } from "../state/store";
 import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
@@ -145,16 +146,31 @@ export function MapView({ center, bbox, siteId }: Props) {
   }, [bbox]);
 
   // 3. Sincronizar store -> capas. Se agregan solo las disponibles.
+  //    Cada fuente recuerda de qué sitio y de qué corrida del pipeline salió:
+  //    si cambia cualquiera de los dos, se rearma (si no, al cambiar de sitio
+  //    seguiría pidiendo los tiles del anterior).
+  const terrain = useStore((s) => s.terrain);
+  const sourceKeysRef = useRef(new Map<string, string>());
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    const sourceKey = `${siteId}|${terrain?.generated_at ?? ""}`;
     const apply = () => {
+      const keys = sourceKeysRef.current;
       for (const spec of LAYERS) {
         const state = layers[spec.id];
         if (!state) continue;
+        const tiles = readyTiles(terrain, spec.id);
+        const usable = state.available && (spec.kind === "vector" || tiles !== null);
+
+        if (keys.get(spec.id) !== sourceKey && (map.getLayer(spec.id) || map.getSource(spec.id))) {
+          if (map.getLayer(spec.id)) map.removeLayer(spec.id);
+          if (map.getSource(spec.id)) map.removeSource(spec.id);
+          keys.delete(spec.id);
+        }
         const existing = map.getLayer(spec.id);
 
-        if (!state.available) {
+        if (!usable) {
           if (existing) map.setLayoutProperty(spec.id, "visibility", "none");
           continue;
         }
@@ -163,9 +179,7 @@ export function MapView({ center, bbox, siteId }: Props) {
         // /tiles/<sitio>/contours.geojson. MapLibre lo descarga solo.
         if (spec.kind === "vector") {
           if (!existing) {
-            if (!map.getSource(spec.id)) {
-              map.addSource(spec.id, { type: "geojson", data: tileUrl(spec, siteId) });
-            }
+            map.addSource(spec.id, { type: "geojson", data: tileUrl(spec, siteId) });
             map.addLayer(
               {
                 id: spec.id,
@@ -181,31 +195,48 @@ export function MapView({ center, bbox, siteId }: Props) {
               },
               "site-bbox-line",
             );
+            keys.set(spec.id, sourceKey);
           }
           map.setLayoutProperty(spec.id, "visibility", state.visible ? "visible" : "none");
           map.setPaintProperty(spec.id, "line-opacity", state.opacity);
           continue;
         }
 
-        if (!existing) {
-          if (!map.getSource(spec.id)) {
-            map.addSource(spec.id, {
-              type: "raster",
-              tiles: [tileUrl(spec, siteId)],
-              tileSize: 256,
-            });
-          }
+        if (!existing && tiles) {
+          // Zoom y límites salen de terrain.json: fuera de ellos no hay PNG, y
+          // pasado el zoom máximo MapLibre agranda el último nivel en vez de
+          // pedir tiles que no existen.
+          map.addSource(spec.id, {
+            type: "raster",
+            tiles: [tileUrl(spec, siteId)],
+            tileSize: 256,
+            minzoom: tiles.minzoom,
+            maxzoom: tiles.maxzoom,
+            bounds: tiles.bounds,
+          });
+          // Debajo de las curvas, si ya están, para que se lean encima del color.
           map.addLayer(
-            { id: spec.id, type: "raster", source: spec.id, paint: { "raster-opacity": state.opacity } },
-            "site-bbox-line",
+            {
+              id: spec.id,
+              type: "raster",
+              source: spec.id,
+              paint: {
+                "raster-opacity": state.opacity,
+                // Una capa por clases se agranda sin suavizar: el suavizado
+                // mezclaría clases y mostraría colores que no están en la leyenda.
+                "raster-resampling": spec.categorical ? "nearest" : "linear",
+              },
+            },
+            map.getLayer("relief-contours") ? "relief-contours" : "site-bbox-line",
           );
+          keys.set(spec.id, sourceKey);
         }
         map.setLayoutProperty(spec.id, "visibility", state.visible ? "visible" : "none");
         map.setPaintProperty(spec.id, "raster-opacity", state.opacity);
       }
     };
     whenReady(map, apply);
-  }, [layers, siteId]);
+  }, [layers, siteId, terrain]);
 
   // El contenedor de MapLibre va adentro de otro div: maplibre-gl.css le pone
   // `position: relative` a .maplibregl-map y le gana al `absolute inset-0` de

@@ -61,6 +61,11 @@ export interface LayerSpec {
   readonly tiles: string;
   readonly kind: "raster" | "vector";
   readonly defaultVisible: boolean;
+  /**
+   * Raster por clases (cada color es un rango de la leyenda): se dibuja sin
+   * suavizar al agrandar, para no inventar colores intermedios.
+   */
+  readonly categorical?: boolean;
 }
 
 export const LAYERS: readonly LayerSpec[] = [
@@ -137,6 +142,7 @@ export const LAYERS: readonly LayerSpec[] = [
     legend: SLOPE_LEGEND,
     tiles: "/tiles/{site}/slope/{z}/{x}/{y}.png",
     kind: "raster",
+    categorical: true,
     defaultVisible: false,
   },
   {
