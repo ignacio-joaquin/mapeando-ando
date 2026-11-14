@@ -38,7 +38,18 @@ journalctl -u mapeando-download -f             # ver el progreso
 
 ## Acceso al servidor
 
-No hay SSH abierto. Se entra con AWS Systems Manager (Session Manager) desde la consola de AWS: EC2 → la instancia → Connect → Session Manager.
+**SSH (equipo).** El puerto 22 está abierto solo con clave pública: sin contraseña, sin login de root y con fail2ban. Cada integrante tiene su propio usuario, con sudo.
+
+1. Generá tu clave si no tenés: `ssh-keygen -t ed25519`
+2. Pasale al admin el contenido de `~/.ssh/id_ed25519.pub` (la clave **pública**; la privada no se comparte nunca).
+3. El admin te da de alta en el server: `sudo mapeando-add-member <usuario> "<clave pública>"`
+4. Entrá con `ssh <usuario>@<IP del server>`. La IP la pasa el admin por el canal del equipo; no se publica acá.
+
+Para dar de baja a alguien: `sudo mapeando-remove-member <usuario>`.
+
+Dentro del server, los datos están en `/data` y el repo en `/opt/mapeando-ando`. El bucket S3 se usa con `aws s3 ...` sin credenciales propias: el server tiene un rol IAM.
+
+**Session Manager (admin).** También se puede entrar sin SSH desde la consola de AWS: EC2 → la instancia → Connect → Session Manager.
 
 ---
 Prototipo educativo, no software de vuelo.
