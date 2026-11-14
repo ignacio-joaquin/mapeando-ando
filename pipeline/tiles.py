@@ -47,8 +47,8 @@ RAMPAS = {
     "pendiente": [
         (0, 10, "47 125 79"),     # transitable        #2f7d4f
         (10, 20, "224 162 74"),   # con cuidado        #e0a24a
-        (20, 30, "224 122 74"),   # límite del rover   #e07a4a
-        (30, 90, "224 86 74"),    # no transitable     #e0564a
+        (20, 25, "224 122 74"),   # límite del rover   #e07a4a
+        (25, 90, "224 86 74"),    # no transitable     #e0564a  (25° = límite duro, api/safety.py)
     ],
 }
 

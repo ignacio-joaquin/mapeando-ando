@@ -35,7 +35,9 @@ export function CuffChecklist() {
     );
   }
   const { route, example } = result;
-  const go = route.verdict.status === "GO";
+  const verdictWord = { GO: "✓ GO", CAUTION: "⚠ CAUTION", NO_GO: "✕ NO-GO" }[route.verdict.status];
+  const score = route.verdict.score?.value;
+  const robust = route.verdict.robustness;
   const origin = route.stops[0];
 
   // Fuentes de cada columna, una vez al pie: en papel no hay tooltip.
@@ -63,8 +65,14 @@ export function CuffChecklist() {
           </span>
         </div>
         <div className="mt-1.5 border-t-2 border-black pt-1.5 text-[13pt] font-bold">
-          {go ? "✓ GO" : "✕ NO-GO"} — {route.verdict.summary}
+          {verdictWord} — {route.verdict.summary}
         </div>
+        {score !== undefined || robust ? (
+          <div>
+            {score !== undefined ? `Puntaje ${score === null ? "falta el dato" : Math.round(score)}/100 (límites ASSUMED)` : ""}
+            {robust ? ` · Robusta en ${robust.passed} de ${robust.evaluated} escenarios` : ""}
+          </div>
+        ) : null}
         <div>
           Reserva al llegar:{" "}
           {route.verdict.margin.value === null ? "falta el dato" : formatMinutes(route.verdict.margin.value)}
