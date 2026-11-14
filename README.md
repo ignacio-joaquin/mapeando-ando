@@ -12,7 +12,7 @@ Contexto, decisiones, datos y estado del proyecto: [BITACORA.md](BITACORA.md).
 |---|---|
 | `sites/` | Un JSON por sitio (Jezero, Gale) + `common.json`. Sumar un sitio = sumar un archivo. |
 | `pipeline/` | Python que descarga y precomputa (rasterio, numpy, spiceypy, GDAL). |
-| `api/` | FastAPI: estado, inventario de datos y `/api/route` (consumibles del traje). Después, point queries y pathfinding. |
+| `api/` | FastAPI: estado, inventario de datos y `/api/route/consumables` (consumibles del traje). `/api/route` queda para el planificador 4D (hoy 501). Después, point queries y pathfinding. |
 | `web/` | Frontend. Hoy es una página de estado; acá va el mapa (React + MapLibre). |
 | `docs/` | Documentación del proyecto. `context.md` es la fuente única de contexto para el equipo y para la IA. |
 | `deploy/` | Bootstrap del servidor, nginx, systemd y auto-deploy. |
@@ -45,7 +45,7 @@ journalctl -u mapeando-download -f             # ver el progreso
 
 ## Consumibles del traje (`/api/route`) · MODELED
 
-`POST /api/route` recibe una ruta ya armada y devuelve, por tramo, el gasto metabólico, el O2 y la batería, con los valores acumulados desde la salida. Todavía no hace pathfinding: cuando exista, le va a pasar sus puntos a esta misma función. Todo lo que devuelve lleva el badge **MODELED**.
+`POST /api/route/consumables` recibe una ruta ya armada y devuelve, por tramo, el gasto metabólico, el O2 y la batería, con los valores acumulados desde la salida. No hace pathfinding: eso va en `POST /api/route` (planificador 4D, hoy responde 501), que le va a pasar sus puntos a esta misma función. Todo lo que devuelve lleva el badge **MODELED**.
 
 ```jsonc
 // Pedido

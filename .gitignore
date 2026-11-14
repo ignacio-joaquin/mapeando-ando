@@ -8,3 +8,6 @@ output/
 node_modules/
 web/dist/
 .env
+.env.local
+.env.*.local
+*.tsbuildinfo
