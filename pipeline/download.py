@@ -28,7 +28,7 @@ RAW = DATA_DIR / "raw"
 
 
 def log(msg):
-    print(f"[{dt.datetime.utcnow().isoformat(timespec='seconds')}Z] {msg}", flush=True)
+    print(f"[{dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).isoformat(timespec='seconds')}Z] {msg}", flush=True)
 
 
 class _Links(html.parser.HTMLParser):
@@ -43,23 +43,25 @@ class _Links(html.parser.HTMLParser):
                     self.hrefs.append(v)
 
 
-def discover(index_url, pattern):
+def discover(index_url, pattern, pick="first"):
     with urllib.request.urlopen(index_url, timeout=60) as r:
         page = r.read().decode("utf-8", "replace")
     p = _Links()
     p.feed(page)
     rx = re.compile(pattern)
-    hits = [urllib.parse.urljoin(index_url, h) for h in p.hrefs if rx.search(h.split("?")[0])]
+    names = [h.split("?")[0].rstrip("/").split("/")[-1] for h in p.hrefs]
+    hits = sorted({urllib.parse.urljoin(index_url, n) for n in names if rx.search(n)})
     if not hits:
         raise RuntimeError(f"no file matching {pattern!r} in {index_url}")
-    return sorted(set(hits))[0]
+    return hits[-1] if pick == "last" else hits[0]
 
 
 def fetch(url, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
     log(f"GET {url} -> {dest}")
+    # --retry solo reintenta errores transitorios (timeouts, 5xx); un 404 falla enseguida
     cmd = ["curl", "--fail", "-L", "-C", "-", "--retry", "8", "--retry-delay", "10",
-           "--retry-all-errors", "-sS", "-o", str(dest), url]
+           "--retry-connrefused", "-sS", "-o", str(dest), url]
     rc = subprocess.run(cmd).returncode
     # curl returns 33 when the server ignores range on an already complete file
     if rc not in (0, 33):
@@ -105,7 +107,8 @@ def crop_dem200(site, common, dest):
 def process_file(f, outdir, manifest_files):
     entry = {k: f.get(k) for k in ("key", "kind", "desc", "mission")}
     try:
-        url = f.get("url") or discover(f["discover"]["index"], f["discover"]["pattern"])
+        url = f.get("url") or discover(f["discover"]["index"], f["discover"]["pattern"],
+                                       f["discover"].get("pick", "first"))
         dest = outdir / Path(urllib.parse.urlparse(url).path).name
         fetch(url, dest)
         entry.update(url=url, path=str(dest.relative_to(DATA_DIR)), bytes=dest.stat().st_size, status="ok")
@@ -128,7 +131,7 @@ def main():
     if args.site:
         sites = [s for s in sites if s["id"] in args.site]
 
-    manifest = {"generated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    manifest = {"generated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z",
                 "data_dir": str(DATA_DIR), "common": [], "sites": {}}
 
     for f in common["files"]:
