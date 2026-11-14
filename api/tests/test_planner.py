@@ -1,6 +1,7 @@
 """POST /api/route: planificador 4D (api/planner.py) con rasters sintéticos."""
 import heapq
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -160,6 +161,21 @@ class TestCuatroD:
         assert "shadow_fraction" in body["legs"][0]
 
 
+def test_astar_reevalua_sombra_en_el_punto_medio_del_paso():
+    grid = Grid(np.zeros((3, 3), dtype=np.float32), np.zeros((3, 3), dtype=np.int8), None, None, 5.0, 5.0)
+
+    class FakeShadow:
+        def at(self, t, v):
+            r, c = divmod(v, 3)
+            if (r, c) in {(1, 0), (1, 1), (1, 2)} and t < 3600.0:
+                return planner.SHADOW
+            return 1
+
+    found = planner.astar(grid, (1, 0), (1, 2), 0.0, speed=0.001, shadow=FakeShadow())
+    assert found is not None
+    assert all((r, c) != (1, 1) for r, c in found[0][1:-1])
+
+
 class TestEstaciones:
     def test_la_espera_consume_y_corre_el_reloj(self, client, site):
         write_terrain(site, flat())
@@ -171,6 +187,44 @@ class TestEstaciones:
         assert sin["stops"][1]["arrive_utc"] == con["stops"][1]["arrive_utc"]
         assert con["stops"][2]["arrive_utc"] > sin["stops"][2]["arrive_utc"]
         assert con["stops"][2]["o2_remaining"]["value"] < sin["stops"][2]["o2_remaining"]["value"]
+
+
+def test_route_consumables_usa_dwell_min_para_reducir_o2(client):
+    mid = latlon(ROW, 100)
+    base = {
+        "site_id": "jezero",
+        "points": [
+            {"lat": A[0], "lon": A[1], "elev_m": 0.0},
+            {"lat": mid[0], "lon": mid[1], "elev_m": 0.0, "dwell_min": 30.0},
+            {"lat": B[0], "lon": B[1], "elev_m": 0.0},
+        ],
+        "speed_m_s": 1.0,
+        "cargo_kg": 0.0,
+        "sample_step_m": 10.0,
+    }
+    sin = client.post("/api/route/consumables", json={**base, "points": [
+        {"lat": A[0], "lon": A[1], "elev_m": 0.0},
+        {"lat": mid[0], "lon": mid[1], "elev_m": 0.0},
+        {"lat": B[0], "lon": B[1], "elev_m": 0.0},
+    ]}).json()
+    con = client.post("/api/route/consumables", json=base).json()
+    assert con["totals"]["duration_s"] > sin["totals"]["duration_s"]
+    assert con["totals"]["o2_kg"] > sin["totals"]["o2_kg"]
+
+
+def test_plan_route_advertencia_si_o2_no_llega_al_objetivo(site):
+    write_terrain(site, flat())
+    write_shadow_stack(site)
+    out = planner.plan_route(
+        "jezero",
+        iso(band_time(13)),
+        [{"lat": A[0], "lon": A[1], "task": None, "dwell_min": 0},
+         {"lat": B[0], "lon": B[1], "task": None, "dwell_min": 0}],
+        site,
+        Path(__file__).resolve().parents[2],
+        params=planner.SuitParams(o2_capacity_kg=1e-6, battery_capacity_wh=1e9),
+    )
+    assert any("O2" in w and "objetivo" in w.lower() for w in out["verdict"]["warnings"])
 
 
 def _dijkstra_cost(grid: Grid, start, goal, speed=planner.SPEED_M_S) -> float:

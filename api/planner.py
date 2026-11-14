@@ -257,7 +257,11 @@ def astar(grid: Grid, start: tuple[int, int], goal: tuple[int, int], t0: float,
                 fac = SLOPE_FACTOR[2]
             step_t = length * stretch[v] / speed
             ta = tu + step_t
-            if shadow is not None and shadow.at(ta, v) == SHADOW:
+            # La sombra cambia con la hora solar. Para no "saltarse" un cambio de
+            # banda al cruzar una hora, se evalúa en el punto medio del paso, que
+            # representa mejor el estado durante el trayecto.
+            mid_t = tu + step_t / 2.0
+            if shadow is not None and shadow.at(mid_t, v) == SHADOW:
                 fac *= SHADOW_FACTOR
             ng = gu + step_t * fac
             if ng < g[v]:
@@ -373,7 +377,10 @@ def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack |
     shadow_fraction = None
     if sampler is not None:
         cols_n = grid.cls.shape[1]
-        vals = [sampler.at(t, r * cols_n + c) for (r, c), t in zip(path, times)]
+        vals = []
+        for i, (r, c) in enumerate(path):
+            t_eval = times[i] if i == 0 else 0.5 * (times[i - 1] + times[i])
+            vals.append(sampler.at(t_eval, r * cols_n + c))
         seen = [v for v in vals if v is not None]
         if seen:
             shadow_fraction = sum(v == SHADOW for v in seen) / len(seen)
@@ -547,6 +554,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     elif stack is not None and stack.sunset is not None and t_end > stack.sunset:
         status, factor = "NO_GO", "daylight"
         summary = f"Llega después del atardecer ({_hhmm_utc(stack.sunset)})."
+    elif o2_left <= 0.0:
+        status, factor = "NO_GO", "o2"
+        summary = "No alcanza el O2 para llegar al objetivo: se agota antes del final del recorrido."
     elif margin < RESERVE_MIN:
         status, factor = "NO_GO", limiting
         recurso = "El O2" if limiting == "o2" else "La batería"
@@ -555,13 +565,18 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         status, factor = "GO", limiting
         recurso = "el O2" if limiting == "o2" else "la batería"
         summary = f"Alcanza. Lo que se acaba primero es {recurso}."
+    if status == "NO_GO" and factor == "o2":
+        warnings = ["No alcanza el O2 para llegar al objetivo. Recomiendo acortar ruta o sumar un punto de repostaje."]
+    else:
+        warnings = []
     if any(leg["class"] == "unknown" for leg in legs) and slope_path is not None:
         caveats.append("hay tramos con terreno sin evaluar")
     if caveats:
         summary += " Ojo: " + "; ".join(caveats) + "."
 
     out = {"site": site_id, "depart_utc": depart_utc, "legs": legs, "stops": stops,
-           "verdict": {"status": status, "limiting_factor": factor, "summary": summary, "margin": margin_mv}}
+           "verdict": {"status": status, "limiting_factor": factor, "summary": summary,
+                       "margin": margin_mv, "warnings": warnings}}
     if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
         out["_profile_inputs"] = ([plan.steps for plan in legs_plan], [legs_plan[0].elev[0]]
                                   + [plan.elev[-1] for plan in legs_plan])
