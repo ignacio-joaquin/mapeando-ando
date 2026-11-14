@@ -5,7 +5,7 @@ import type { MeasuredValue, RouteLeg, RouteStop } from "../../api/schemas";
 import { MARS24_LTST } from "../../domain/provenance";
 import { LEG_CLASS_COLOR, LEG_CLASS_LABEL, waypointLabel } from "../../map/route";
 import { formatLatLon } from "../../mars/geo";
-import { usePlan, type Waypoint } from "../../state/plan";
+import { planKey, useFreshRoute, usePlan, type Waypoint } from "../../state/plan";
 import { useStore } from "../../state/store";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
@@ -34,7 +34,7 @@ export function RoutePlanner() {
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
   const clickMode = usePlan((s) => s.clickMode);
-  const result = usePlan((s) => s.result);
+  const result = useFreshRoute();
   const status = usePlan((s) => s.status);
   const { setDepartAt, setClickMode, setResult, setStatus, clear, reverse } = usePlan.getState();
 
@@ -51,8 +51,12 @@ export function RoutePlanner() {
       return;
     }
     const ctl = new AbortController();
+    // La respuesta queda marcada con la huella de este pedido: si los puntos
+    // cambian mientras tanto, la UI la trata como vieja y no la muestra.
+    const key = planKey(siteId, departAt, waypoints);
+    // Ya, no después del respiro: un error del pedido anterior no aplica a este.
+    setStatus({ kind: "loading" });
     const t = setTimeout(() => {
-      setStatus({ kind: "loading" });
       planRoute(
         {
           site: siteId,
@@ -67,7 +71,8 @@ export function RoutePlanner() {
         ctl.signal,
       )
         .then((r) => {
-          setResult(r);
+          if (ctl.signal.aborted) return;
+          setResult(r, key);
           setStatus({ kind: "idle" });
         })
         .catch((e: unknown) => {
@@ -157,7 +162,13 @@ export function RoutePlanner() {
       ) : waypoints.length === 0 ? (
         <Hint>Hacé clic en el mapa para poner la salida (A).</Hint>
       ) : (
-        <Hint>Calculando…</Hint>
+        // Sin veredicto mientras se recalcula: el anterior era de otra ruta.
+        <p
+          role="status"
+          className="rounded border border-line p-2 text-xs text-muted"
+        >
+          Recalculando la travesía… El veredicto anterior ya no vale.
+        </p>
       )}
 
       {/* Puntos, en orden, con lo calculado */}
@@ -208,6 +219,15 @@ export function RoutePlanner() {
 }
 
 /* ——— partes ——— */
+
+/**
+ * Badge en línea de un valor de la lista. La fila de referencia (la primera)
+ * lo muestra siempre; las siguientes, solo si su fuente difiere de esa. Así
+ * cada fuente se ve al menos una vez sin abrir nada, y no se repite por fila.
+ */
+function repeatedBadge(v: MeasuredValue, ref: MeasuredValue | undefined): "inline" | "none" {
+  return ref && v !== ref && sameSource(v, ref) ? "none" : "inline";
+}
 
 function ModeButton({
   active,
@@ -309,9 +329,7 @@ function StopCard({
         ? "bg-alert text-bg"
         : "bg-panel text-fg";
 
-  // Badge en línea solo si esta fila viene de otra fuente que la primera.
-  const badgeFor = (v: MeasuredValue, ref: MeasuredValue | undefined) =>
-    ref && sameSource(v, ref) ? "none" : "inline";
+  const badgeFor = (v: MeasuredValue, ref: MeasuredValue | undefined) => repeatedBadge(v, ref);
 
   return (
     <div
@@ -439,8 +457,7 @@ function StopCard({
 
 function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference: RouteLeg | undefined }) {
   const color = LEG_CLASS_COLOR[leg.class];
-  const same = (v: MeasuredValue, r: MeasuredValue | undefined) =>
-    r && sameSource(v, r) ? "none" : "inline";
+  const same = (v: MeasuredValue, r: MeasuredValue | undefined) => repeatedBadge(v, r);
   return (
     <div className="ml-3 flex gap-3 border-l-4 py-1.5 pl-3 text-[11px]" style={{ borderColor: color }}>
       <div className="flex flex-col gap-0.5">
@@ -455,14 +472,11 @@ function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference
           <span>rumbo</span>
           <Measure data={{ ...leg.bearing, unit: null }} format={formatBearing} badge={same(leg.bearing, reference?.bearing)} />
         </span>
-        {leg.max_slope.value === null ? (
-          <span className="text-warn">Pendiente máx.: falta el dato</span>
-        ) : (
-          <span className="flex items-center gap-1">
-            Pendiente máx.
-            <Measure data={leg.max_slope} format={(v) => v.toFixed(0)} />
-          </span>
-        )}
+        {/* Measure también cuando falta: el badge dice de dónde tendría que salir. */}
+        <span className="flex items-center gap-1">
+          Pendiente máx.
+          <Measure data={leg.max_slope} format={(v) => v.toFixed(0)} />
+        </span>
       </div>
     </div>
   );

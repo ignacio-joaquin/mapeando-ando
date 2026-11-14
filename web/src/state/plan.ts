@@ -6,6 +6,7 @@
 import { create } from "zustand";
 import type { LatLon } from "../mars/geo";
 import type { PlannedRoute } from "../api/client";
+import { useStore } from "./store";
 
 export interface Waypoint extends LatLon {
   readonly id: string;
@@ -27,6 +28,8 @@ interface PlanState {
   readonly departAt: Date;
   readonly clickMode: ClickMode;
   readonly result: PlannedRoute | null;
+  /** Huella (planKey) del pedido que generó `result`. */
+  readonly resultKey: string | null;
   readonly status: Status;
   /** Estación abierta en el panel (índice en waypoints). */
   readonly openStop: number | null;
@@ -39,7 +42,7 @@ interface PlanState {
   clear: () => void;
   setDepartAt: (d: Date) => void;
   setClickMode: (m: ClickMode) => void;
-  setResult: (r: PlannedRoute | null) => void;
+  setResult: (r: PlannedRoute | null, key?: string | null) => void;
   setStatus: (s: Status) => void;
   setOpenStop: (i: number | null) => void;
 }
@@ -55,6 +58,7 @@ export const usePlan = create<PlanState>((set) => ({
   departAt: new Date(),
   clickMode: "add",
   result: null,
+  resultKey: null,
   status: { kind: "idle" },
   openStop: null,
 
@@ -86,10 +90,39 @@ export const usePlan = create<PlanState>((set) => ({
       return { waypoints: next, openStop: null };
     }),
   reverse: () => set((s) => ({ waypoints: [...s.waypoints].reverse(), openStop: null })),
-  clear: () => set({ waypoints: [], result: null, status: { kind: "idle" }, openStop: null }),
+  clear: () =>
+    set({ waypoints: [], result: null, resultKey: null, status: { kind: "idle" }, openStop: null }),
   setDepartAt: (departAt) => set({ departAt }),
   setClickMode: (clickMode) => set({ clickMode }),
-  setResult: (result) => set({ result }),
+  setResult: (result, key = null) => set({ result, resultKey: result ? key : null }),
   setStatus: (status) => set({ status }),
   setOpenStop: (openStop) => set({ openStop }),
 }));
+
+/**
+ * Huella de lo que cambia el cálculo: sitio, hora de salida, posición y
+ * permanencia de cada punto, en orden. El texto de la tarea no entra: no
+ * cambia tiempos ni consumos, y el veredicto no tiene que parpadear por tecla.
+ */
+export function planKey(siteId: string, departAt: Date, waypoints: readonly Waypoint[]): string {
+  return JSON.stringify([
+    siteId,
+    departAt.getTime(),
+    waypoints.map((w) => [w.lat, w.lon, w.dwellMin]),
+  ]);
+}
+
+/**
+ * La ruta calculada, solo si corresponde a los puntos y la hora de AHORA.
+ *
+ * Mientras se recalcula (respiro de 300 ms + el pedido), `result` todavía es
+ * el de antes: mostrarlo dejaba un GO viejo en pantalla y corría los datos de
+ * cada estación una fila (al sumar una estación, la llegada aparecía debajo de
+ * la estación 1). Panel, mapa y tira imprimible leen la ruta por acá.
+ */
+export function useFreshRoute(): PlannedRoute | null {
+  const siteId = useStore((s) => s.activeSiteId);
+  return usePlan((s) =>
+    s.result !== null && s.resultKey === planKey(siteId, s.departAt, s.waypoints) ? s.result : null,
+  );
+}

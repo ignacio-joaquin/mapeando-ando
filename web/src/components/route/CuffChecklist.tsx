@@ -1,6 +1,6 @@
 import type { MeasuredValue } from "../../api/schemas";
 import { MARS24_LTST, sourceLabel, type SourceInfo } from "../../domain/provenance";
-import { usePlan } from "../../state/plan";
+import { useFreshRoute, usePlan } from "../../state/plan";
 import { useStore } from "../../state/store";
 import { waypointLabel } from "../../map/route";
 import { earthShort, formatBearing, formatDistanceM, formatMinutes, ltstShort, sameSource } from "./format";
@@ -15,11 +15,25 @@ import { earthShort, formatBearing, formatDistanceM, formatMinutes, ltstShort, s
  * impresión del navegador se guarda como PDF.
  */
 export function CuffChecklist() {
-  const result = usePlan((s) => s.result);
+  // Solo la ruta vigente: imprimir mientras se recalcula no tiene que mezclar
+  // los datos de la ruta anterior con los puntos de ahora.
+  const result = useFreshRoute();
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
   const siteId = useStore((s) => s.activeSiteId);
-  if (!result) return null;
+  if (!result) {
+    // Ctrl+P sin travesía: que el papel lo diga en vez de salir en blanco.
+    return (
+      <article className="hidden font-sans text-[12pt] text-black print:block">
+        <strong>Mapa Marciano · tira de EVA</strong>
+        <p className="mt-2">
+          No hay una travesía calculada para imprimir. Marcá salida y llegada en el mapa y
+          esperá el veredicto.
+        </p>
+        <p className="mt-2 text-[9pt]">Prototipo educativo, no software de vuelo.</p>
+      </article>
+    );
+  }
   const { route, example } = result;
   const go = route.verdict.status === "GO";
   const origin = route.stops[0];
@@ -88,7 +102,8 @@ export function CuffChecklist() {
                 <td>{next ? value(next.bearing, formatBearing) : "—"}</td>
                 <td>{next ? value(next.distance, formatDistanceM) : "—"}</td>
                 <td className="font-sans">
-                  {s.task || wp?.task || label.long}
+                  {/* La tarea de ahora: editarla no recalcula la ruta (ver planKey). */}
+                  {wp?.task.trim() || s.task || label.long}
                   {label.kind === "station" && wp ? ` (${wp.dwellMin} min)` : ""}
                 </td>
                 <td className="text-right">{value(s.o2_remaining, (v) => v.toFixed(1))}</td>

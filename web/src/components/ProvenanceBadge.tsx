@@ -6,8 +6,9 @@ import { PROVENANCE_LABEL, type Provenance, type SourceInfo } from "../domain/pr
  *
  * El color distingue OBSERVED / DERIVED / MODELED, pero la etiqueta va siempre
  * escrita: nada crítico se comunica solo por color (casco, guantes, luz dura).
- * Tooltip con fuente, resolución y supuestos al pasar el mouse o con foco de
- * teclado.
+ * Tooltip con fuente, resolución y supuestos al pasar el mouse, con foco de
+ * teclado o con un toque en pantalla táctil (un toque da foco pero no
+ * `focus-visible`, por eso el tooltip abre con `focus` a secas).
  */
 const TONE: Record<Provenance, string> = {
   OBSERVED: "border-observed/60 bg-observed/15 text-observed",
@@ -43,7 +44,7 @@ export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Pr
       <span
         id={tipId}
         role="tooltip"
-        className={`invisible absolute z-30 w-60 rounded border border-line bg-panel p-2 text-left text-[11px] leading-snug font-normal whitespace-normal text-fg opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100 ${align === "right" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
+        className={`invisible absolute z-30 w-60 rounded border border-line bg-panel p-2 text-left text-[11px] leading-snug font-normal whitespace-normal text-fg opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 ${align === "right" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
       >
         <span className="block font-semibold">
           {PROVENANCE_LABEL[source.provenance]}

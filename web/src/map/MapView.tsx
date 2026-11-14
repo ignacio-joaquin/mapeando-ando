@@ -12,7 +12,7 @@ import type { Feature, FeatureCollection, LineString, Polygon } from "geojson";
 import { LAYERS, tileUrl } from "./layers";
 import { useStore } from "../state/store";
 import type { Bbox, RouteLeg } from "../api/schemas";
-import { usePlan } from "../state/plan";
+import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
 
 /**
@@ -66,6 +66,16 @@ export function MapView({ center, bbox, siteId }: Props) {
   const setPicked = useStore((s) => s.setPicked);
   const layers = useStore((s) => s.layers);
 
+  // ¿El mapa ya disparó "load"? No alcanza con map.isStyleLoaded(): da false
+  // cada vez que hay tiles bajando, y un once("load") registrado después de la
+  // carga inicial no se dispara nunca. Así se perdían actualizaciones (la ruta
+  // nueva no se dibujaba). Después de "load", sumar fuentes y capas es seguro.
+  const readyRef = useRef(false);
+  const whenReady = (map: MapLibreMap, fn: () => void) => {
+    if (readyRef.current) fn();
+    else map.once("load", fn);
+  };
+
   // 1. Crear el mapa una sola vez.
   useEffect(() => {
     if (mapRef.current || !containerRef.current) return;
@@ -75,6 +85,12 @@ export function MapView({ center, bbox, siteId }: Props) {
       center: [center.lon, center.lat],
       zoom: 12,
       attributionControl: false,
+    });
+    // Primer listener de "load": los once("load") de los otros efectos corren
+    // después y ya ven la bandera prendida.
+    readyRef.current = false;
+    map.on("load", () => {
+      readyRef.current = true;
     });
     map.addControl(new NavigationControl({ showCompass: false }), "top-right");
     map.on("mousemove", (e: MapMouseEvent) => setCursor({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
@@ -95,6 +111,7 @@ export function MapView({ center, bbox, siteId }: Props) {
     return () => {
       map.remove();
       mapRef.current = null;
+      readyRef.current = false;
     };
   }, [center.lat, center.lon, setCursor, setPicked]);
 
@@ -124,8 +141,7 @@ export function MapView({ center, bbox, siteId }: Props) {
         { padding: 48, animate: false },
       );
     };
-    if (map.isStyleLoaded()) apply();
-    else map.once("load", apply);
+    whenReady(map, apply);
   }, [bbox]);
 
   // 3. Sincronizar store -> capas. Se agregan solo las disponibles.
@@ -159,8 +175,7 @@ export function MapView({ center, bbox, siteId }: Props) {
         map.setPaintProperty(spec.id, "raster-opacity", state.opacity);
       }
     };
-    if (map.isStyleLoaded()) apply();
-    else map.once("load", apply);
+    whenReady(map, apply);
   }, [layers, siteId]);
 
   // El contenedor de MapLibre va adentro de otro div: maplibre-gl.css le pone
@@ -223,7 +238,8 @@ export function MapView({ center, bbox, siteId }: Props) {
   }, [waypoints, openStop]);
 
   // 5. Línea de la ruta (id de contrato: route-line), coloreada por tramo.
-  const result = usePlan((s) => s.result);
+  //    Solo la ruta vigente: mientras se recalcula, no queda la línea vieja.
+  const result = useFreshRoute();
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -266,8 +282,7 @@ export function MapView({ center, bbox, siteId }: Props) {
         paint: { "line-color": color, "line-width": 4, "line-dasharray": [1.5, 1.2] },
       });
     };
-    if (map.isStyleLoaded()) apply();
-    else map.once("load", apply);
+    whenReady(map, apply);
   }, [result]);
 
   return (
