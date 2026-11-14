@@ -7,7 +7,12 @@ import {
   type ExpressionSpecification,
   type MapMouseEvent,
   type StyleSpecification,
+  setWorkerUrl,
 } from "maplibre-gl";
+// MapLibre 6 arma la URL del worker relativa a su propio módulo, en runtime: Vite no la
+// ve y en el build el worker no se emite (404 → nginx devuelve index.html y el mapa no
+// arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, Polygon } from "geojson";
 import { LAYERS, tileUrl } from "./layers";
 import { readyTiles } from "./terrain";
@@ -25,6 +30,8 @@ import { LEG_CLASS_COLOR, waypointLabel } from "./route";
  * MapLibre: salen de src/mars/geo.ts con el radio marciano. Servir los tiles en
  * la proyección del DTM (Equidistant Cylindrical) es trabajo del pipeline.
  */
+
+setWorkerUrl(maplibreWorkerUrl);
 
 /** Estilo base: fondo vacío. No hay basemap terrestre, a propósito. */
 const emptyStyle: StyleSpecification = {
