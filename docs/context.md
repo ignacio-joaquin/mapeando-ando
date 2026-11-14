@@ -122,10 +122,23 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 
 **`GET /tiles/{site}/terrain.json` (lo escribe `pipeline/precompute.py`, lo lee `web/`).** Índice de las capas de relieve de un sitio; el frontend prende una capa solo si este archivo dice que está lista. Lo valida `TerrainIndexSchema` en `web/src/api/schemas.ts`.
 
-- `{ site, generated_at, mode, source, radius_m, gdal, grid, layers, warnings }`. `layers` va indexado por id de capa (`relief-slope`, `relief-hillshade`, `relief-contours`, más `dtm`).
+- `{ site, generated_at, mode, source, radius_m, gdal, grid, layers, warnings }`. `layers` va indexado por id de capa (`relief-slope`, `relief-hillshade`, `relief-contours`, más `dtm` y `coverage`).
+- `coverage` apunta a `coverage.geojson`: la huella del DTM de 1 m (polígonos en lon/lat, celdas de 10 × 10 px donde **todos** los píxeles tienen dato). El planificador rechaza un punto que cae afuera; sin esta capa acepta el punto y avisa que no lo pudo verificar.
 - Por capa: `file`, `status` (`ok` | `error`), `error?`, `resolution?` (píxel real sobre el suelo), `provenance`, `assumptions?` y, si va teselada, `tiles`: `{ status: "ok", template, minzoom, maxzoom, bounds: [oeste, sur, este, norte] }` o `{ status: "error", error }`.
 - El nombre de la carpeta de tiles (`slope/`, `hillshade/`) es el último segmento de la plantilla `tiles` de `web/src/map/layers.ts`.
 - Sin `terrain.json` (404), las capas de relieve quedan en "esperando el pipeline".
+
+**`GET /tiles/{site}/places.json` (lo escribe `pipeline/places.py`, lo lee el buscador de destinos de `web/`).** Lugares del sitio para buscar y para los chips de sugeridos. Lo valida `PlacesIndexSchema` en `web/src/api/schemas.ts`.
+
+- `{ site, generated_at, bbox, sources, places }`. `sources` dice por fuente (`iau`, `robbins`, `rover` y, si el sitio las declara, `heli`, `samples` y `targets`) si está `ok`, `missing` o `error`, con una `note` opcional (ej. cuántas observaciones no se pudieron ubicar).
+- Por lugar: `id`, `name`, `kind` (`iau` | `sample` | `target` | `heli` | `rover` | `crater`), `detail`, `lat`, `lon`, `suggested` y la procedencia (`provenance`, `mission`, `instrument`, `resolution?`, `source`, `assumptions?`), más `link?` a la ficha IAU.
+- Fuentes: nomenclátor IAU (`common.json`), cráteres de Robbins (`fetch_extras.py`) y, por `files[].key` del sitio, `rover_waypoints`, `heli_waypoints` (aeródromos de Ingenuity, en su último aterrizaje) y `sample_depot_locations` (CSV de PDS con un tubo por fila; `files[].name` le da el nombre al depósito). Un sitio que no declara un `key` no tiene esa fuente.
+- Objetivos científicos (`kind: target`), de PDS Geosciences: `chemcam_obs` (Gale), `supercam_obs` y `pixl_inventory` (Jezero) y `apxs_targets*` (Gale). PIXL no publica lista: `pipeline/fetch_targets.py` baja una etiqueta por observación (~110, con el Crawl-delay) y saca el nombre. Un objetivo medido por varios instrumentos es un solo lugar. Posición: la que mide APXS si la hay; si no, la del rover al medir (cruce por site/drive con los waypoints de MMGIS). Si la observación más cercana fue a más de 10 m, el lugar es el punto desde donde se observó y el `detail` lo dice ("observado desde acá a N m"). Se descartan cielo, blancos de calibración y atmósfera. `files[].instrument` nombra el instrumento.
+- No entran: SHERLOC (sus etiquetas no traen el nombre del objetivo) y el dossier de muestras de Mars 2020 (solo PDF). La mayoría de sus objetivos también los midieron SuperCam o PIXL.
+- Solo lugares con el punto dentro del bbox del sitio. Los sugeridos salen de las fuentes (rasgos IAU más chicos, primera y última posición del rover, primer tubo de cada depósito, primer y último aeródromo), no se eligen a mano. Los tubos de Three Forks van en la posición del rover al soltarlos (lo declara `assumptions`). Lo que no publica ninguna fuente (ej. el boxwork de Gale) no se agrega con coordenadas inventadas.
+- Sin `places.json` (404), el buscador avisa y el destino se elige con un clic en el mapa.
+
+**Travesía en la URL.** `?site=jezero&depart=<ISO UTC>&pts=lat,lon,min[,id de lugar];…`, en orden: hábitat, paradas, destino. El hábitat no es un punto fijo del sitio: lo marca el usuario cada vez. El planificador devuelve una sola ruta, la más segura; no hay alternativas.
 
 **`GET /api/sites/{site}/photos?lat=&lon=` (propuesta, MAP-33).** Fotos reales del rover más cercanas a un punto, para la ficha de cada estación. El cruce (punto → waypoint MMGIS → sol → fotos crudas de mars.nasa.gov, prefiriendo Navcam / Mastcam / Mastcam-Z) es del backend; el frontend solo dibuja. Lo valida `RoverPhotosSchema` en `web/src/api/schemas.ts`.
 
