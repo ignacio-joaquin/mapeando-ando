@@ -11,6 +11,8 @@ import { MARS24 } from "./domain/provenance";
 import { RoutePlanner } from "./components/route/RoutePlanner";
 import { ElevationProfile } from "./components/route/ElevationProfile";
 import { CuffChecklist } from "./components/route/CuffChecklist";
+import { SunTimeline } from "./components/SunTimeline";
+import { SHADOWS_LAYER_ID } from "./map/sun";
 import { fetchHealth, fetchSites, fetchTerrain, tileExists, usingFixtures } from "./api/client";
 import type { Health, SiteSummary, TerrainIndex } from "./api/schemas";
 import { availableFromTerrain } from "./map/terrain";
@@ -63,6 +65,11 @@ export function App() {
       }
       const available: Record<string, boolean> = {};
       for (const spec of LAYERS) {
+        // Las sombras dependen del sol elegido: su disponibilidad la decide SunTimeline.
+        if (spec.id === SHADOWS_LAYER_ID) {
+          available[spec.id] = useStore.getState().layers[spec.id]?.available ?? false;
+          continue;
+        }
         const url = tileUrl(spec, activeSiteId);
         available[spec.id] =
           availableFromTerrain(spec, terrain) ?? (!url.includes("{z}") && (await tileExists(url)));
@@ -156,6 +163,7 @@ export function App() {
             </div>
             {/* El perfil va debajo del mapa, como pide el ticket: se lee junto
                 con la ruta dibujada, no en otra pantalla. */}
+            {site ? <SunTimeline siteId={site.id} lon={site.center.lon} /> : null}
             <ElevationProfile profile={plan?.route.profile} />
           </main>
 

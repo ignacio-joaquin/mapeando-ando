@@ -269,6 +269,68 @@ export const TerrainIndexSchema = z.object({
   warnings: z.array(z.string()),
 });
 
+/**
+ * Sol y sombra por hora para el deslizador de tiempo. Los escribe
+ * pipeline/shadow_tiles.py y nginx los sirve en /tiles/<sitio>/illumination/.
+ * Las plantillas son relativas a /tiles/<sitio>/, como en terrain.json.
+ */
+const SunCrossingSchema = z.object({ utc: z.string(), ltst: z.string() }).nullable().optional();
+
+export const IlluminationCatalogSchema = z.object({
+  generated_at: z.string(),
+  sols: z.array(
+    z.object({
+      tag: z.string(),
+      start_utc: z.string(),
+      end_utc: z.string(),
+      ls_deg: z.number().nullable().optional(),
+      flat_sunrise: SunCrossingSchema,
+      flat_sunset: SunCrossingSchema,
+      step_min: z.number(),
+      /** Ruta del tiles.json del sol, relativa a illumination/. null = sin teselar. */
+      tiles: z.string().nullable(),
+    }),
+  ),
+});
+
+export const ShadowBandSchema = z.object({
+  band: z.number().int(),
+  ltst: z.string(),
+  utc: z.string(),
+  sun_az_deg: z.number(),
+  sun_el_deg: z.number(),
+  lit_fraction: z.number(),
+  status: z.enum(["ok", "error"]),
+  template: z.string().optional(),
+  minzoom: z.number().int().optional(),
+  maxzoom: z.number().int().optional(),
+  bounds: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  error: z.string().optional(),
+});
+
+export const SolTilesSchema = z.object({
+  sol_tag: z.string(),
+  generated_at: z.string(),
+  step_min: z.number(),
+  sol: z.object({
+    start_utc: z.string(),
+    end_utc: z.string(),
+    ls_deg: z.number().nullable().optional(),
+    flat_sunrise: SunCrossingSchema,
+    flat_sunset: SunCrossingSchema,
+  }),
+  provenance: z.object({
+    provenance: z.enum(["OBSERVED", "DERIVED", "MODELED"]),
+    mission: z.string().nullable(),
+    instrument: z.string().nullable(),
+    resolution: z.string().nullable().optional(),
+    source: z.string().optional(),
+    assumptions: z.array(z.string()).readonly().optional(),
+  }),
+  warnings: z.array(z.string()).optional(),
+  bands: z.array(ShadowBandSchema),
+});
+
 export type Sites = z.infer<typeof SitesSchema>;
 export type TileSet = z.infer<typeof TileSetSchema>;
 export type TerrainLayer = z.infer<typeof TerrainLayerSchema>;
@@ -286,6 +348,10 @@ export type RouteResponse = z.infer<typeof RouteResponseSchema>;
 export type Profile = z.infer<typeof ProfileSchema>;
 export type RoverPhoto = z.infer<typeof RoverPhotoSchema>;
 export type RoverPhotos = z.infer<typeof RoverPhotosSchema>;
+export type IlluminationCatalog = z.infer<typeof IlluminationCatalogSchema>;
+export type CatalogSol = IlluminationCatalog["sols"][number];
+export type ShadowBand = z.infer<typeof ShadowBandSchema>;
+export type SolTiles = z.infer<typeof SolTilesSchema>;
 
 // Chequeo en tiempo de compilación: lo que valida la API se puede pasar tal
 // cual a <Measure>, y los dos tienen los mismos campos. Si alguno cambia, esto

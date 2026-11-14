@@ -219,17 +219,22 @@ export const LAYERS: readonly LayerSpec[] = [
     group: "supervivencia",
     unit: "hora solar local",
     source: {
-      provenance: "MODELED",
+      provenance: "DERIVED",
       mission: "MRO",
-      instrument: "HiRISE DTM + SPICE",
-      resolution: "1 m/px",
-      source: "Geometría solar (SPICE) sobre el DTM HiRISE",
-      assumptions: ["Solo geometría: no considera polvo ni atmósfera"],
+      instrument: "HiRISE DTM + NAIF SPICE",
+      resolution: "1 m/px (tiles hasta z15)",
+      source: "pipeline/illumination.py: geometría solar (SPICE) sobre el DTM",
+      assumptions: [
+        "Sol puntual, sin refracción ni polvo; solo sol directo",
+        "Una máscara por hora: la hora la elige el deslizador del sol",
+      ],
     },
+    // Colores de pipeline/shadow_tiles.py (COLORES). Al sol no se pinta.
     legend: [
-      { color: "#161412", label: "en sombra" },
-      { color: "#e0a24a", label: "al sol" },
+      { color: "#0c0a09", label: "en sombra" },
+      { color: "#788296", label: "sin dato" },
     ],
+    // No se usa: las horas salen de illumination/<sol>/tiles.json (map/sun.ts).
     tiles: "/tiles/{site}/shadows/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: false,
