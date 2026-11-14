@@ -208,7 +208,17 @@ export function MapView({ center, bbox, siteId }: Props) {
       el.textContent = label.short;
       el.title = `${label.long}${w.task ? ` · ${w.task}` : ""}`;
       el.setAttribute("aria-label", el.title);
-      el.className = markerClass(label.kind, openStop === i);
+      // OJO: MapLibre pone sus propias clases en el elemento del marcador, y
+      // `.maplibregl-marker` es la que lo saca del flujo (`position:absolute;
+      // top:0; left:0`) para que el transform lo ubique en la coordenada.
+      // Pisar className entero las borraba y cada marcador caía donde lo dejaba
+      // el flujo normal, corrido hacia abajo por los anteriores. Reescribimos
+      // solo las nuestras y conservamos las de MapLibre (incluidas las que
+      // alterna sola, como -draggable o -covered).
+      const fromMapLibre = Array.from(el.classList).filter((c) =>
+        c.startsWith("maplibregl-"),
+      );
+      el.className = [...fromMapLibre, markerClass(label.kind, openStop === i)].join(" ");
     });
   }, [waypoints, openStop]);
 
