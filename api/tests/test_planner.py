@@ -1,6 +1,8 @@
 """POST /api/route: planificador 4D (api/planner.py) con rasters sintéticos."""
 import heapq
 import math
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -161,6 +163,37 @@ class TestCuatroD:
 
 
 class TestEstaciones:
+    def test_habitat_tres_estaciones_y_vuelta_al_habitat(self, client, site):
+        """El "Listo cuando" de MAP-27: la travesía se calcula completa con permanencias."""
+        # Con DTM llano: sin DTM el contacto no se evalúa y el veredicto es CAUTION, no GO.
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        write_shadow_stack(site)
+        stations = [latlon(ROW, 80), latlon(ROW + 30, 120), latlon(ROW, 160)]
+        dwells = [20, 30, 40]
+        req = request(band_time(10), [A, *stations, A])
+        for wp, (d, task) in zip(req["waypoints"][1:4], zip(dwells, ["muestra", "foto", "perfil"])):
+            wp["dwell_min"], wp["task"] = d, task
+        res = client.post("/api/route", json=req)
+        assert res.status_code == 200
+        body = res.json()
+        stops = body["stops"]
+        assert len(body["legs"]) == 4 and len(stops) == 5
+        assert all(leg["class"] == "ok" for leg in body["legs"])
+        assert stops[0]["arrive_utc"] is None and stops[-1]["depart_utc"] is None
+        utc = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00"))  # noqa: E731
+        # La salida del tramo siguiente es llegada + permanencia, y el reloj nunca vuelve atrás.
+        for stop, d in zip(stops[1:4], dwells):
+            assert (utc(stop["depart_utc"]) - utc(stop["arrive_utc"])).total_seconds() == pytest.approx(d * 60, abs=1)
+        for prev, nxt in zip(stops[:-1], stops[1:]):
+            assert utc(nxt["arrive_utc"]) > utc(prev["depart_utc"])
+        # O2 y dosis por estación: el O2 baja y la dosis sube en cada parada.
+        o2 = [s["o2_remaining"]["value"] for s in stops]
+        assert all(a > b for a, b in zip(o2, o2[1:]))
+        assert [s["task"] for s in stops[1:4]] == ["muestra", "foto", "perfil"]
+        assert all(s["margin"]["unit"] == "min" for s in stops)
+        assert body["verdict"]["status"] == "GO"
+
+
     def test_la_espera_consume_y_corre_el_reloj(self, client, site):
         write_terrain(site, flat())
         mid = latlon(ROW, 100)
@@ -171,6 +204,45 @@ class TestEstaciones:
         assert sin["stops"][1]["arrive_utc"] == con["stops"][1]["arrive_utc"]
         assert con["stops"][2]["arrive_utc"] > sin["stops"][2]["arrive_utc"]
         assert con["stops"][2]["o2_remaining"]["value"] < sin["stops"][2]["o2_remaining"]["value"]
+
+
+class TestVeredictoPorReserva:
+    """Si un recurso no alcanza, el veredicto culpa al que se agota primero."""
+
+    def plan(self, site, **suit):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        wps = [{"lat": la, "lon": lo, "task": None, "dwell_min": 0} for la, lo in (A, B)]
+        return planner.plan_route("jezero", iso(band_time(13)), wps, site,
+                                  Path(__file__).resolve().parents[2], params=planner.SuitParams(**suit))
+
+    def test_se_agota_el_o2(self, site):
+        v = self.plan(site, o2_capacity_kg=1e-6, battery_capacity_wh=1e9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "o2")
+        assert "se agota antes de terminar" in v["summary"]
+
+    def test_se_agotan_los_dos_y_la_bateria_primero(self, site):
+        # Las dos capacidades no alcanzan; la batería dura mucho menos al ritmo de la travesía.
+        v = self.plan(site, o2_capacity_kg=1e-6, battery_capacity_wh=1e-9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "battery")
+        assert "se agota antes de terminar" in v["summary"]
+
+    def test_alcanza_pero_sin_reserva(self, site):
+        # Batería para la travesía + un 10 %: llega, pero se come la reserva del 20 %.
+        full = planner.SuitParams().battery_capacity_wh
+        left_pct = self.plan(site)["stops"][-1]["battery_remaining"]["value"]
+        used = full * (1 - left_pct / 100)
+        v = self.plan(site, o2_capacity_kg=1e9, battery_capacity_wh=used / 0.9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "battery")
+        assert "reserva mínima" in v["summary"]
+        assert "se agota" not in v["summary"]
+
+    def test_el_veredicto_trae_los_campos_del_contrato(self, site):
+        v = self.plan(site)["verdict"]
+        assert {"status", "limiting_factor", "summary", "margin"} <= set(v)
+        assert {"score", "limits", "robustness"} <= set(v)
+        assert {r["id"] for r in v["limits"]} == {"terrain", "o2", "battery", "daylight", "contact",
+                                                  "dose", "calories"}
 
 
 def _costs(grid: Grid, weights: planner.CostWeights, max_slope: float):

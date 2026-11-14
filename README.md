@@ -62,6 +62,8 @@ La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangul
 {
   "site_id": "jezero",                       // obligatorio si los puntos no traen elev_m
   "points": [{"lat": 18.444, "lon": 77.450}, {"lat": 18.460, "lon": 77.420}],
+                                              // un punto intermedio puede traer "dwell_min" (0–600):
+                                              // minutos de trabajo parado en esa estación
   "speed_m_s": 0.8,                           // default 0.8 (~2.9 km/h)
   "cargo_kg": 0,                              // carga extra transportada (feature de carga del equipo, M2)
   "sample_step_m": 10,                        // paso de muestreo del DTM
@@ -73,12 +75,15 @@ La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangul
   "elevation_source": "dtm:jezero",           // o "request" si los puntos traían elev_m
   "segments": [{"index": 0, "distance_m": 1935, "elev_gain_m": 60, "duration_s": 2425,
                 "metabolic_w": 674, "o2_kg": 0.116, "o2_cum_kg": 0.116, "o2_remaining_pct": 78.9,
-                "battery_wh": 41.2, "battery_cum_wh": 41.2, "battery_remaining_pct": 90.8, ...}],
+                "battery_wh": 41.2, "battery_cum_wh": 41.2, "battery_remaining_pct": 90.8,
+                "dwell_s": 0, "dwell_o2_kg": 0, "dwell_battery_wh": 0, "dwell_energy_kj": 0, ...}],
   "totals": {..., "o2_exhausted_at_segment": null, "battery_exhausted_at_segment": null},
   "assumptions": {...},                       // los valores efectivamente usados
   "warnings": [...], "model_notes": [...]
 }
 ```
+
+**Permanencia.** La permanencia en un punto intermedio se suma al tramo que llega a ese punto: los `dwell_*` de ese tramo dicen cuánto se gastó parado (gasto de reposo de Pandolf más el consumo fijo del PLSS), y sus acumulados (`elapsed_s`, `*_cum_*`, `*_remaining_pct`) ya la incluyen. Si un recurso se agota durante la permanencia, `*_exhausted_at_segment` y `warnings` marcan ese tramo. En la salida y en la llegada final no cuenta, igual que en `POST /api/route`, que usa la misma función (`dwell_consumption`).
 
 **Elevación.** Si todos los puntos traen `elev_m`, se usan esas cotas y cada tramo es una recta. Si no trae ninguno, la API densifica cada tramo cada `sample_step_m` y lee el DTM de 1 m del sitio (el que figura como `dtm` en el manifest). Mezclar puntos con y sin `elev_m` da 422, igual que un punto fuera del DTM o sobre nodata.
 

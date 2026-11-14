@@ -43,7 +43,8 @@ import numpy as np
 
 from . import safety
 from .consumables import SOURCE as SUIT_SOURCE
-from .consumables import Step, SuitParams, battery_wh, o2_kg, pandolf_watts, segment_consumption
+from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg, pandolf_watts,
+                          segment_consumption)
 from .contact import ASSUMPTIONS as CONTACT_ASSUMPTIONS
 from .contact import ContactField
 from .illumination import (NODATA_U8, SHADOW, ShadowStack, apply_affine, parse_utc, sample_on_points,
@@ -656,11 +657,10 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             arrivals.append(t)
             state.append((o2_used, bat_used, t - t_depart))
             if i + 1 < len(pts) - 1:
-                dwell = max(0.0, float(waypoints[i + 1].get("dwell_min") or 0)) * 60.0
-                energy = pandolf_watts(0.0, 0.0, p) * dwell
-                o2_used += o2_kg(energy, dwell, p)
-                bat_used += battery_wh(dwell, p)
-                t += dwell
+                stay = dwell_consumption(max(0.0, float(waypoints[i + 1].get("dwell_min") or 0)) * 60.0, p)
+                o2_used += stay["o2_kg"]
+                bat_used += stay["battery_wh"]
+                t += stay["duration_s"]
                 departures.append(t)
             else:
                 departures.append(None)

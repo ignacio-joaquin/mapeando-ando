@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from .consumables import SuitParams, Step, battery_wh, o2_kg, pandolf_watts
+from .consumables import SuitParams, Step, battery_wh, dwell_consumption, o2_kg, pandolf_watts
 
 CAUTION_SCORE = 20.0
 KCAL_PER_J = 1.0 / 4184.0
@@ -246,10 +246,10 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
         if i < len(track.dwell_s):
             dwell = max(0.0, track.dwell_s[i])
             if dwell:
-                e = pandolf_watts(0.0, 0.0, p) * dwell
-                energy += e
-                o2 += o2_kg(e, dwell, p)
-                bat += battery_wh(dwell, p)
+                stay = dwell_consumption(dwell, p)   # la misma cuenta que las estaciones del planificador
+                energy += stay["energy_kj"] * 1000.0
+                o2 += stay["o2_kg"]
+                bat += stay["battery_wh"]
                 t += dwell
                 vis = track.station_visible[i] if i < len(track.station_visible) else None
                 contact(dwell, vis)
@@ -278,8 +278,15 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
     # O2 y batería: lo usable es la capacidad menos la reserva que tiene que sobrar.
     o2_budget = p.o2_capacity_kg * (1 - limits.reserve_fraction)
     bat_budget = p.battery_capacity_wh * (1 - limits.reserve_fraction)
-    results.append(LimitResult("o2", o2, o2_budget, _margin(o2, o2_budget)))
-    results.append(LimitResult("battery", bat, bat_budget, _margin(bat, bat_budget)))
+    reserve_pct = 100 * limits.reserve_fraction
+    for rid, used, cap, budget, name in (("o2", o2, p.o2_capacity_kg, o2_budget, "El O2"),
+                                         ("battery", bat, p.battery_capacity_wh, bat_budget, "La batería")):
+        r = LimitResult(rid, used, budget, _margin(used, budget))
+        if used > cap:
+            r.note = f"{name} se agota antes de terminar la travesía."
+        elif r.broken:
+            r.note = f"{name} no deja la reserva mínima del {reserve_pct:.0f} % al llegar."
+        results.append(r)
 
     # Luz: el tiempo disponible es desde la salida hasta el atardecer menos el margen.
     if cond.sunset_s is None:
