@@ -13,14 +13,14 @@ Contexto, decisiones, datos y estado del proyecto: [BITACORA.md](BITACORA.md).
 | `sites/` | Un JSON por sitio (Jezero, Gale) + `common.json`. Sumar un sitio = sumar un archivo. |
 | `pipeline/` | Python que descarga y precomputa (rasterio, numpy, spiceypy, GDAL). |
 | `api/` | FastAPI: estado, inventario de datos, point query, `/api/route` (planificador 4D, `api/planner.py`) y `/api/route/consumables` (consumibles del traje). |
-| `web/` | Frontend. Hoy es una página de estado; acá va el mapa (React + MapLibre). |
+| `web/` | Frontend React + MapLibre (Vite). El server lo compila solo en cada deploy (`deploy/build-web.sh`). |
 | `docs/` | Documentación del proyecto. `context.md` es la fuente única de contexto para el equipo y para la IA. |
 | `deploy/` | Bootstrap del servidor, nginx, systemd y auto-deploy. |
 
 ## Servidor
 
 - AWS EC2 en **us-east-2 (Ohio)**, Ubuntu 24.04. La IP pública está en Linear.
-- `http://<IP>/` sirve `web/`, `/api/*` va a FastAPI y `/tiles/*` sirve `/data/output/`.
+- `http://<IP>/` sirve el build de `web/`, `/api/*` va a FastAPI y `/tiles/*` sirve `/data/output/`.
 - Datos crudos en `/data/raw/<sitio>/`, salidas en `/data/output/<sitio>/`, inventario en `/data/manifest.json`.
 - Copia de los datos crudos en S3: `s3://<bucket>/raw/` (nombre en `/etc/mapeando.env`).
 
