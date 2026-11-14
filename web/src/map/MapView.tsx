@@ -16,7 +16,7 @@ import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, Polygon } from "geojson";
 import { LAYERS, tileUrl } from "./layers";
 import { readyTiles } from "./terrain";
-import { SHADOWS_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
+import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
 import { useStore } from "../state/store";
 import type { Bbox, RouteLeg } from "../api/schemas";
@@ -61,6 +61,20 @@ function bboxFeature(bbox: Bbox): Feature<Polygon> {
       ],
     },
   };
+}
+
+/**
+ * Orden de las capas, de abajo hacia arriba: rasters de relieve y de
+ * supervivencia → sombras por hora → velo de noche → curvas de nivel →
+ * recuadro del sitio → ruta. Las sombras van arriba de todo raster sin importar
+ * qué se cargó primero (si no, la ortoimagen opaca las tapa), así que un raster
+ * nuevo se inserta debajo de la primera capa de sombras que exista.
+ */
+function rasterBeforeId(map: MapLibreMap, shadowIds: readonly string[]): string {
+  const lowestShadow = shadowIds.find((id) => map.getLayer(id));
+  if (lowestShadow) return lowestShadow;
+  if (map.getLayer(SHADOWS_NIGHT_LAYER_ID)) return SHADOWS_NIGHT_LAYER_ID;
+  return map.getLayer("relief-contours") ? "relief-contours" : "site-bbox-line";
 }
 
 interface Props {
@@ -144,9 +158,11 @@ export function MapView({ center, bbox, siteId }: Props) {
         });
         // Velo de noche del deslizador del sol (lo prende el efecto de sombras).
         // Mismo color que la sombra de los tiles (pipeline/shadow_tiles.py).
+        // Se crea antes que cualquier raster y los rasters se insertan debajo
+        // (rasterBeforeId), así que siempre queda arriba de ellos.
         map.addLayer(
           {
-            id: "shadow-night",
+            id: SHADOWS_NIGHT_LAYER_ID,
             type: "fill",
             source: "site-bbox",
             layout: { visibility: "none" },
@@ -172,6 +188,8 @@ export function MapView({ center, bbox, siteId }: Props) {
   //    seguiría pidiendo los tiles del anterior).
   const terrain = useStore((s) => s.terrain);
   const sourceKeysRef = useRef(new Map<string, string>());
+  // Capas de sombra por hora del sol cargado (las arma el efecto 3b), en orden.
+  const shadowIdsRef = useRef<string[]>([]);
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -237,7 +255,7 @@ export function MapView({ center, bbox, siteId }: Props) {
             maxzoom: tiles.maxzoom,
             bounds: tiles.bounds,
           });
-          // Debajo de las curvas, si ya están, para que se lean encima del color.
+          // Debajo de las sombras y de las curvas, para que se lean encima del color.
           map.addLayer(
             {
               id: spec.id,
@@ -250,7 +268,7 @@ export function MapView({ center, bbox, siteId }: Props) {
                 "raster-resampling": spec.categorical ? "nearest" : "linear",
               },
             },
-            map.getLayer("relief-contours") ? "relief-contours" : "site-bbox-line",
+            rasterBeforeId(map, shadowIdsRef.current),
           );
           keys.set(spec.id, sourceKey);
         }
@@ -277,7 +295,6 @@ export function MapView({ center, bbox, siteId }: Props) {
     const f = frameAt(s.sol, s.time);
     return f.kind === "band" ? bandLayerId(s.sol.sol_tag, f.band) : f.kind;
   });
-  const shadowIdsRef = useRef<string[]>([]);
 
   // Estructura: una fuente y una capa por hora del sol cargado.
   useEffect(() => {
@@ -312,7 +329,12 @@ export function MapView({ center, bbox, siteId }: Props) {
             // Máscara por clases: sin suavizar, para no inventar "media sombra".
             paint: { "raster-opacity": 0, "raster-resampling": "nearest", "raster-fade-duration": 0 },
           },
-          map.getLayer("relief-contours") ? "relief-contours" : "site-bbox-line",
+          // Arriba de todo raster y debajo del velo de noche (ver rasterBeforeId).
+          map.getLayer(SHADOWS_NIGHT_LAYER_ID)
+            ? SHADOWS_NIGHT_LAYER_ID
+            : map.getLayer("relief-contours")
+              ? "relief-contours"
+              : "site-bbox-line",
         );
       });
       shadowIdsRef.current = wantedIds;
@@ -330,9 +352,9 @@ export function MapView({ center, bbox, siteId }: Props) {
         map.setLayoutProperty(id, "visibility", shadowOn ? "visible" : "none");
         map.setPaintProperty(id, "raster-opacity", shadowOn && id === shadowKey ? shadowOpacity : 0);
       }
-      if (map.getLayer("shadow-night")) {
-        map.setLayoutProperty("shadow-night", "visibility", shadowOn && shadowKey === "night" ? "visible" : "none");
-        map.setPaintProperty("shadow-night", "fill-opacity", 0.69 * shadowOpacity);
+      if (map.getLayer(SHADOWS_NIGHT_LAYER_ID)) {
+        map.setLayoutProperty(SHADOWS_NIGHT_LAYER_ID, "visibility", shadowOn && shadowKey === "night" ? "visible" : "none");
+        map.setPaintProperty(SHADOWS_NIGHT_LAYER_ID, "fill-opacity", 0.69 * shadowOpacity);
       }
     });
   }, [shadowKey, shadowOn, shadowOpacity, sunSol]);

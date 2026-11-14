@@ -163,7 +163,7 @@ export function App() {
             </div>
             {/* El perfil va debajo del mapa, como pide el ticket: se lee junto
                 con la ruta dibujada, no en otra pantalla. */}
-            {site ? <SunTimeline siteId={site.id} lon={site.center.lon} /> : null}
+            {site ? <SunTimeline siteId={site.id} lat={site.center.lat} lon={site.center.lon} /> : null}
             <ElevationProfile profile={plan?.route.profile} />
           </main>
 

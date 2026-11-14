@@ -128,5 +128,5 @@ curl -s "http://<server>/api/sites/jezero/point?lat=18.488&lon=77.403" | jq
 ## 5. Lo que todavía bloquea
 
 - **El frontend no se despliega.** nginx sirve `/opt/mapeando-ando/web` directo, `deploy/update.sh` no corre `npm build` y el server no tiene Node. Mientras no se resuelva, el mapa solo se ve en local aunque esté mergeado en `main`. Es la decisión abierta de `context.md` y **no depende de los datos**.
-- **Las capas de supervivencia** (peligro, refugio, dosis, sombras) no las genera nadie todavía. Sol y sombra existen en `pipeline/illumination.py` pero escriben su propio `index.json` y no se teselan.
+- **Las capas de supervivencia** (peligro, refugio, dosis) no las genera nadie todavía. Sol y sombra sí: `pipeline/illumination.py` calcula la pila por hora y `pipeline/shadow_tiles.py` la tesela para el deslizador del sol (ver `docs/illumination.md`).
 - **El valor por capa en el inspector** viene vacío hasta que esas capas existan.

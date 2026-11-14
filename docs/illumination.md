@@ -54,11 +54,11 @@ El mapa no abre un COG. Después de `illumination.py`, este script tesela cada h
 | Archivo | Contenido |
 |---|---|
 | `<sol>/tiles/<HHMM>/{z}/{x}/{y}.png` | Máscara de esa hora: sombra oscura semitransparente, sol transparente, sin dato gris azulado |
-| `<sol>/tiles.json` | Por hora: LTST, UTC, azimut y elevación del Sol, fracción al sol, zoom y límites de los tiles, y si falló |
+| `<sol>/tiles.json` | Por hora: LTST, UTC, azimut y elevación del Sol, fracción al sol, zoom y límites de los tiles, y si falló. Además, el `--max-zoom` con que se corrió |
 | `catalog.json` | Qué soles hay en `illumination/` y cuáles están teselados (lo regenera cada corrida) |
 
-- Las horas de noche no se teselan. Con `--max-zoom 15` (default) un tile cubre ~4 m/px: alcanza para ver moverse las sombras, y el mapa agranda el último nivel si se acerca más.
-- Si un sol ya está teselado para el mismo `index.json`, no se rehace (`--force` para forzarlo). Un fallo en una hora queda en `tiles.json` y no corta las demás.
+- Las horas de noche no se teselan: el mapa pone un velo sobre el sitio. Con `--max-zoom 15` (default), un píxel de tile mide ~2,5 m en Marte (2,4 m en Jezero; los ~4,8 m de z15 son de la Tierra, y acá un grado del esquema XYZ es un grado de Marte). Alcanza para ver moverse las sombras, y si el mapa se acerca más, agranda el último nivel.
+- Si un sol ya está teselado para el mismo `index.json` y el mismo `--max-zoom`, no se rehace (`--force` para forzarlo). Un fallo en una hora queda en `tiles.json` y no corta las demás.
 - Se reproyecta con vecino más cercano: es una máscara por clases y un promedio inventaría "media sombra". El hueco del DTM (sin dato) y lo que queda fuera del DTM se separan para que el primero se vea y el segundo no.
 - Necesita `gdal-bin` (lo instala `deploy/bootstrap.sh`).
 

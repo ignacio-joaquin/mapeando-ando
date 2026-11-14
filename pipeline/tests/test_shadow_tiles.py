@@ -68,6 +68,15 @@ class TestHelpers:
         assert prov["resolution"] == "1.00 × 1.00 m/px"
         assert TAG in prov["source"]
 
+    def test_up_to_date_needs_same_stack_and_zoom(self):
+        index = {"generated_at": "a"}
+        prev = {"index_generated_at": "a", "max_zoom": 15, "bands": [{"status": "ok"}]}
+        assert st.up_to_date(prev, index, 15)
+        assert not st.up_to_date(prev, index, 14)                                      # otro --max-zoom
+        assert not st.up_to_date(prev, {"generated_at": "b"}, 15)                      # pila recalculada
+        assert not st.up_to_date({**prev, "bands": [{"status": "error"}]}, index, 15)  # una hora falló
+        assert not st.up_to_date({"index_generated_at": "a", "bands": []}, index, 15)  # tiles.json sin zoom
+
 
 class TestDataNotReady:
     def test_no_stack(self, tmp_path):
@@ -112,9 +121,12 @@ class TestFullRun:
         west, south, east, north = b["bounds"]
         assert west == pytest.approx(LON0, abs=1e-3) and north == pytest.approx(LAT0, abs=1e-3)
 
+        assert idx["max_zoom"] == 12
+
         cat = json.loads((tmp_path / "illumination" / "catalog.json").read_text())
         assert cat["sols"][0]["tiles"] == f"{TAG}/tiles.json"
         assert not (sol / ".tiles.work").exists()
+        assert not (sol / ".tiles.json.tmp").exists()
 
     def test_mask_colors(self, tmp_path):
         """Sombra oscura, sol transparente, sin dato distinto de sol."""
@@ -139,3 +151,11 @@ class TestFullRun:
         assert st.main(["--out", str(tmp_path), "--max-zoom", "11"]) == 0
         assert st.main(["--out", str(tmp_path), "--max-zoom", "11"]) == 0
         assert "al día" in capsys.readouterr().out
+
+    def test_other_zoom_retiles(self, tmp_path, capsys):
+        sol = write_sol(tmp_path)
+        assert st.main(["--out", str(tmp_path), "--max-zoom", "11"]) == 0
+        capsys.readouterr()
+        assert st.main(["--out", str(tmp_path), "--max-zoom", "12"]) == 0
+        assert "al día" not in capsys.readouterr().out
+        assert json.loads((sol / "tiles.json").read_text())["max_zoom"] == 12

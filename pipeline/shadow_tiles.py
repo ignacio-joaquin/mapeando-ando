@@ -38,9 +38,10 @@ import tiles as tl
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 SOL_TAG_RE = re.compile(r"^\d{8}T\d{4}Z$")
 
-# Zoom tope por defecto. A z15 un tile cubre ~4 m/px en Marte: alcanza para ver
-# moverse las sombras y no genera cientos de miles de PNG por sol. El mapa
-# agranda el último nivel si se acerca más.
+# Zoom tope por defecto. Los tiles son lat/lon de Marte etiquetado como EPSG:4326,
+# así que a z15 un píxel mide ~2,5 m en el ecuador marciano (2,4 m en Jezero), no
+# los ~4,8 m de la Tierra: alcanza para ver moverse las sombras y no genera
+# cientos de miles de PNG por sol. El mapa agranda el último nivel si se acerca más.
 DEFAULT_MAX_ZOOM = 15
 
 # Colores de la máscara (valores de shadow_hourly.tif). Si cambian, cambia la
@@ -119,15 +120,27 @@ def colorear_mascara(src: Path, dest: Path) -> None:
     tl.run(["gdaldem", "color-relief", "-nearest_color_entry", "-alpha", src, tabla, dest, *tl.GTIFF_OPTS])
 
 
+def up_to_date(prev: dict, index: dict, max_zoom: int) -> bool:
+    """¿El tiles.json anterior ya corresponde a esta pila y a este zoom, sin horas fallidas?
+
+    El zoom cuenta: si no, volver a correr con otro --max-zoom no haría nada.
+    """
+    return (prev.get("index_generated_at") == index.get("generated_at")
+            and prev.get("max_zoom") == max_zoom
+            and all(b.get("status") == "ok" for b in prev.get("bands", [])))
+
+
 def tile_sol(sol_dir: Path, site_base: Path, max_zoom: int, force: bool = False) -> dict:
     """Tesela las horas de día de un sol y escribe su tiles.json. Devuelve ese índice."""
     tag = sol_dir.name
     index = json.loads((sol_dir / "index.json").read_text(encoding="utf-8"))
     out_json = sol_dir / "tiles.json"
     if out_json.is_file() and not force:
-        prev = json.loads(out_json.read_text(encoding="utf-8"))
-        if prev.get("index_generated_at") == index.get("generated_at") and all(
-                b.get("status") == "ok" for b in prev.get("bands", [])):
+        try:
+            prev = json.loads(out_json.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            prev = {}  # roto: se rehace
+        if up_to_date(prev, index, max_zoom):
             log(f"sol {tag}: tiles al día (usá --force para rehacerlos)")
             return prev
 
@@ -179,6 +192,7 @@ def tile_sol(sol_dir: Path, site_base: Path, max_zoom: int, force: bool = False)
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "index_generated_at": index.get("generated_at"),
         "step_min": index["shadow_hourly"]["step_min"],
+        "max_zoom": max_zoom,
         "sol": index["sol"],
         "values": {"sombra": "RGBA 12 10 9 175", "sol": "transparente",
                    "sin dato": "RGBA 120 130 150 110", "fuera del DTM": "transparente"},
@@ -186,7 +200,9 @@ def tile_sol(sol_dir: Path, site_base: Path, max_zoom: int, force: bool = False)
         "warnings": list(index.get("warnings") or []),
         "bands": bands_out,
     }
-    out_json.write_text(json.dumps(result, indent=1, ensure_ascii=False))
+    tmp = sol_dir / ".tiles.json.tmp"
+    tmp.write_text(json.dumps(result, indent=1, ensure_ascii=False))
+    os.replace(tmp, out_json)  # nginx nunca sirve un JSON a medias
     return result
 
 

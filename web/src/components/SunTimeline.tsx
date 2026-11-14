@@ -2,7 +2,18 @@ import { useEffect, useRef } from "react";
 import { fetchIlluminationCatalog, fetchSolTiles } from "../api/client";
 import type { CatalogSol, SolTiles } from "../api/schemas";
 import { MARS24_LTST, type SourceInfo } from "../domain/provenance";
-import { SHADOWS_LAYER_ID, clamp, frameAt, okBands, solFor, timelineRange } from "../map/sun";
+import {
+  SHADOWS_LAYER_ID,
+  type TimeRange,
+  clamp,
+  daylightRange,
+  flatCrossings,
+  frameAt,
+  okBands,
+  solFor,
+  tileGroundM,
+  timelineRange,
+} from "../map/sun";
 import { usePlan } from "../state/plan";
 import { useStore } from "../state/store";
 import { useSun } from "../state/sun";
@@ -11,8 +22,9 @@ import { earthShort, ltstShort } from "./route/format";
 
 /**
  * Deslizador de tiempo del sol: hace visible el 4D. Recorre el sol de la hora
- * de salida, de amanecer a atardecer; al moverlo, el mapa cambia la máscara de
- * sombra de esa hora (capa "survival-shadows").
+ * de salida, de medianoche a medianoche local; al moverlo, el mapa cambia la
+ * máscara de sombra de esa hora (capa "survival-shadows") o, de noche, pone un
+ * velo sobre el sitio. "Reproducir" va de amanecer a atardecer.
  *
  * Las máscaras son por hora (pipeline/illumination.py + shadow_tiles.py). No se
  * interpola entre horas: se muestra la más cercana y se dice de qué hora es.
@@ -21,11 +33,19 @@ const PLAY_MS = 5_000; // "el 4D en cinco segundos de demo"
 
 interface Props {
   readonly siteId: string;
-  /** Longitud del centro del sitio, para la hora solar local del deslizador. */
+  /** Centro del sitio: la longitud da la hora solar local; la latitud, el tamaño real del píxel dibujado. */
+  readonly lat: number;
   readonly lon: number;
 }
 
-export function SunTimeline({ siteId, lon }: Props) {
+/** El deslizador existe para mover sombras: si la capa está apagada, la prende. */
+function showShadows() {
+  const st = useStore.getState();
+  const l = st.layers[SHADOWS_LAYER_ID];
+  if (l?.available && !l.visible) st.toggleLayer(SHADOWS_LAYER_ID);
+}
+
+export function SunTimeline({ siteId, lat, lon }: Props) {
   const departAt = usePlan((s) => s.departAt);
   const catalog = useSun((s) => s.catalog);
   const sol = useSun((s) => s.sol);
@@ -79,7 +99,8 @@ export function SunTimeline({ siteId, lon }: Props) {
     };
   }, [siteId, targetTiles, targetTag, setSol, setLoad]);
 
-  // 3. La hora de salida mueve el deslizador (y cambiar de sol lo ubica).
+  // 3. La hora de salida mueve el deslizador (y cambiar de sol lo ubica). Si la
+  //    salida es de noche, el deslizador queda de noche: no salta al amanecer.
   const range = sol ? timelineRange(sol) : null;
   const rangeKey = range ? `${range.start}-${range.end}` : "";
   useEffect(() => {
@@ -94,14 +115,17 @@ export function SunTimeline({ siteId, lon }: Props) {
     if (l && l.available !== hasTiles) useStore.getState().setAvailable(SHADOWS_LAYER_ID, hasTiles);
   }, [hasTiles, shadows?.available]);
 
-  // 5. Reproducir: amanecer → atardecer en cinco segundos.
+  // 5. Reproducir: amanecer → atardecer en cinco segundos. Arranca desde donde
+  //    está el deslizador si es de día; si no, desde el amanecer.
+  const day = sol ? daylightRange(sol) : null;
+  const dayKey = day ? `${day.start}-${day.end}` : "";
   const raf = useRef<number | null>(null);
   useEffect(() => {
-    if (!playing || !range) return;
-    const from = time !== null && time < range.end - 60_000 ? time : range.start;
+    if (!playing || !day) return;
+    const from = time !== null && time >= day.start && time < day.end - 60_000 ? time : day.start;
     const t0 = performance.now();
-    const span = range.end - from;
-    const total = (PLAY_MS * span) / (range.end - range.start);
+    const span = day.end - from;
+    const total = (PLAY_MS * span) / (day.end - day.start);
     const step = (now: number) => {
       const f = Math.min(1, (now - t0) / total);
       setTime(from + f * span);
@@ -113,7 +137,7 @@ export function SunTimeline({ siteId, lon }: Props) {
       if (raf.current !== null) cancelAnimationFrame(raf.current);
     };
     // `time` queda afuera a propósito: es el punto de partida, no un disparador.
-  }, [playing, rangeKey]);
+  }, [playing, dayKey]);
 
   return (
     <section aria-label="Deslizador de tiempo del sol" className="border-t border-line bg-panel/40 px-3 py-2">
@@ -125,7 +149,7 @@ export function SunTimeline({ siteId, lon }: Props) {
             <span className="ml-2 font-normal normal-case">Ls {sol.sol.ls_deg.toFixed(1)}°</span>
           ) : null}
         </h2>
-        {sol ? <ProvenanceBadge source={tilesSource(sol)} /> : null}
+        {sol ? <ProvenanceBadge source={tilesSource(sol, lat)} /> : null}
       </div>
 
       {load.kind === "error" ? (
@@ -153,15 +177,27 @@ export function SunTimeline({ siteId, lon }: Props) {
   );
 }
 
-function tilesSource(sol: SolTiles): SourceInfo {
+function tilesSource(sol: SolTiles, lat: number): SourceInfo {
   const p = sol.provenance;
+  // Lo que se ve no es la resolución de la pila: los tiles llegan hasta un zoom
+  // y, más cerca, el mapa agranda el último nivel.
+  const z = Math.max(0, ...okBands(sol).map((b) => b.maxzoom ?? 0));
+  const drawn =
+    z > 0
+      ? [`Se dibuja con tiles hasta z${z} (~${tileGroundM(z, lat).toFixed(1)} m/px); más cerca, el mapa agranda el último nivel`]
+      : [];
   return {
     provenance: p.provenance,
     mission: p.mission,
     instrument: p.instrument,
     ...(p.resolution ? { resolution: p.resolution } : {}),
     ...(p.source ? { source: p.source } : {}),
-    assumptions: [...(p.assumptions ?? []), "Una máscara por hora; entre horas se muestra la más cercana"],
+    assumptions: [
+      ...(p.assumptions ?? []),
+      "Una máscara por hora; entre horas se muestra la más cercana",
+      "Noche: Sol bajo el horizonte plano",
+      ...drawn,
+    ],
   };
 }
 
@@ -207,7 +243,7 @@ function Timeline({
   shadowsOn,
 }: {
   readonly sol: SolTiles;
-  readonly range: { start: number; end: number };
+  readonly range: TimeRange;
   readonly time: number;
   readonly lon: number;
   readonly playing: boolean;
@@ -218,6 +254,7 @@ function Timeline({
   const toggleLayer = useStore((s) => s.toggleLayer);
   const frame = frameAt(sol, time);
   const bands = okBands(sol);
+  const { rise, set } = flatCrossings(sol);
   const span = range.end - range.start;
   const pos = (t: number) => `${(((t - range.start) / span) * 100).toFixed(2)}%`;
   const at = new Date(time);
@@ -227,7 +264,10 @@ function Timeline({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={() => setPlaying(!playing)}
+          onClick={() => {
+            if (!playing) showShadows();
+            setPlaying(!playing);
+          }}
           aria-label={playing ? "Pausar" : "Reproducir de amanecer a atardecer"}
           className="rounded border border-rust bg-rust/15 px-2 py-0.5 text-xs text-fg"
         >
@@ -258,9 +298,15 @@ function Timeline({
         </span>
       </div>
 
-      {/* Pista: barras con el % del sitio al sol en cada hora (con terreno). */}
+      {/* Pista: franjas de noche y barras con el % del sitio al sol en cada hora (con terreno). */}
       <div className="relative">
-        <div aria-hidden className="relative h-6 rounded bg-bg">
+        <div aria-hidden className="relative h-6 overflow-hidden rounded bg-bg">
+          {rise !== null ? (
+            <span className="absolute inset-y-0 left-0 bg-line" style={{ width: pos(rise) }} />
+          ) : null}
+          {set !== null ? (
+            <span className="absolute inset-y-0 right-0 bg-line" style={{ left: pos(set) }} />
+          ) : null}
           {bands.map((b) => (
             <span
               key={b.band}
@@ -278,26 +324,30 @@ function Timeline({
           value={time}
           onChange={(e) => {
             setPlaying(false);
+            showShadows();
             setTime(Number(e.target.value));
           }}
           aria-label="Hora del sol"
-          aria-valuetext={`${ltstShort(at, lon)} hora solar local`}
+          aria-valuetext={`${ltstShort(at, lon)} hora solar local${frame.kind === "night" ? ", de noche" : ""}`}
           className="w-full accent-rust"
         />
-        <div className="flex justify-between text-[10px] text-muted">
-          <span>
-            amanecer {sol.sol.flat_sunrise?.ltst ?? "—"}
+        <div className="flex justify-between gap-2 text-[10px] text-muted">
+          <span>00:00</span>
+          <span className="text-center">
+            amanecer {sol.sol.flat_sunrise?.ltst ?? "—"} · atardecer {sol.sol.flat_sunset?.ltst ?? "—"} LTST, con
+            horizonte plano
           </span>
-          <span>barras: % del sitio al sol, con terreno</span>
-          <span>
-            atardecer {sol.sol.flat_sunset?.ltst ?? "—"}
-          </span>
+          <span>24:00</span>
         </div>
+        <p className="text-[10px] text-muted">
+          Franjas oscuras: noche. Barras: % del sitio al sol, con el relieve; por el relieve, en partes del sitio el
+          sol sale más tarde y se pone antes que con horizonte plano.
+        </p>
       </div>
 
       <p className="text-[11px]">
         {frame.kind === "night" ? (
-          <span className="text-warn">De noche: todo el sitio en sombra.</span>
+          <span className="text-warn">☾ De noche (Sol bajo el horizonte plano): todo el sitio en sombra.</span>
         ) : frame.kind === "none" ? (
           <span className="text-warn">No hay máscara teselada para este sol.</span>
         ) : (
