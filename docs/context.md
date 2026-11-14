@@ -108,14 +108,17 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 - `resolution`, `source` y `assumptions` son opcionales y van al tooltip del badge.
 - Lo valida `MeasuredValueSchema` en `web/src/api/schemas.ts`.
 
-**`POST /api/route` (propuesta, la consume el planificador de `web/`).** Es el endpoint del planificador 4D. El modelo de costo sigue siendo decisión abierta (§5); esto fija solo qué entra y qué sale. Lo valida `RouteResponseSchema` en `web/src/api/schemas.ts`. Hasta que el 4D exista, la API responde **501**. Los consumibles del traje sobre una ruta ya armada (Pandolf, PR #2) se mudaron a `POST /api/route/consumables`, con su contrato de siempre (ver README).
+**`POST /api/route` (la consume el planificador de `web/`).** Es el endpoint del planificador 4D (`api/planner.py`; el modelo de costo está en §5). Lo valida `RouteResponseSchema` en `web/src/api/schemas.ts`. Los consumibles del traje sobre una ruta ya armada (Pandolf, PR #2) se mudaron a `POST /api/route/consumables`, con su contrato de siempre (ver README).
 
 - Entra: `{ site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }] }`. El primero es la salida, el último la llegada, el resto estaciones en orden. Salida y llegada pueden ser puntos distintos.
 - Sale: `{ site, depart_utc, legs, stops, verdict }`.
-  - `legs[]`: `from`, `to`, `coordinates` (`[lon, lat]`), `class` (`ok` | `caution` | `limit` | `blocked` | `unknown`) y `distance`, `duration`, `bearing`, `max_slope` como valor con procedencia. `unknown` = no se pudo evaluar el terreno; se dibuja punteado, nunca como `ok`.
+  - `legs[]`: `from`, `to`, `coordinates` (`[lon, lat]`), `class` (`ok` | `caution` | `limit` | `blocked` | `unknown`) y `distance`, `duration`, `bearing`, `max_slope` como valor con procedencia. `unknown` = no se pudo evaluar el terreno; se dibuja punteado, nunca como `ok`. Opcional: `shadow_fraction` (% de la ruta en sombra a la hora de paso), solo si hay pila de sombras para ese sol.
+  - `profile` (opcional): perfil de elevación, igual que en `/api/route/consumables`. Solo viene si todos los puntos de la ruta tienen cota del DTM.
   - `stops[]`: `index`, `lat`, `lon`, `task`, `arrive_utc`, `depart_utc` (null en la salida y en la llegada final, respectivamente) y `o2_remaining`, `battery_remaining`, `dose_accumulated`, `margin` (min) como valor con procedencia.
   - `verdict`: `status` (`GO` | `NO_GO`), `limiting_factor` (`o2` | `battery` | `dose` | `daylight` | `terrain` | null), `summary` (una frase en español) y `margin` (min).
-- Mientras el server responda 404/405/501, el frontend usa un planificador de ejemplo (`web/src/api/routeFixture.ts`) y lo avisa en pantalla.
+- Sitio desconocido o sin manifest: **404**, y el frontend usa el planificador de ejemplo (`web/src/api/routeFixture.ts`) y lo avisa en pantalla (también ante 405/501). Con datos a medias responde 200: los tramos que no se pudieron evaluar van en línea recta como `unknown` y el `summary` dice qué faltó ("Ojo: …").
+
+**`POST /api/illumination/window` (lo lee quien depura la pila de sombras; hoy no lo consume `web/`).** Sol/sombra precomputados en el rectángulo entre dos puntos, para una hora. Entra `{ site_id, sol_tag?, ltst | band, p1: {lat, lon}, p2: {lat, lon} }`; `sol_tag` es la carpeta del sol (`AAAAMMDDTHHMMZ`, default: el último). Sale `values[fila][col]` con `true` (sol), `false` (sombra) o `null` (sin dato), `cell_ground_m` real, `decimation` si se remuestreó y la procedencia. Sin pila precomputada responde 503: la API nunca corre el pipeline.
 
 **`GET /tiles/{site}/terrain.json` (lo escribe `pipeline/precompute.py`, lo lee `web/`).** Índice de las capas de relieve de un sitio; el frontend prende una capa solo si este archivo dice que está lista. Lo valida `TerrainIndexSchema` en `web/src/api/schemas.ts`.
 
@@ -143,7 +146,7 @@ Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
 
 - **Formato de tiles de salida**: resuelto para el relieve (2026-11-14): raster pre-teselado. El COG es la fuente de valores (point query, perfil) y lo que se dibuja son tiles XYZ PNG en `/data/output/<sitio>/<capa>/{z}/{x}/{y}.png`, que genera `pipeline/tiles.py` (lat/lon de Marte etiquetado como EPSG:4326 + `gdal2tiles --xyz`). `precompute.py` lo corre para pendiente y sombreado y anota zoom y límites en `terrain.json`. Las capas por clases (pendiente) se remuestrean con vecino más cercano en el pipeline y en el mapa, para no inventar colores fuera de la leyenda. Sigue abierto para sol y sombra: hoy son COG + `index.json` en `illumination/`, sin teselar.
 - **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa. Parcial (2026-11-14): sol y sombra se precomputan por sol, con fecha y cantidad de soles como parámetros (`--start`, `--sols`) y paso de 1 h LTST. Falta decidir qué soles usa la demo. Ver `docs/illumination.md`.
-- **Modelo de rutas**: qué pesa en el costo (pendiente, rugosidad, dosis, luz) y con qué datos se valida.
+- **Modelo de rutas**: resuelto en una primera versión (2026-11-14, PR #6), falta validarlo con datos reales. `api/planner.py` corre A* sobre `slope.tif` con costo = tiempo de caminata (0.8 m/s, largo sobre el terreno) × factor de pendiente × factor de sombra. Pendiente media por celda con los cortes del mapa: < 10° ×1, 10–20° ×1.5, 20–30° ×3, ≥ 30° no se pisa, sin dato ×2. Sombra ×2 según la banda de `shadow_hourly.tif` más cercana a la hora de llegada a cada celda; sin dato ×1, no cuenta como sombra. Cada tramo se resuelve en una ventana con margen (≥ 300 m) promediada a ≤ 300 × 300 celdas; un tramo de más de ~6 km × 6 km a 1 m se pide partir con una estación intermedia. Veredicto: terreno (`blocked`) → luz (salida antes del amanecer o llegada después del atardecer, horizonte plano) → reserva de O2/batería < 30 min. Todavía no pesan: rugosidad, dosis por terreno, temperatura.
 
 ---
 
