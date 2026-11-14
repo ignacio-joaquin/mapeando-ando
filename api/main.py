@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
-from .consumables import Step, SuitParams, battery_wh, o2_kg, pandolf_watts, route_consumption
+from .consumables import Step, SuitParams, route_consumption
 from .illumination import IlluminationNotReady, parse_utc, read_window, stack_for_tag
 from .planner import plan_route
 from .terrain import MARS_RADIUS_M, TerrainError, densify, haversine_m, sample_dtm
@@ -151,37 +151,16 @@ def _segments_from_request(req: ConsumablesRequest) -> tuple[list[list[Step]], l
 @app.post("/api/route/consumables")
 def route_consumables(req: ConsumablesRequest):
     """Consumibles del traje por tramo sobre una ruta ya armada (lista de puntos).
-    Cada tramo va de points[i] a points[i+1] y cada waypoint puede tener un `dwell_min`
-    que aumenta el tiempo y el consumo de O2 mientras el astronauta queda detenido.
-    Todo el resultado es MODELED.
+    Cada tramo va de points[i] a points[i+1]. Un punto intermedio puede traer `dwell_min`:
+    la permanencia se suma al tramo que llega a ese punto, igual que en /api/route. En la
+    salida y en la llegada final no cuenta. Todo el resultado es MODELED.
 
     Antes vivía en /api/route; se mudó para dejarle esa ruta al planificador 4D,
     cuyo contrato (docs/context.md §4) ya consume web/."""
     params = SuitParams(cargo_kg=req.cargo_kg, **req.suit.model_dump())
     segments, elev, elev_source = _segments_from_request(req)
-    result = route_consumption(segments, req.speed_m_s, params)
-
-    dwell_points = [p for p in req.points[1:-1] if p.dwell_min > 0]
-    dwell_total_s = sum(p.dwell_min * 60.0 for p in dwell_points)
-    if dwell_total_s > 0:
-        dwell_energy_j = pandolf_watts(0.0, 0.0, params) * dwell_total_s
-        dwell_o2_kg = o2_kg(dwell_energy_j, dwell_total_s, params)
-        dwell_battery_wh = battery_wh(dwell_total_s, params)
-        result["totals"]["duration_s"] += dwell_total_s
-        result["totals"]["o2_kg"] += dwell_o2_kg
-        result["totals"]["battery_wh"] += dwell_battery_wh
-        result["totals"]["o2_remaining_pct"] = 100.0 * (1 - result["totals"]["o2_kg"] / params.o2_capacity_kg)
-        result["totals"]["battery_remaining_pct"] = 100.0 * (1 - result["totals"]["battery_wh"] / params.battery_capacity_wh)
-        result["dwell_stops"] = [{
-            "index": i,
-            "lat": p.lat,
-            "lon": p.lon,
-            "dwell_min": p.dwell_min,
-            "duration_s": p.dwell_min * 60.0,
-            "o2_kg": o2_kg(pandolf_watts(0.0, 0.0, params) * p.dwell_min * 60.0, p.dwell_min * 60.0, params),
-            "battery_wh": battery_wh(p.dwell_min * 60.0, params),
-        } for i, p in enumerate(req.points[1:-1], start=1) if p.dwell_min > 0]
-
+    dwell_s = [p.dwell_min * 60.0 for p in req.points[1:-1]] + [0.0]
+    result = route_consumption(segments, req.speed_m_s, params, dwell_s)
     for i, seg in enumerate(result["segments"]):
         a, b = req.points[i], req.points[i + 1]
         seg["from"] = {"lat": a.lat, "lon": a.lon, "elev_m": elev[i]}
