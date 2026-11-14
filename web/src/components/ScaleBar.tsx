@@ -1,4 +1,4 @@
-import { MARS_RADIUS_M, MARS_RADIUS_PROJECTION_M } from "../mars/constants";
+import { MARS_RADIUS_M } from "../mars/constants";
 import { formatDistance, marsMetersPerPixel } from "../mars/geo";
 import { LOCAL_GEOMETRY } from "../domain/provenance";
 import { ProvenanceBadge } from "./ProvenanceBadge";
@@ -28,7 +28,7 @@ export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
   return (
     <div
       className="pointer-events-none select-none"
-      title={`Radio usado: ${(MARS_RADIUS_M / 1000).toFixed(1)} km (proyección del DTM: ${(MARS_RADIUS_PROJECTION_M / 1000).toFixed(2)} km)`}
+      title={`Esfera IAU Mars 2000, radio ${(MARS_RADIUS_M / 1000).toFixed(2)} km: el mismo de los DTM y de api/terrain.py`}
     >
       <div className="text-[10px] text-muted">{formatDistance(meters)}</div>
       <div

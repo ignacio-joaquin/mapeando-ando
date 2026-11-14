@@ -1,4 +1,4 @@
-import { MARS_RADIUS_M, MARS_RADIUS_PROJECTION_M } from "../mars/constants";
+import { MARS_RADIUS_M } from "../mars/constants";
 
 /**
  * Formato común de un número visible: valor + unidad + de dónde sale.
@@ -61,7 +61,7 @@ export const LOCAL_GEOMETRY: SourceInfo = {
   instrument: "geometría esférica",
   source: "Cálculo en el navegador (src/mars/geo.ts)",
   assumptions: [
-    `Esfera de radio ${km(MARS_RADIUS_M)} km; el DTM HiRISE usa ${km(MARS_RADIUS_PROJECTION_M)} km`,
+    `Esfera IAU Mars 2000 de radio ${km(MARS_RADIUS_M)} km, la misma de los DTM y de la API`,
     "Distancia sobre la superficie en línea recta, sin relieve",
   ],
 };
