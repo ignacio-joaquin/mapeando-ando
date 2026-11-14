@@ -14,6 +14,7 @@ Contexto, decisiones, datos y estado del proyecto: [BITACORA.md](BITACORA.md).
 | `pipeline/` | Python que descarga y precomputa (rasterio, numpy, spiceypy, GDAL). |
 | `api/` | FastAPI: estado, inventario de datos y, después, point queries y `/api/route`. |
 | `web/` | Frontend. Hoy es una página de estado; acá va el mapa (React + MapLibre). |
+| `docs/` | Documentación del proyecto. `context.md` es la fuente única de contexto para el equipo y para la IA. |
 | `deploy/` | Bootstrap del servidor, nginx, systemd y auto-deploy. |
 
 ## Servidor
@@ -51,6 +52,21 @@ Para dar de baja a alguien: `sudo mapeando-remove-member <usuario>`.
 Dentro del server, los datos están en `/data` y el repo en `/opt/mapeando-ando`. El bucket S3 se usa con `aws s3 ...` sin credenciales propias: el server tiene un rol IAM.
 
 **Session Manager (admin).** También se puede entrar sin SSH desde la consola de AWS: EC2 → la instancia → Connect → Session Manager.
+
+
+## Contexto y skills de IA (equipo)
+
+Todo el equipo trabaja con el mismo contexto y las mismas skills, versionados en el repo. No hay que instalar nada: al clonar ya están.
+
+| Archivo | Qué es |
+|---|---|
+| `docs/context.md` | **Fuente única de contexto**: core value, arquitectura, stack, reglas duras, cómo trabajamos, decisiones abiertas. Si cambia una decisión del proyecto, se edita acá en el mismo PR. |
+| `CLAUDE.md` | Lo que lee Claude Code en cada sesión: carga `docs/context.md` y dice qué skill usar en cada área. |
+| `.claude/skills/` | Skills propias (`mapeando-*`, `linear-task`) + skills curated de [Gentleman-Skills](https://github.com/Gentleman-Programming/Gentleman-Skills) copiadas. |
+| `.claude/settings.json` | Permisos del proyecto (incluye no pushear a `main`). |
+| `.claude/update-skills.sh` | Vuelve a traer las skills externas desde upstream. Se revisa el diff y va por PR. |
+
+Si usás otro asistente (Cursor, Copilot, Gemini CLI), apuntalo a `docs/context.md`: es el mismo contenido.
 
 ---
 Prototipo educativo, no software de vuelo.
