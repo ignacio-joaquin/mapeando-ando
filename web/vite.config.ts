@@ -13,6 +13,10 @@ export default defineConfig(({ mode }) => {
       react({ babel: { plugins: [["babel-plugin-react-compiler", {}]] } }),
       tailwindcss(),
     ],
+    // maplibre-gl 6 carga su worker con new URL(..., import.meta.url). Si Vite
+    // lo pre-empaqueta, el worker no queda en .vite/deps (504) y el mapa queda
+    // en negro con "Worker failed to load". Se sirve tal cual.
+    optimizeDeps: { exclude: ["maplibre-gl"] },
     server: target
       ? {
           proxy: {

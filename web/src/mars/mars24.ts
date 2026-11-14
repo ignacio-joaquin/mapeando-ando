@@ -108,3 +108,9 @@ export function seasonFromLs(ls: number): string {
   if (ls < 270) return "otoño norte";
   return "invierno norte";
 }
+
+/** LTST (horas, 0–24) en una longitud dada para un instante terrestre. */
+export function ltstAt(date: Date, lonEast: number): number {
+  const mt = marsTime(date);
+  return localTrueSolarTime(mt.mtc, lonEast, mt.eotHours);
+}

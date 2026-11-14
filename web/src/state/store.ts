@@ -22,6 +22,8 @@ interface AppState {
   readonly picked: LatLon | null;
   /** Instante del planificador. Entrada del reloj y del deslizador. */
   readonly instant: Date;
+  /** Vista actual del mapa (zoom y latitud del centro), para la barra de escala. */
+  readonly view: { readonly zoom: number; readonly lat: number } | null;
   setActiveSite: (id: string) => void;
   toggleLayer: (id: string) => void;
   setOpacity: (id: string, opacity: number) => void;
@@ -29,6 +31,7 @@ interface AppState {
   setCursor: (p: LatLon | null) => void;
   setPicked: (p: LatLon | null) => void;
   setInstant: (d: Date) => void;
+  setView: (v: { zoom: number; lat: number }) => void;
 }
 
 const initialLayers: Record<string, LayerState> = Object.fromEntries(
@@ -41,6 +44,7 @@ export const useStore = create<AppState>((set) => ({
   cursor: null,
   picked: null,
   instant: new Date(),
+  view: null,
   setActiveSite: (id) => set({ activeSiteId: id, picked: null }),
   toggleLayer: (id) =>
     set((s) => {
@@ -63,4 +67,5 @@ export const useStore = create<AppState>((set) => ({
   setCursor: (cursor) => set({ cursor }),
   setPicked: (picked) => set({ picked }),
   setInstant: (instant) => set({ instant }),
+  setView: (view) => set({ view }),
 }));

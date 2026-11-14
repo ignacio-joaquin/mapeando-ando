@@ -1,15 +1,19 @@
 import { useEffect, useRef } from "react";
 import {
   Map as MapLibreMap,
+  Marker,
   NavigationControl,
   GeoJSONSource,
+  type ExpressionSpecification,
   type MapMouseEvent,
   type StyleSpecification,
 } from "maplibre-gl";
-import type { Feature, Polygon } from "geojson";
+import type { Feature, FeatureCollection, LineString, Polygon } from "geojson";
 import { LAYERS, tileUrl } from "./layers";
 import { useStore } from "../state/store";
-import type { Bbox } from "../api/schemas";
+import type { Bbox, RouteLeg } from "../api/schemas";
+import { usePlan } from "../state/plan";
+import { LEG_CLASS_COLOR, waypointLabel } from "./route";
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -75,7 +79,18 @@ export function MapView({ center, bbox, siteId }: Props) {
     map.addControl(new NavigationControl({ showCompass: false }), "top-right");
     map.on("mousemove", (e: MapMouseEvent) => setCursor({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
     map.on("mouseout", () => setCursor(null));
-    map.on("click", (e: MapMouseEvent) => setPicked({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
+    // La barra de escala sigue al zoom real del mapa (y a la latitud del centro).
+    const syncView = () =>
+      useStore.getState().setView({ zoom: map.getZoom(), lat: map.getCenter().lat });
+    map.on("move", syncView);
+    map.on("load", syncView);
+    map.on("click", (e: MapMouseEvent) => {
+      const p = { lat: e.lngLat.lat, lon: e.lngLat.lng };
+      // El modo se lee al momento del clic: el handler se registra una sola vez.
+      const plan = usePlan.getState();
+      if (plan.clickMode === "add") plan.addPoint(p);
+      else setPicked(p);
+    });
     mapRef.current = map;
     return () => {
       map.remove();
@@ -148,5 +163,130 @@ export function MapView({ center, bbox, siteId }: Props) {
     else map.once("load", apply);
   }, [layers, siteId]);
 
-  return <div ref={containerRef} className="absolute inset-0" />;
+  // El contenedor de MapLibre va adentro de otro div: maplibre-gl.css le pone
+  // `position: relative` a .maplibregl-map y le gana al `absolute inset-0` de
+  // Tailwind (que va en @layer). Sin el wrapper el mapa mide 0 px de alto.
+  // 4. Marcadores de la travesía: salida (A), estaciones (1, 2…) y llegada (B).
+  //    Arrastrables; al soltar se mueve el punto en el store.
+  const waypoints = usePlan((s) => s.waypoints);
+  const openStop = usePlan((s) => s.openStop);
+  const markersRef = useRef(new Map<string, Marker>());
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const markers = markersRef.current;
+    const alive = new Set(waypoints.map((w) => w.id));
+    for (const [id, m] of markers) {
+      if (!alive.has(id)) {
+        m.remove();
+        markers.delete(id);
+      }
+    }
+    waypoints.forEach((w, i) => {
+      const label = waypointLabel(i, waypoints.length);
+      let m = markers.get(w.id);
+      if (!m) {
+        const el = document.createElement("button");
+        el.type = "button";
+        m = new Marker({ element: el, draggable: true })
+          .setLngLat([w.lon, w.lat])
+          .addTo(map);
+        m.on("dragend", () => {
+          const ll = m?.getLngLat();
+          if (ll) usePlan.getState().movePoint(w.id, { lat: ll.lat, lon: ll.lng });
+        });
+        el.addEventListener("click", (ev) => {
+          // Abrir la estación sin agregar un punto nuevo debajo.
+          ev.stopPropagation();
+          const idx = usePlan.getState().waypoints.findIndex((x) => x.id === w.id);
+          usePlan.getState().setOpenStop(idx);
+        });
+        markers.set(w.id, m);
+      }
+      m.setLngLat([w.lon, w.lat]);
+      const el = m.getElement();
+      el.textContent = label.short;
+      el.title = `${label.long}${w.task ? ` · ${w.task}` : ""}`;
+      el.setAttribute("aria-label", el.title);
+      el.className = markerClass(label.kind, openStop === i);
+    });
+  }, [waypoints, openStop]);
+
+  // 5. Línea de la ruta (id de contrato: route-line), coloreada por tramo.
+  const result = usePlan((s) => s.result);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data = legsToGeoJSON(result?.route.legs ?? []);
+      const src = map.getSource("route");
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+        return;
+      }
+      map.addSource("route", { type: "geojson", data });
+      const color = [
+        "match",
+        ["get", "class"],
+        ...Object.entries(LEG_CLASS_COLOR).flat(),
+        "#a39a8f",
+      ] as unknown as ExpressionSpecification;
+      map.addLayer({
+        id: "route-casing",
+        type: "line",
+        source: "route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#0b0a09", "line-width": 9 },
+      });
+      // Tramos evaluados: línea llena.
+      map.addLayer({
+        id: "route-line",
+        type: "line",
+        source: "route",
+        filter: ["!=", ["get", "class"], "unknown"],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": color, "line-width": 5 },
+      });
+      // Tramos sin evaluar (falta DTM): punteada, para que no se lea como "ok".
+      map.addLayer({
+        id: "route-line-unknown",
+        type: "line",
+        source: "route",
+        filter: ["==", ["get", "class"], "unknown"],
+        paint: { "line-color": color, "line-width": 4, "line-dasharray": [1.5, 1.2] },
+      });
+    };
+    if (map.isStyleLoaded()) apply();
+    else map.once("load", apply);
+  }, [result]);
+
+  return (
+    <div className="absolute inset-0">
+      <div ref={containerRef} className="h-full w-full" />
+    </div>
+  );
 }
+
+function legsToGeoJSON(legs: readonly RouteLeg[]): FeatureCollection<LineString> {
+  return {
+    type: "FeatureCollection",
+    features: legs.map((l) => ({
+      type: "Feature",
+      properties: { class: l.class, from: l.from, to: l.to },
+      geometry: { type: "LineString", coordinates: l.coordinates.map(([x, y]) => [x, y]) },
+    })),
+  };
+}
+
+function markerClass(kind: ReturnType<typeof waypointLabel>["kind"], open: boolean): string {
+  const base =
+    "grid size-7 cursor-grab place-items-center rounded-full border-2 text-xs font-bold shadow-lg active:cursor-grabbing";
+  const tone =
+    kind === "origin"
+      ? "border-fg bg-ok text-bg"
+      : kind === "destination"
+        ? "border-fg bg-alert text-bg"
+        : "border-fg bg-panel text-fg";
+  return `${base} ${tone} ${open ? "ring-4 ring-rust" : ""}`;
+}
+

@@ -5,6 +5,9 @@
  */
 import {
   HealthSchema,
+  RouteResponseSchema,
+  type RouteRequest,
+  type RouteResponse,
   SiteDetailSchema,
   SitesSchema,
   type Health,
@@ -12,6 +15,7 @@ import {
   type Sites,
 } from "./schemas";
 import { fixtureHealth, fixtureSiteDetail, fixtureSites } from "./fixtures";
+import { exampleRoute } from "./routeFixture";
 import type { ZodType } from "zod";
 
 /** `true` cuando no hay backend configurado: la UI tiene que avisarlo. */
@@ -61,4 +65,47 @@ export async function tileExists(url: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export interface PlannedRoute {
+  readonly route: RouteResponse;
+  /**
+   * true = la calculó el planificador de ejemplo del frontend, no el server.
+   * La UI tiene que decirlo al lado del veredicto.
+   */
+  readonly example: boolean;
+}
+
+/**
+ * Planifica una travesía. Sin backend, o mientras el server no tenga
+ * /api/route (404/405/501), usa el planificador de ejemplo: degradar, no romper.
+ * Cualquier otro error (contrato roto, 500) se muestra tal cual.
+ */
+export async function planRoute(req: RouteRequest, signal?: AbortSignal): Promise<PlannedRoute> {
+  if (usingFixtures) return { route: exampleRoute(req), example: true };
+
+  const res = await fetch("/api/route", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(req),
+    ...(signal ? { signal } : {}),
+  });
+  if (res.status === 404 || res.status === 405 || res.status === 501) {
+    return { route: exampleRoute(req), example: true };
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body: unknown = await res.json();
+      if (body && typeof body === "object" && "detail" in body) detail = `: ${String(body.detail)}`;
+    } catch {
+      // sin cuerpo JSON
+    }
+    throw new Error(`/api/route respondió ${res.status}${detail}`);
+  }
+  const parsed = RouteResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error(`/api/route no cumple el contrato: ${parsed.error.message}`);
+  }
+  return { route: parsed.data, example: false };
 }

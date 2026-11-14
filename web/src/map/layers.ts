@@ -6,6 +6,8 @@
 
 export type LayerGroup = "relieve" | "supervivencia";
 
+import type { SourceInfo } from "../domain/provenance";
+
 export interface LegendStop {
   readonly color: string;
   readonly label: string;
@@ -18,8 +20,7 @@ export interface LayerSpec {
   /** Unidad del valor que representa, para la leyenda y el inspector. */
   readonly unit: string | null;
   /** Procedencia: va en el badge. Sin esto la capa no se muestra. */
-  readonly source: { readonly mission: string; readonly instrument: string };
-  readonly resolution: string;
+  readonly source: SourceInfo;
   readonly legend: readonly LegendStop[];
   /** Plantilla de tiles, relativa. `{site}` se reemplaza por el id del sitio. */
   readonly tiles: string;
@@ -33,8 +34,13 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Ortoimagen",
     group: "relieve",
     unit: null,
-    source: { mission: "MRO", instrument: "HiRISE" },
-    resolution: "25 cm/px",
+    source: {
+      provenance: "OBSERVED",
+      mission: "MRO",
+      instrument: "HiRISE",
+      resolution: "25 cm/px",
+      source: "Ortomosaico HiRISE (USGS)",
+    },
     legend: [{ color: "#8a7a6a", label: "imagen real, sin realce" }],
     tiles: "/tiles/{site}/ortho/{z}/{x}/{y}.png",
     kind: "raster",
@@ -45,8 +51,14 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Hillshade",
     group: "relieve",
     unit: null,
-    source: { mission: "MRO", instrument: "HiRISE DTM" },
-    resolution: "1 m/px",
+    source: {
+      provenance: "DERIVED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "1 m/px",
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+      assumptions: ["Iluminación sintética fija: no es la luz real del momento"],
+    },
     legend: [
       { color: "#2a2520", label: "sombra" },
       { color: "#d8cec2", label: "luz" },
@@ -60,8 +72,13 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Curvas de nivel",
     group: "relieve",
     unit: "m",
-    source: { mission: "MRO", instrument: "HiRISE DTM" },
-    resolution: "1 m/px",
+    source: {
+      provenance: "DERIVED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "1 m/px",
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+    },
     legend: [{ color: "#e0a24a", label: "equidistancia 10 m" }],
     tiles: "/tiles/{site}/contours.geojson",
     kind: "vector",
@@ -72,8 +89,13 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Pendiente",
     group: "relieve",
     unit: "°",
-    source: { mission: "MRO", instrument: "HiRISE DTM" },
-    resolution: "1 m/px",
+    source: {
+      provenance: "DERIVED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "1 m/px",
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+    },
     legend: [
       { color: "#2f7d4f", label: "0–10° transitable" },
       { color: "#e0a24a", label: "10–20° con cuidado" },
@@ -89,8 +111,14 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Peligro",
     group: "supervivencia",
     unit: "índice 0–1",
-    source: { mission: "MRO", instrument: "HiRISE DTM + ortho" },
-    resolution: "1 m/px",
+    source: {
+      provenance: "MODELED",
+      mission: "MRO",
+      instrument: "HiRISE DTM + ortho",
+      resolution: "1 m/px",
+      source: "Índice del pipeline a partir del DTM y la ortoimagen HiRISE",
+      assumptions: ["Índice propio, no una medición: combina terreno con pesos definidos por el equipo"],
+    },
     legend: [
       { color: "#2f7d4f", label: "bajo" },
       { color: "#e0a24a", label: "medio" },
@@ -105,8 +133,14 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Refugio",
     group: "supervivencia",
     unit: "índice 0–1",
-    source: { mission: "MRO", instrument: "HiRISE DTM" },
-    resolution: "1 m/px",
+    source: {
+      provenance: "MODELED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "1 m/px",
+      source: "Índice del pipeline a partir del DTM HiRISE",
+      assumptions: ["Índice propio, no una medición"],
+    },
     legend: [
       { color: "#5fbf86", label: "protegido" },
       { color: "#3a342e", label: "expuesto" },
@@ -120,8 +154,17 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Dosis",
     group: "supervivencia",
     unit: "µSv/h",
-    source: { mission: "MSL", instrument: "RAD" },
-    resolution: "derivada, 200 m/px",
+    source: {
+      provenance: "MODELED",
+      mission: "MSL",
+      instrument: "RAD",
+      resolution: "derivada, 200 m/px",
+      source: "Base medida por MSL RAD en Gale (Hassler et al. 2014, reference/rad_surface_dose.json)",
+      assumptions: [
+        "Valor de base medido en Gale, 2012–2013; se extrapola al terreno",
+        "Varía con el ciclo solar, la presión estacional y eventos solares",
+      ],
+    },
     legend: [
       { color: "#2f7d4f", label: "nominal" },
       { color: "#e0a24a", label: "elevada" },
@@ -136,8 +179,14 @@ export const LAYERS: readonly LayerSpec[] = [
     label: "Sombras",
     group: "supervivencia",
     unit: "hora solar local",
-    source: { mission: "MRO", instrument: "HiRISE DTM + SPICE" },
-    resolution: "1 m/px",
+    source: {
+      provenance: "MODELED",
+      mission: "MRO",
+      instrument: "HiRISE DTM + SPICE",
+      resolution: "1 m/px",
+      source: "Geometría solar (SPICE) sobre el DTM HiRISE",
+      assumptions: ["Solo geometría: no considera polvo ni atmósfera"],
+    },
     legend: [
       { color: "#161412", label: "en sombra" },
       { color: "#e0a24a", label: "al sol" },

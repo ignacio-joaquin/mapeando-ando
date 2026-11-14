@@ -38,3 +38,13 @@ export function formatLatLon({ lat, lon }: LatLon): string {
   const ew = lon >= 0 ? "E" : "W";
   return `${Math.abs(lat).toFixed(4)}° ${ns}, ${Math.abs(lon).toFixed(4)}° ${ew}`;
 }
+
+/** Rumbo inicial (0–360°, 0 = norte, 90 = este) de a hacia b, sobre la esfera. */
+export function marsBearingDeg(a: LatLon, b: LatLon): number {
+  const φ1 = rad(a.lat);
+  const φ2 = rad(b.lat);
+  const Δλ = rad(b.lon - a.lon);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}

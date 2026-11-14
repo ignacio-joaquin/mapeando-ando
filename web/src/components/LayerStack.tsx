@@ -1,6 +1,6 @@
 import { LAYERS, type LayerGroup } from "../map/layers";
 import { useStore } from "../state/store";
-import { SourceBadge } from "./SourceBadge";
+import { ProvenanceBadge } from "./ProvenanceBadge";
 
 const GROUP_LABEL: Record<LayerGroup, string> = {
   relieve: "Relieve",
@@ -9,6 +9,7 @@ const GROUP_LABEL: Record<LayerGroup, string> = {
 
 /**
  * Stack de capas: toggle, opacidad, leyenda con unidad y badge de procedencia.
+ * El badge de la tarjeta cubre los números de la leyenda (umbrales, equidistancia).
  * Una capa sin salida del pipeline no se puede prender y lo dice.
  */
 export function LayerStack() {
@@ -31,10 +32,14 @@ export function LayerStack() {
               return (
                 <li
                   key={spec.id}
-                  className={disabled ? "rounded border border-line p-2 opacity-60" : "rounded border border-line p-2"}
+                  // Sin opacity en el <li>: atraparía el tooltip del badge. El z al
+                  // hover/foco deja el tooltip por encima de la tarjeta siguiente.
+                  className="relative rounded border border-line p-2 focus-within:z-20 hover:z-20"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <label className="flex items-center gap-2 text-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <label
+                      className={`flex items-center gap-2 text-sm ${disabled ? "opacity-60" : ""}`}
+                    >
                       <input
                         type="checkbox"
                         checked={state.visible && state.available}
@@ -47,11 +52,7 @@ export function LayerStack() {
                         <span className="text-xs text-muted">({spec.unit})</span>
                       ) : null}
                     </label>
-                    <SourceBadge
-                      mission={spec.source.mission}
-                      instrument={spec.source.instrument}
-                      resolution={spec.resolution}
-                    />
+                    <ProvenanceBadge source={spec.source} />
                   </div>
 
                   {disabled ? (
@@ -77,7 +78,13 @@ export function LayerStack() {
                     </div>
                   )}
 
-                  <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                  {spec.source.resolution ? (
+                    <p className="mt-1 text-[10px] text-muted">{spec.source.resolution}</p>
+                  ) : null}
+
+                  <ul
+                    className={`mt-2 flex flex-wrap gap-x-3 gap-y-1 ${disabled ? "opacity-60" : ""}`}
+                  >
                     {spec.legend.map((stop) => (
                       <li
                         key={stop.label}

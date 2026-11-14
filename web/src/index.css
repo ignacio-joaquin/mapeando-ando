@@ -10,6 +10,12 @@
   --color-ok: #5fbf86;
   --color-warn: #e0a24a;
   --color-alert: #e0564a;
+
+  /* Procedencia del dato (badge). A propósito fuera de la paleta de
+     seguridad ok/warn/alert: el tipo de fuente no es un nivel de riesgo. */
+  --color-observed: #6cb8e0;
+  --color-derived: #a993e8;
+  --color-modeled: #e08cc0;
 }
 
 html, body, #root { height: 100%; margin: 0; }
