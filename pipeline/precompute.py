@@ -283,6 +283,11 @@ def main(argv=None):
     ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
                     help="tope de zoom al teselar; por defecto lo deduce gdal2tiles del tamaño "
                          "del píxel. Para la ortoimagen conviene ponerlo")
+    ap.add_argument("--ortho-max-zoom", type=int, default=17, dest="ortho_max_zoom",
+                    help="tope de zoom solo para la ortoimagen. Default 17 (~0,64 m/px en el "
+                         "ecuador marciano; 18 da ~0,32 m/px, cerca de los 25 cm nativos, pero "
+                         "son ~4 veces más tiles). Va aparte de --max-zoom para no teselar el "
+                         "relieve a un zoom que su píxel de 1 m no aprovecha")
     args = ap.parse_args(argv)
 
     t0 = time.time()
@@ -452,7 +457,7 @@ def main(argv=None):
             bbox = site["bbox"]
             te = [bbox["lon_min"], bbox["lat_min"], bbox["lon_max"], bbox["lat_max"]]
             info = tiles.raster_a_tiles(Path(find_input(site, "ortho")), out / "ortho",
-                                        max_zoom=args.max_zoom, te=te)
+                                        max_zoom=args.ortho_max_zoom, te=te)
             layers[ORTHO_LAYER].update(status="ok", tiles={"status": "ok", **info})
         except Exception as e:
             failed = True
