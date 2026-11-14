@@ -38,12 +38,11 @@ journalctl -u mapeando-download -f             # ver el progreso
 
 ## Acceso al servidor
 
-**SSH (equipo).** El puerto 22 está abierto solo con clave pública: sin contraseña, sin login de root y con fail2ban. Cada integrante tiene su propio usuario, con sudo.
+**SSH (equipo).** Cada integrante tiene su propio usuario, con sudo. El admin pasa usuario y contraseña inicial por privado; en el primer login se pide cambiarla. Hay fail2ban: 3 intentos fallidos bloquean la IP 24 h.
 
-1. Generá tu clave si no tenés: `ssh-keygen -t ed25519`
-2. Pasale al admin el contenido de `~/.ssh/id_ed25519.pub` (la clave **pública**; la privada no se comparte nunca).
-3. El admin te da de alta en el server: `sudo mapeando-add-member <usuario> "<clave pública>"`
-4. Entrá con `ssh <usuario>@<IP del server>`. La IP la pasa el admin por el canal del equipo; no se publica acá.
+- Entrar: `ssh <usuario>@<IP del server>`. La IP la pasa el admin; no se publica acá.
+- Recomendado: subir tu clave pública con `ssh-copy-id <usuario>@<IP>`, para no depender de la contraseña.
+- Alta de alguien nuevo por clave: `sudo mapeando-add-member <usuario> "<clave pública>"`
 
 Para dar de baja a alguien: `sudo mapeando-remove-member <usuario>`.
 
