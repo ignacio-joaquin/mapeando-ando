@@ -208,11 +208,13 @@ def test_full_run(data_dir):
     out = data_dir / "output" / "jezero"
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
-        ["contours.geojson", "dtm.tif", "hillshade", "hillshade.tif", "slope", "slope.tif", "terrain.json"]
+        ["contours.geojson", "coverage.geojson", "dtm.tif", "hillshade", "hillshade.tif", "slope",
+         "slope.tif", "terrain.json"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
-        "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok"}
+        "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
+        "coverage": "ok"}
     assert index["radius_m"] == R
     assert index["source"]["mission"] == "MRO HiRISE"
     assert any("0.948" in w for w in index["warnings"])  # píxel anisótropo declarado
@@ -301,3 +303,63 @@ def test_ortho_sin_descargar_no_frena_el_relieve(data_dir):
     assert index["layers"]["base-ortho"]["status"] == "error"
     assert index["layers"]["relief-slope"]["status"] == "ok"
     assert index["layers"]["relief-hillshade"]["tiles"]["status"] == "ok"
+
+
+# ------------------------------------------------------------------ cobertura
+
+def point_in_ring(lon, lat, ring):
+    inside = False
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+        if (y1 > lat) != (y2 > lat) and lon < (x2 - x1) * (lat - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
+def covered(fc, lon, lat):
+    """Igual que web/src/map/coverage.ts: adentro del anillo exterior y fuera de los huecos."""
+    for f in fc["features"]:
+        rings = f["geometry"]["coordinates"]
+        if point_in_ring(lon, lat, rings[0]) and not any(point_in_ring(lon, lat, h) for h in rings[1:]):
+            return True
+    return False
+
+
+class TestCoverage:
+    def test_full_dtm_is_one_polygon_in_lonlat(self, tmp_path):
+        dtm = write_dtm(tmp_path / "dtm.tif", np.full((100, 100), -2500.0))
+        fc = precompute.coverage_geojson(*precompute.coverage_mask(dtm, cell=10))
+        assert len(fc["features"]) == 1
+        ring = fc["features"][0]["geometry"]["coordinates"][0]
+        lons, lats = [c[0] for c in ring], [c[1] for c in ring]
+        assert min(lons) == pytest.approx(LON0) and max(lats) == pytest.approx(LAT0)
+        assert max(lons) == pytest.approx(LON0 + math.degrees(100 / R), abs=1e-6)
+        assert covered(fc, LON0 + math.degrees(50 / R), LAT0 - math.degrees(50 / R))
+        assert not covered(fc, LON0 - 0.001, LAT0 - math.degrees(50 / R))  # al oeste del DTM
+
+    def test_hole_is_left_out(self, tmp_path):
+        z = np.full((100, 100), -2500.0)
+        z[40:60, 40:60] = NODATA
+        dtm = write_dtm(tmp_path / "dtm.tif", z)
+        mask, transform, crs = precompute.coverage_mask(dtm, cell=10)
+        assert mask[4:6, 4:6].sum() == 0 and mask.sum() == 100 - 4
+        fc = precompute.coverage_geojson(mask, transform, crs)
+        assert not covered(fc, LON0 + math.degrees(50 / R), LAT0 - math.degrees(50 / R))
+        assert covered(fc, LON0 + math.degrees(15 / R), LAT0 - math.degrees(15 / R))
+
+    def test_one_bad_pixel_drops_the_whole_cell(self, tmp_path):
+        z = np.full((30, 30), -2500.0)
+        z[12, 17] = NODATA
+        mask, _, _ = precompute.coverage_mask(write_dtm(tmp_path / "dtm.tif", z), cell=10)
+        assert mask.tolist() == [[1, 1, 1], [1, 0, 1], [1, 1, 1]]
+
+    def test_partial_edge_cells_are_out(self, tmp_path):
+        mask, _, _ = precompute.coverage_mask(write_dtm(tmp_path / "dtm.tif", np.full((25, 25), -2500.0)), cell=10)
+        assert mask.tolist() == [[1, 1, 0], [1, 1, 0], [0, 0, 0]]
+
+    def test_strips_match_one_pass(self, tmp_path, monkeypatch):
+        z = crater(n=120)
+        dtm = write_dtm(tmp_path / "dtm.tif", z)
+        whole, _, _ = precompute.coverage_mask(dtm, cell=10)
+        monkeypatch.setattr(precompute, "STRIP_PX", 120 * 10 * 2)  # dos filas de celdas por franja
+        strips, _, _ = precompute.coverage_mask(dtm, cell=10)
+        assert (whole == strips).all() and whole[1, 1] == 0  # el hueco del cráter, en [10:20, 10:20]
