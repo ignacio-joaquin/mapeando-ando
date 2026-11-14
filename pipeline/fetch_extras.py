@@ -6,7 +6,7 @@
 - Modelo de campo magnético cortical de Langlais et al. 2019 (Zenodo) -> dato geofísico de Gale.
 - SWIM 2.0: composites globales de hielo subsuperficial (opcional, Could).
 
-Uso: python3 pipeline/fetch_extras.py [--sync]   (DATA_DIR, BUCKET y NASA_API_KEY opcionales)
+Uso: python3 pipeline/fetch_extras.py [--sync]   (DATA_DIR y BUCKET opcionales)
 """
 import datetime as dt
 import json
@@ -20,7 +20,6 @@ from pathlib import Path
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 RAW = DATA_DIR / "raw"
 ROOT = Path(__file__).resolve().parent.parent
-NASA_KEY = os.environ.get("NASA_API_KEY", "DEMO_KEY")
 
 
 def log(m):
@@ -73,8 +72,9 @@ def donki():
     sims, mars = [], []
     while start <= end:
         stop = min(start + dt.timedelta(days=59), end)
-        url = ("https://api.nasa.gov/DONKI/WSAEnlilSimulations"
-               f"?startDate={start}&endDate={stop}&api_key={NASA_KEY}")
+        # Endpoint directo del CCMC: mismos datos que api.nasa.gov, sin clave ni límite de DEMO_KEY
+        url = ("https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/WSAEnlilSimulations"
+               f"?startDate={start}&endDate={stop}")
         page = []
         for attempt in range(6):  # DEMO_KEY tiene límite de tasa: reintento con espera creciente
             try:
