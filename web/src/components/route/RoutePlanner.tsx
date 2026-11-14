@@ -144,6 +144,13 @@ export function RoutePlanner() {
         <>
           <VerdictCard verdict={route.verdict} />
           {result?.example ? <ExampleNotice /> : null}
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="rounded border border-line px-2 py-1.5 text-xs text-fg hover:border-rust"
+          >
+            Imprimir tira de la travesía
+          </button>
         </>
       ) : waypoints.length === 1 ? (
         <Hint>Ahora hacé clic donde querés llegar (B).</Hint>

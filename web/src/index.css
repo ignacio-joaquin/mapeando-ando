@@ -25,3 +25,13 @@ body {
   font-family: system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Impresión: solo la tira (CuffChecklist), en blanco y negro, una página. */
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+@media print {
+  html, body, #root { height: auto; }
+  body { background: #fff; color: #000; }
+}
