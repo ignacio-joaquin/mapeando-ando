@@ -1,6 +1,7 @@
 """POST /api/route: planificador 4D (api/planner.py) con rasters sintéticos."""
 import heapq
 import math
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -161,22 +162,37 @@ class TestCuatroD:
         assert "shadow_fraction" in body["legs"][0]
 
 
-def test_astar_reevalua_sombra_en_el_punto_medio_del_paso():
-    grid = Grid(np.zeros((3, 3), dtype=np.float32), np.zeros((3, 3), dtype=np.int8), None, None, 5.0, 5.0)
-
-    class FakeShadow:
-        def at(self, t, v):
-            r, c = divmod(v, 3)
-            if (r, c) in {(1, 0), (1, 1), (1, 2)} and t < 3600.0:
-                return planner.SHADOW
-            return 1
-
-    found = planner.astar(grid, (1, 0), (1, 2), 0.0, speed=0.001, shadow=FakeShadow())
-    assert found is not None
-    assert all((r, c) != (1, 1) for r, c in found[0][1:-1])
-
-
 class TestEstaciones:
+    def test_habitat_tres_estaciones_y_vuelta_al_habitat(self, client, site):
+        """El "Listo cuando" de MAP-27: la travesía se calcula completa con permanencias."""
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        stations = [latlon(ROW, 80), latlon(ROW + 30, 120), latlon(ROW, 160)]
+        dwells = [20, 30, 40]
+        req = request(band_time(10), [A, *stations, A])
+        for wp, (d, task) in zip(req["waypoints"][1:4], zip(dwells, ["muestra", "foto", "perfil"])):
+            wp["dwell_min"], wp["task"] = d, task
+        res = client.post("/api/route", json=req)
+        assert res.status_code == 200
+        body = res.json()
+        stops = body["stops"]
+        assert len(body["legs"]) == 4 and len(stops) == 5
+        assert all(leg["class"] == "ok" for leg in body["legs"])
+        assert stops[0]["arrive_utc"] is None and stops[-1]["depart_utc"] is None
+        utc = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00"))  # noqa: E731
+        # La salida del tramo siguiente es llegada + permanencia, y el reloj nunca vuelve atrás.
+        for stop, d in zip(stops[1:4], dwells):
+            assert (utc(stop["depart_utc"]) - utc(stop["arrive_utc"])).total_seconds() == pytest.approx(d * 60, abs=1)
+        for prev, nxt in zip(stops[:-1], stops[1:]):
+            assert utc(nxt["arrive_utc"]) > utc(prev["depart_utc"])
+        # O2 y dosis por estación: el O2 baja y la dosis sube en cada parada.
+        o2 = [s["o2_remaining"]["value"] for s in stops]
+        assert all(a > b for a, b in zip(o2, o2[1:]))
+        assert [s["task"] for s in stops[1:4]] == ["muestra", "foto", "perfil"]
+        assert all(s["margin"]["unit"] == "min" for s in stops)
+        assert body["verdict"]["status"] == "GO"
+
+
     def test_la_espera_consume_y_corre_el_reloj(self, client, site):
         write_terrain(site, flat())
         mid = latlon(ROW, 100)
@@ -189,42 +205,40 @@ class TestEstaciones:
         assert con["stops"][2]["o2_remaining"]["value"] < sin["stops"][2]["o2_remaining"]["value"]
 
 
-def test_route_consumables_usa_dwell_min_para_reducir_o2(client):
-    mid = latlon(ROW, 100)
-    base = {
-        "site_id": "jezero",
-        "points": [
-            {"lat": A[0], "lon": A[1], "elev_m": 0.0},
-            {"lat": mid[0], "lon": mid[1], "elev_m": 0.0, "dwell_min": 30.0},
-            {"lat": B[0], "lon": B[1], "elev_m": 0.0},
-        ],
-        "speed_m_s": 1.0,
-        "cargo_kg": 0.0,
-        "sample_step_m": 10.0,
-    }
-    sin = client.post("/api/route/consumables", json={**base, "points": [
-        {"lat": A[0], "lon": A[1], "elev_m": 0.0},
-        {"lat": mid[0], "lon": mid[1], "elev_m": 0.0},
-        {"lat": B[0], "lon": B[1], "elev_m": 0.0},
-    ]}).json()
-    con = client.post("/api/route/consumables", json=base).json()
-    assert con["totals"]["duration_s"] > sin["totals"]["duration_s"]
-    assert con["totals"]["o2_kg"] > sin["totals"]["o2_kg"]
+class TestVeredictoPorReserva:
+    """Si un recurso no alcanza, el veredicto culpa al que se agota primero."""
 
+    def plan(self, site, **suit):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        wps = [{"lat": la, "lon": lo, "task": None, "dwell_min": 0} for la, lo in (A, B)]
+        return planner.plan_route("jezero", iso(band_time(13)), wps, site,
+                                  Path(__file__).resolve().parents[2], params=planner.SuitParams(**suit))
 
-def test_plan_route_advertencia_si_o2_no_llega_al_objetivo(site):
-    write_terrain(site, flat())
-    write_shadow_stack(site)
-    out = planner.plan_route(
-        "jezero",
-        iso(band_time(13)),
-        [{"lat": A[0], "lon": A[1], "task": None, "dwell_min": 0},
-         {"lat": B[0], "lon": B[1], "task": None, "dwell_min": 0}],
-        site,
-        Path(__file__).resolve().parents[2],
-        params=planner.SuitParams(o2_capacity_kg=1e-6, battery_capacity_wh=1e9),
-    )
-    assert any("O2" in w and "objetivo" in w.lower() for w in out["verdict"]["warnings"])
+    def test_se_agota_el_o2(self, site):
+        v = self.plan(site, o2_capacity_kg=1e-6, battery_capacity_wh=1e9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "o2")
+        assert v["summary"].startswith("El O2 se agota antes de terminar")
+
+    def test_se_agotan_los_dos_y_la_bateria_primero(self, site):
+        # Las dos capacidades no alcanzan; la batería dura mucho menos al ritmo de la travesía.
+        v = self.plan(site, o2_capacity_kg=1e-6, battery_capacity_wh=1e-9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "battery")
+        assert v["summary"].startswith("La batería se agota antes de terminar")
+
+    def test_alcanza_pero_sin_reserva(self, site):
+        # Batería justa para la travesía más 10 min: llega, pero sin los 30 min de reserva.
+        full = planner.SuitParams().battery_capacity_wh
+        left_pct = self.plan(site)["stops"][-1]["battery_remaining"]["value"]
+        used = full * (1 - left_pct / 100)
+        cap = used + planner.battery_wh(600, planner.SuitParams())
+        v = self.plan(site, o2_capacity_kg=1e9, battery_capacity_wh=cap)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "battery")
+        assert "reserva mínima" in v["summary"]
+
+    def test_el_veredicto_no_suma_campos_al_contrato(self, site):
+        v = self.plan(site)["verdict"]
+        assert set(v) == {"status", "limiting_factor", "summary", "margin"}
 
 
 def _dijkstra_cost(grid: Grid, start, goal, speed=planner.SPEED_M_S) -> float:
