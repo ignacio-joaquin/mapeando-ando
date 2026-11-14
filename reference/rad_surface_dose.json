@@ -1,0 +1,10 @@
+{
+  "desc": "Dosis de radiación en la superficie de Marte medida por MSL RAD en el cráter Gale. Valores de referencia para la capa de dosis (MODELED a partir de esta base).",
+  "mission": "MSL Curiosity RAD",
+  "provenance": "MEASURED (valor de base); todo lo derivado por terreno/sky-view es MODELED",
+  "absorbed_dose_mGy_per_day": {"value": 0.210, "uncertainty": 0.040},
+  "dose_equivalent_mSv_per_day": {"value": 0.64, "uncertainty": 0.12},
+  "period": "Agosto 2012 - junio 2013 (primeros ~300 soles)",
+  "reference": "Hassler, D. M. et al. (2014). Mars' Surface Radiation Environment Measured with the Mars Science Laboratory's Curiosity Rover. Science 343(6169), 1244797. doi:10.1126/science.1244797",
+  "notes": "La dosis varía con el ciclo solar, la presión atmosférica (estacional) y eventos de partículas solares. Usar como orden de magnitud y mostrar badge MODELED en la capa."
+}
