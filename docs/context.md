@@ -102,7 +102,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 }
 ```
 
-- `provenance`: `OBSERVED` (medido por un instrumento), `DERIVED` (calculado de forma determinista desde un dato observado) o `MODELED` (sale de un modelo con supuestos; debería traer `assumptions`).
+- `provenance`: `OBSERVED` (medido por un instrumento), `DERIVED` (calculado de forma determinista desde un dato observado), `MODELED` (sale de un modelo con supuestos; debería traer `assumptions`) o `ASSUMED` (valor elegido por el equipo, sin fuente citable todavía; hoy, los límites duros del veredicto).
 - `value: null` = el dato falta. Nunca se rellena.
 - `mission` / `instrument` en `null` solo para cálculos locales sin fuente de misión.
 - `resolution`, `source` y `assumptions` son opcionales y van al tooltip del badge.
@@ -115,7 +115,12 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
   - `legs[]`: `from`, `to`, `coordinates` (`[lon, lat]`), `class` (`ok` | `caution` | `limit` | `blocked` | `unknown`) y `distance`, `duration`, `bearing`, `max_slope` como valor con procedencia. `unknown` = no se pudo evaluar el terreno; se dibuja punteado, nunca como `ok`. Opcional: `shadow_fraction` (% de la ruta en sombra a la hora de paso), solo si hay pila de sombras para ese sol.
   - `profile` (opcional): perfil de elevación, igual que en `/api/route/consumables`. Solo viene si todos los puntos de la ruta tienen cota del DTM.
   - `stops[]`: `index`, `lat`, `lon`, `task`, `arrive_utc`, `depart_utc` (null en la salida y en la llegada final, respectivamente) y `o2_remaining`, `battery_remaining`, `dose_accumulated`, `margin` (min) como valor con procedencia.
-  - `verdict`: `status` (`GO` | `NO_GO`), `limiting_factor` (`o2` | `battery` | `dose` | `daylight` | `terrain` | null), `summary` (una frase en español) y `margin` (min).
+  - `verdict`: `status` (`GO` | `CAUTION` | `NO_GO`), `limiting_factor` (`o2` | `battery` | `dose` | `daylight` | `terrain` | `contact` | `calories` | null), `summary` (una frase en español) y `margin` (min). Además, opcionales (el planificador de ejemplo no los manda):
+    - `score`: valor con procedencia, 0–100 pts.
+    - `limits[]`: por límite duro, `id`, `label`, `status` (`ok` | `broken` | `not_evaluated` | `undefined`), `complete`, `note`, `margin` (1 − usado/límite, recortado a −1), y `used` y `limit` como valores con procedencia (`limit` va `ASSUMED`).
+    - `robustness`: `{ passed, evaluated, scenarios: [{ id, label, status: pass | fail | not_evaluated, limiting_factor, score, note }] }`.
+  - `cost` (opcional): `{ formula, unit, base_minutes, total_minutes, factors: [{ id, label, weight, active, minutes, note }] }`, el desglose del costo del A\* por factor.
+  - Modelo, valores y pesos: `docs/seguridad.md`.
 - Sitio desconocido o sin manifest: **404**, y el frontend usa el planificador de ejemplo (`web/src/api/routeFixture.ts`) y lo avisa en pantalla (también ante 405/501). Con datos a medias responde 200: los tramos que no se pudieron evaluar van en línea recta como `unknown` y el `summary` dice qué faltó ("Ojo: …").
 
 **`POST /api/illumination/window` (lo lee quien depura la pila de sombras; hoy no lo consume `web/`).** Sol/sombra precomputados en el rectángulo entre dos puntos, para una hora. Entra `{ site_id, sol_tag?, ltst | band, p1: {lat, lon}, p2: {lat, lon} }`; `sol_tag` es la carpeta del sol (`AAAAMMDDTHHMMZ`, default: el último). Sale `values[fila][col]` con `true` (sol), `false` (sombra) o `null` (sin dato), `cell_ground_m` real, `decimation` si se remuestreó y la procedencia. Sin pila precomputada responde 503: la API nunca corre el pipeline.
@@ -146,7 +151,14 @@ Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
 
 - **Formato de tiles de salida**: resuelto para el relieve (2026-11-14): raster pre-teselado. El COG es la fuente de valores (point query, perfil) y lo que se dibuja son tiles XYZ PNG en `/data/output/<sitio>/<capa>/{z}/{x}/{y}.png`, que genera `pipeline/tiles.py` (lat/lon de Marte etiquetado como EPSG:4326 + `gdal2tiles --xyz`). `precompute.py` lo corre para pendiente y sombreado y anota zoom y límites en `terrain.json`. Las capas por clases (pendiente) se remuestrean con vecino más cercano en el pipeline y en el mapa, para no inventar colores fuera de la leyenda. Sigue abierto para sol y sombra: hoy son COG + `index.json` en `illumination/`, sin teselar.
 - **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa. Parcial (2026-11-14): sol y sombra se precomputan por sol, con fecha y cantidad de soles como parámetros (`--start`, `--sols`) y paso de 1 h LTST. Falta decidir qué soles usa la demo. Ver `docs/illumination.md`.
-- **Modelo de rutas**: resuelto en una primera versión (2026-11-14, PR #6), falta validarlo con datos reales. `api/planner.py` corre A* sobre `slope.tif` con costo = tiempo de caminata (0.8 m/s, largo sobre el terreno) × factor de pendiente × factor de sombra. Pendiente media por celda con los cortes del mapa: < 10° ×1, 10–20° ×1.5, 20–30° ×3, ≥ 30° no se pisa, sin dato ×2. Sombra ×2 según la banda de `shadow_hourly.tif` más cercana a la hora de llegada a cada celda; sin dato ×1, no cuenta como sombra. Cada tramo se resuelve en una ventana con margen (≥ 300 m) promediada a ≤ 300 × 300 celdas; un tramo de más de ~6 km × 6 km a 1 m se pide partir con una estación intermedia. Veredicto: terreno (`blocked`) → luz (salida antes del amanecer o llegada después del atardecer, horizonte plano) → reserva de O2/batería < 30 min. Todavía no pesan: rugosidad, dosis por terreno, temperatura.
+- **Modelo de rutas**: resuelto en una segunda versión (2026-11-14), falta validarlo con datos reales. El detalle está en `docs/seguridad.md`.
+  - **A\*** (`api/planner.py`) sobre `slope.tif`, con costo = Σ Δt · (1 + Σ w_k · r_k(celda, hora de llegada)).
+  - **Factores activos:** pendiente (w = 2), sombra según la banda de `shadow_hourly.tif` más cercana a la hora de llegada (w = 1) y sin línea de vista al hábitat (w = 1).
+  - **Factores con peso pero sin capa todavía:** rugosidad, suelo suelto y radiación por terreno.
+  - **Celdas que no se pisan:** las que superan la pendiente máxima (límite duro, 25°).
+  - **Ventana:** cada tramo se resuelve con margen (≥ 300 m), promediado a ≤ 300 × 300 celdas.
+  - **Veredicto** (`api/safety.py`): límites duros sin compensación (pendiente, reserva de O2 y batería, regreso antes del atardecer, minutos sin contacto, dosis, calorías), puntaje = 100 · el margen más chico y robustez en escenarios de estrés. GO / CAUTION / NO-GO.
+  - **Pendiente de decidir:** los valores de los límites son `ASSUMED` hasta tener fuente; el equipo tiene que confirmarlos o cambiarlos, incluido el tope de calorías, que hoy está sin definir.
 
 ---
 

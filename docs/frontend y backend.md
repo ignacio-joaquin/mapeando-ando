@@ -44,7 +44,7 @@ Sin `.env.local`, el frontend arranca en **modo ejemplo**: fixtures locales y un
 | `GET /api/sites`, `GET /api/sites/{id}` | inventario del sitio | anda |
 | `GET /api/sites/{id}/point?lat=&lon=` | elevación y pendiente en un punto | anda, necesita el DTM bajado |
 | `POST /api/route/consumables` | consumibles por tramo + perfil de elevación | anda, necesita el DTM bajado |
-| `POST /api/route` | planificador 4D: ruta por el terreno, horarios, consumibles y veredicto | anda, necesita `slope.tif` (si no, tramos en línea recta como `unknown`); la sombra, la pila de `illumination.py` |
+| `POST /api/route` | planificador 4D: ruta por el terreno, horarios, consumibles, veredicto GO / CAUTION / NO-GO con puntaje, límites, robustez y costo por factor (`docs/seguridad.md`) | anda, necesita `slope.tif` (si no, tramos en línea recta como `unknown`); la sombra, la pila de `illumination.py` |
 | `POST /api/illumination/window` | sol/sombra precomputados entre dos puntos | anda, necesita la pila de `illumination.py` (si no, 503) |
 
 **`/tiles/*` — lo que se dibuja.** nginx sirve `/data/output/` tal cual. Ahí viven los tiles PNG, las curvas en GeoJSON y el índice `terrain.json`.

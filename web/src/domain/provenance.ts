@@ -17,8 +17,10 @@ import { MARS_RADIUS_M } from "../mars/constants";
  *   (pendiente desde el DTM, distancia geodésica).
  * - MODELED: sale de un modelo con supuestos (dosis extrapolada, índice de
  *   peligro, efemérides). Siempre debería traer `assumptions`.
+ * - ASSUMED: valor elegido por el equipo, sin fuente citable todavía (los
+ *   límites duros del veredicto). Se muestra como tal hasta tener la fuente.
  */
-export type Provenance = "OBSERVED" | "DERIVED" | "MODELED";
+export type Provenance = "OBSERVED" | "DERIVED" | "MODELED" | "ASSUMED";
 
 export interface SourceInfo {
   readonly provenance: Provenance;
@@ -44,6 +46,7 @@ export const PROVENANCE_LABEL: Record<Provenance, string> = {
   OBSERVED: "observado",
   DERIVED: "derivado",
   MODELED: "modelado",
+  ASSUMED: "supuesto del equipo, sin fuente citable",
 };
 
 /** Texto corto del badge: "MRO HiRISE · DERIVED". */

@@ -77,7 +77,7 @@ export const SiteDetailSchema = z.object({
  * veredicto, fichas). Contrato documentado en docs/context.md §4.
  * Lo consume <Measure>; ver src/domain/provenance.ts.
  */
-export const ProvenanceSchema = z.enum(["OBSERVED", "DERIVED", "MODELED"]);
+export const ProvenanceSchema = z.enum(["OBSERVED", "DERIVED", "MODELED", "ASSUMED"]);
 
 export const MeasuredValueSchema = z.object({
   /** null = el dato falta (todavía no se bajó o no existe). Nunca se rellena. */
@@ -146,14 +146,77 @@ export const RouteStopSchema = z.object({
   margin: MeasuredValueSchema,
 });
 
-export const LimitingFactorSchema = z.enum(["o2", "battery", "dose", "daylight", "terrain"]);
+/** Ids de los límites duros (api/safety.py, docs/seguridad.md). `terrain` = pendiente. */
+export const LimitingFactorSchema = z.enum([
+  "o2",
+  "battery",
+  "dose",
+  "daylight",
+  "terrain",
+  "contact",
+  "calories",
+]);
+
+/**
+ * Un límite duro evaluado en el peor punto de la ruta. `margin` = 1 − usado/límite
+ * (< 0 = roto, recortado a −1). `limit` viaja con procedencia ASSUMED hasta que el
+ * equipo tenga una fuente citable. `undefined` = el equipo todavía no fijó el valor.
+ */
+export const SafetyLimitSchema = z.object({
+  id: LimitingFactorSchema,
+  label: z.string(),
+  status: z.enum(["ok", "broken", "not_evaluated", "undefined"]),
+  complete: z.boolean(),
+  note: z.string().nullable(),
+  margin: z.number().nullable(),
+  used: MeasuredValueSchema,
+  limit: MeasuredValueSchema,
+});
+
+/** "Robusta en N de M escenarios": cuenta escenarios, no es una probabilidad. */
+export const RobustnessSchema = z.object({
+  passed: z.number().int(),
+  evaluated: z.number().int(),
+  scenarios: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      status: z.enum(["pass", "fail", "not_evaluated"]),
+      limiting_factor: LimitingFactorSchema.nullable(),
+      score: z.number().nullable(),
+      note: z.string().nullable(),
+    }),
+  ),
+});
 
 export const VerdictSchema = z.object({
-  status: z.enum(["GO", "NO_GO"]),
+  status: z.enum(["GO", "CAUTION", "NO_GO"]),
   limiting_factor: LimitingFactorSchema.nullable(),
   /** Una frase, en español, para leer con el casco puesto. */
   summary: z.string(),
   margin: MeasuredValueSchema,
+  /** Puntaje 0–100 = 100 · el margen más chico. Opcional: el planificador de ejemplo no lo calcula. */
+  score: MeasuredValueSchema.optional(),
+  limits: z.array(SafetyLimitSchema).optional(),
+  robustness: RobustnessSchema.optional(),
+});
+
+/** Desglose del costo del A*: cuántos minutos-equivalentes aporta cada factor. */
+export const RouteCostSchema = z.object({
+  formula: z.string(),
+  unit: z.string(),
+  base_minutes: z.number().nullable(),
+  total_minutes: z.number().nullable(),
+  factors: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      weight: z.number(),
+      active: z.boolean(),
+      minutes: z.number().nullable(),
+      note: z.string().nullable(),
+    }),
+  ),
 });
 
 /**
@@ -177,6 +240,7 @@ export const RouteResponseSchema = z.object({
   legs: z.array(RouteLegSchema),
   stops: z.array(RouteStopSchema),
   verdict: VerdictSchema,
+  cost: RouteCostSchema.optional(),
   profile: ProfileSchema.optional(),
 });
 
@@ -282,6 +346,9 @@ export type RouteLeg = z.infer<typeof RouteLegSchema>;
 export type RouteStop = z.infer<typeof RouteStopSchema>;
 export type LimitingFactor = z.infer<typeof LimitingFactorSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
+export type SafetyLimit = z.infer<typeof SafetyLimitSchema>;
+export type Robustness = z.infer<typeof RobustnessSchema>;
+export type RouteCost = z.infer<typeof RouteCostSchema>;
 export type RouteResponse = z.infer<typeof RouteResponseSchema>;
 export type Profile = z.infer<typeof ProfileSchema>;
 export type RoverPhoto = z.infer<typeof RoverPhotoSchema>;
