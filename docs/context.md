@@ -29,13 +29,15 @@ Todo lo demás es secundario. Tres consecuencias prácticas:
 sites/      1 JSON por sitio (jezero, gale) + common.json   → sumar un sitio = sumar un archivo
 pipeline/   Python: descarga + precómputo (rasterio, numpy, spiceypy, GDAL)
 api/        FastAPI: estado, inventario, consumibles (/api/route/consumables) y (en camino) point query + /api/route
-web/        Frontend. Hoy: página de estado en HTML plano. Va: React 19 + MapLibre
+web/        Frontend: React 19 + MapLibre (Vite). En el server se compila con deploy/build-web.sh
 deploy/     bootstrap, nginx, systemd, auto-deploy
 reference/  tablas de referencia versionadas (ej. dosis en superficie)
 docs/       documentación del proyecto (este archivo)
 ```
 
 **El flujo de datos, en una línea:** `sites/*.json` declara qué bajar → `pipeline/` baja a `/data/raw/` y precomputa a `/data/output/` → nginx sirve eso en `/tiles/` → la API lee `/data/manifest.json` y responde consultas puntuales → `web/` dibuja.
+
+**Build y deploy del frontend** (resuelto 2026-11-14): el auto-deploy compila `web/` en el server cuando cambia (`deploy/build-web.sh`, Node 22). Compila fuera del repo (`/var/lib/mapeando-web`), publica cada build en `/var/www/mapeando/releases/<sha>` y nginx sirve el symlink `/var/www/mapeando/current`. Si el build falla, sigue la versión anterior y el error queda en `/var/log/mapeando-deploy.log`. El CI corre `npm run build` en cada PR para que no llegue a `main` algo que no compila.
 
 **La regla de reparto:** lo pesado se precomputa en el pipeline; la API solo lee e indexa; el frontend solo dibuja. Si algo tarda más de ~1 s en un request, va al pipeline.
 
@@ -139,7 +141,6 @@ Código, ids, endpoints y nombres de archivo en **inglés**. Comentarios, docs, 
 
 Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
 
-- **Build del frontend y deploy.** nginx sirve `/opt/mapeando-ando/web` directo y `deploy/update.sh` **no corre `npm build`**. Al pasar a React hay que decidir: build en CI y commitear `web/dist` (hoy está en `.gitignore`), o agregar el build al auto-deploy en `deploy/update.sh` y apuntar nginx a `web/dist`. Hoy no está resuelto: si se mergea React a `main` sin esto, el sitio se rompe.
 - **Formato de tiles de salida**: resuelto para el relieve (2026-11-14): raster pre-teselado. El COG es la fuente de valores (point query, perfil) y lo que se dibuja son tiles XYZ PNG en `/data/output/<sitio>/<capa>/{z}/{x}/{y}.png`, que genera `pipeline/tiles.py` (lat/lon de Marte etiquetado como EPSG:4326 + `gdal2tiles --xyz`). `precompute.py` lo corre para pendiente y sombreado y anota zoom y límites en `terrain.json`. Las capas por clases (pendiente) se remuestrean con vecino más cercano en el pipeline y en el mapa, para no inventar colores fuera de la leyenda. Sigue abierto para sol y sombra: hoy son COG + `index.json` en `illumination/`, sin teselar.
 - **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa. Parcial (2026-11-14): sol y sombra se precomputan por sol, con fecha y cantidad de soles como parámetros (`--start`, `--sols`) y paso de 1 h LTST. Falta decidir qué soles usa la demo. Ver `docs/illumination.md`.
 - **Modelo de rutas**: qué pesa en el costo (pendiente, rugosidad, dosis, luz) y con qué datos se valida.
