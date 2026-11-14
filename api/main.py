@@ -1,8 +1,9 @@
 """API de Mapa Marciano.
 
-Expone el estado del servidor, el inventario de datos por sitio y /api/route, que hoy
-calcula los consumibles del traje sobre una ruta dada. Acá se suman las point queries
-y el pathfinding.
+Expone el estado del servidor, el inventario de datos por sitio y
+/api/route/consumables, que calcula los consumibles del traje sobre una ruta dada.
+/api/route queda reservado para el planificador 4D (hoy responde 501). Acá se suman
+las point queries y el pathfinding.
 """
 import json
 import os
@@ -66,7 +67,7 @@ def site(site_id: str):
     return m["sites"][site_id]
 
 
-# ---------------------------------------------------------------- /api/route
+# ---------------------------------------------------- /api/route/consumables
 
 _DEFAULTS = SuitParams()
 MAX_POINTS = 500
@@ -93,7 +94,7 @@ class SuitOverrides(BaseModel):
     base_power_w: float = Field(_DEFAULTS.base_power_w, ge=0)
 
 
-class RouteRequest(BaseModel):
+class ConsumablesRequest(BaseModel):
     site_id: Optional[str] = Field(None, description="Obligatorio si los puntos no traen elev_m")
     points: list[RoutePoint] = Field(min_length=2, max_length=MAX_POINTS)
     speed_m_s: float = Field(0.8, gt=0, le=3.0)
@@ -112,7 +113,7 @@ def _dtm_path(site_id: str) -> Path:
     return DATA_DIR / dtm["path"]
 
 
-def _segments_from_request(req: RouteRequest) -> tuple[list[list[Step]], list[float], str]:
+def _segments_from_request(req: ConsumablesRequest) -> tuple[list[list[Step]], list[float], str]:
     pts = req.points
     given = [p.elev_m is not None for p in pts]
     if all(given):
@@ -144,10 +145,13 @@ def _segments_from_request(req: RouteRequest) -> tuple[list[list[Step]], list[fl
     return segments, vertex_elev, f"dtm:{req.site_id}"
 
 
-@app.post("/api/route")
-def route(req: RouteRequest):
+@app.post("/api/route/consumables")
+def route_consumables(req: ConsumablesRequest):
     """Consumibles del traje por tramo sobre una ruta ya armada (lista de puntos).
-    Cada tramo va de points[i] a points[i+1]. Todo el resultado es MODELED."""
+    Cada tramo va de points[i] a points[i+1]. Todo el resultado es MODELED.
+
+    Antes vivía en /api/route; se mudó para dejarle esa ruta al planificador 4D,
+    cuyo contrato (docs/context.md §4) ya consume web/."""
     params = SuitParams(cargo_kg=req.cargo_kg, **req.suit.model_dump())
     segments, elev, elev_source = _segments_from_request(req)
     result = route_consumption(segments, req.speed_m_s, params)
@@ -157,3 +161,18 @@ def route(req: RouteRequest):
         seg["to"] = {"lat": b.lat, "lon": b.lon, "elev_m": elev[i + 1]}
     result["elevation_source"] = elev_source
     return result
+
+
+@app.post("/api/route")
+def route():
+    """Planificador 4D (A* con costo según la hora de llegada). Todavía no existe.
+
+    Responde 501 a propósito: es la señal con la que web/ pasa al planificador
+    de ejemplo y lo avisa en pantalla. No lee el cuerpo, así un pedido con el
+    contrato de docs/context.md §4 no termina en 422.
+    """
+    raise HTTPException(
+        501,
+        "El planificador 4D todavía no está implementado. Para consumibles sobre "
+        "una ruta ya armada: POST /api/route/consumables.",
+    )

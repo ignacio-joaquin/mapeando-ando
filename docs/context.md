@@ -28,7 +28,7 @@ Todo lo demás es secundario. Tres consecuencias prácticas:
 ```
 sites/      1 JSON por sitio (jezero, gale) + common.json   → sumar un sitio = sumar un archivo
 pipeline/   Python: descarga + precómputo (rasterio, numpy, spiceypy, GDAL)
-api/        FastAPI: estado, inventario y (en camino) point query + /api/route
+api/        FastAPI: estado, inventario, consumibles (/api/route/consumables) y (en camino) point query + /api/route
 web/        Frontend. Hoy: página de estado en HTML plano. Va: React 19 + MapLibre
 deploy/     bootstrap, nginx, systemd, auto-deploy
 reference/  tablas de referencia versionadas (ej. dosis en superficie)
@@ -106,7 +106,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 - `resolution`, `source` y `assumptions` son opcionales y van al tooltip del badge.
 - Lo valida `MeasuredValueSchema` en `web/src/api/schemas.ts`.
 
-**`POST /api/route` (propuesta, la consume el planificador de `web/`).** El modelo de costo sigue siendo decisión abierta (§5); esto fija solo qué entra y qué sale. Lo valida `RouteResponseSchema` en `web/src/api/schemas.ts`.
+**`POST /api/route` (propuesta, la consume el planificador de `web/`).** Es el endpoint del planificador 4D. El modelo de costo sigue siendo decisión abierta (§5); esto fija solo qué entra y qué sale. Lo valida `RouteResponseSchema` en `web/src/api/schemas.ts`. Hasta que el 4D exista, la API responde **501**. Los consumibles del traje sobre una ruta ya armada (Pandolf, PR #2) se mudaron a `POST /api/route/consumables`, con su contrato de siempre (ver README).
 
 - Entra: `{ site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }] }`. El primero es la salida, el último la llegada, el resto estaciones en orden. Salida y llegada pueden ser puntos distintos.
 - Sale: `{ site, depart_utc, legs, stops, verdict }`.

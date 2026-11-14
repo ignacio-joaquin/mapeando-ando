@@ -1,7 +1,7 @@
 /**
  * Cliente de la API. Rutas SIEMPRE relativas (`/api/...`): en dev las proxea
- * vite al server real (VITE_API_TARGET), en producción las sirve nginx. El
- * mismo build funciona en los dos lados sin configurar nada.
+ * vite al server real (VITE_API_TARGET), en producción las sirve nginx en el
+ * mismo origen. El build de producción no necesita ninguna variable.
  */
 import {
   HealthSchema,
@@ -20,8 +20,44 @@ import { fixtureHealth, fixtureSiteDetail, fixtureSites } from "./fixtures";
 import { exampleRoute } from "./routeFixture";
 import type { ZodType } from "zod";
 
-/** `true` cuando no hay backend configurado: la UI tiene que avisarlo. */
-export const usingFixtures = !import.meta.env["VITE_API_TARGET"];
+/**
+ * `true` cuando no hay backend: la UI tiene que avisarlo.
+ *
+ * Solo en desarrollo (`npm run dev`) sin VITE_API_TARGET. El build de
+ * producción NUNCA usa fixtures: nginx sirve /api en el mismo origen.
+ * OJO: no leer VITE_API_TARGET acá. Vite incrusta en el JS público las
+ * variables VITE_* que usa el código, y con ella iría la IP del server; por
+ * eso vite.config.ts pasa solo el booleano __API_PROXY__.
+ */
+export const usingFixtures = import.meta.env.DEV && !__API_PROXY__;
+
+/**
+ * Mensaje legible de un error de FastAPI. `detail` es un texto en los
+ * HTTPException, pero una lista de objetos en los 422 de validación (que sin
+ * esto se mostraban como "[object Object]").
+ */
+async function errorDetail(res: Response): Promise<string> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return ""; // sin cuerpo JSON
+  }
+  if (!body || typeof body !== "object" || !("detail" in body)) return "";
+  const { detail } = body;
+  if (typeof detail === "string") return `: ${detail}`;
+  if (Array.isArray(detail)) {
+    const msgs = detail.map((d: unknown) => {
+      if (d && typeof d === "object" && "msg" in d) {
+        const loc = "loc" in d && Array.isArray(d.loc) ? ` (${d.loc.join(".")})` : "";
+        return `${String(d.msg)}${loc}`;
+      }
+      return JSON.stringify(d);
+    });
+    return `: ${msgs.join("; ")}`;
+  }
+  return `: ${JSON.stringify(detail)}`;
+}
 
 async function get<T>(path: string, schema: ZodType<T>): Promise<T> {
   const res = await fetch(path, { headers: { accept: "application/json" } });
@@ -96,14 +132,7 @@ export async function planRoute(req: RouteRequest, signal?: AbortSignal): Promis
     return { route: exampleRoute(req), example: true };
   }
   if (!res.ok) {
-    let detail = "";
-    try {
-      const body: unknown = await res.json();
-      if (body && typeof body === "object" && "detail" in body) detail = `: ${String(body.detail)}`;
-    } catch {
-      // sin cuerpo JSON
-    }
-    throw new Error(`/api/route respondió ${res.status}${detail}`);
+    throw new Error(`/api/route respondió ${res.status}${await errorDetail(res)}`);
   }
   const parsed = RouteResponseSchema.safeParse(await res.json());
   if (!parsed.success) {
@@ -133,7 +162,7 @@ export async function fetchRoverPhotos(
     ...(signal ? { signal } : {}),
   });
   if (res.status === 404 || res.status === 405 || res.status === 501) return missing;
-  if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}`);
+  if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}${await errorDetail(res)}`);
   const parsed = RoverPhotosSchema.safeParse(await res.json());
   if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
   return parsed.data;
