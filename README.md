@@ -43,6 +43,8 @@ journalctl -u mapeando-download -f             # ver el progreso
 
 `pipeline/precompute.py --site <id>` toma el DTM del sitio (del manifest, o de S3 si no está en disco) y deja en `/data/output/<id>/` el DTM en COG, la pendiente en grados (misma grilla que el DTM), el sombreado, las curvas de nivel cada 10 m en GeoJSON y un `terrain.json` con la procedencia, los parámetros y el estado de cada capa. También tesela la pendiente y el sombreado en PNG para el mapa (`slope/`, `hillshade/`, con `pipeline/tiles.py`) y anota en `terrain.json` el zoom y los límites de esos tiles: el frontend lee ese archivo para saber qué capa puede prender. `--prueba` procesa un recorte de 2×2 km en `/data/prueba/`, fuera de lo que sirve nginx; `--no-tiles` saltea el teselado.
 
+`precompute.py` también escribe `coverage.geojson`, la huella del DTM de 1 m que usa el planificador para rechazar destinos sin terreno. `pipeline/places.py --site <id>` arma `/data/output/<id>/places.json` (el índice del buscador de destinos) con el nomenclátor IAU, los cráteres de Robbins, los waypoints del rover y del helicóptero, el depósito Three Forks y los objetivos con nombre de ChemCam, SuperCam, PIXL y APXS (PDS); correlo después de `download.py`, `fetch_extras.py` y `fetch_targets.py` (que saca los nombres de PIXL de las etiquetas PDS, unos 20 minutos por el Crawl-delay). No hace pedidos HTTP: lee lo que ya está en `/data/raw/`.
+
 ```
 cd /opt/mapeando-ando && sudo .venv-pipeline/bin/python pipeline/precompute.py --site jezero   # y después --site gale
 ```

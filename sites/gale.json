@@ -30,6 +30,34 @@
       "mission": "MSL",
       "url": "https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json",
       "optional": true
+    },
+    {
+      "key": "chemcam_obs",
+      "kind": "csv",
+      "instrument": "ChemCam",
+      "mission": "MSL",
+      "desc": "Lista de observaciones de ChemCam: objetivo, tipo, sol, site/drive del rover y distancia (MSL ChemCam LIBS RDR, PDS Geosciences Node)",
+      "url": "https://pds-geosciences.wustl.edu/msl/msl-m-chemcam-libs-4_5-rdr-v1/mslccm_1xxx/document/msl_ccam_obs.csv",
+      "approx_gb": 0.03,
+      "optional": true
+    },
+    {
+      "key": "apxs_targets_0_3076",
+      "kind": "csv",
+      "instrument": "APXS",
+      "mission": "MSL",
+      "desc": "Objetivos de APXS soles 0–3076 con posición medida, estratigrafía y región (suplemento de Thompson et al. 2022, PDS Geosciences Node)",
+      "url": "https://pds-geosciences.wustl.edu/msl/urn-nasa-pds-msl_apxs_supplement_sols_0_3076/data/ds01_2021je007171r.csv",
+      "optional": true
+    },
+    {
+      "key": "apxs_targets_3054_3712",
+      "kind": "csv",
+      "instrument": "APXS",
+      "mission": "MSL",
+      "desc": "Objetivos de APXS soles 3054–3712 con posición medida, estratigrafía y región (suplemento 2024, PDS Geosciences Node)",
+      "url": "https://pds-geosciences.wustl.edu/msl/urn-nasa-pds-msl_apxs_supplement_sols_3054_3712/data/ds01_2024.csv",
+      "optional": true
     }
   ]
 }

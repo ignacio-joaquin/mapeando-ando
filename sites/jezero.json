@@ -38,6 +38,34 @@
       "mission": "Mars 2020",
       "url": "https://mars.nasa.gov/mmgis-maps/M20/Layers/json/m20_heli_waypoints.json",
       "optional": true
+    },
+    {
+      "key": "sample_depot_locations",
+      "kind": "csv",
+      "name": "Depósito Three Forks",
+      "desc": "Ubicación de los 10 tubos del depósito Three Forks: posición del rover al soltar cada tubo (Mars 2020 Sample Depot bundle, PDS Geosciences Node)",
+      "mission": "Mars 2020",
+      "url": "https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_sample_depot_three_forks/miscellaneous/sample_metadata/sample_tube_locations.csv",
+      "optional": true
+    },
+    {
+      "key": "supercam_obs",
+      "kind": "csv",
+      "instrument": "SuperCam",
+      "mission": "Mars 2020",
+      "desc": "Lista maestra de observaciones de SuperCam: objetivo, tipo, sol, site/drive del rover (en el nombre del EDR) y distancia de foco (PDS Geosciences Node)",
+      "url": "https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_supercam/data_observation_log/m2020_scam_masterlist.csv",
+      "approx_gb": 0.035,
+      "optional": true
+    },
+    {
+      "key": "pixl_inventory",
+      "kind": "csv",
+      "instrument": "PIXL",
+      "mission": "Mars 2020",
+      "desc": "Inventario de los productos de óxidos de PIXL; fetch_targets.py saca de cada etiqueta el nombre del objetivo (PDS Geosciences Node)",
+      "url": "https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_pixl/data_oxides_pmc/collection_data_oxides_pmc_inventory.csv",
+      "optional": true
     }
   ]
 }

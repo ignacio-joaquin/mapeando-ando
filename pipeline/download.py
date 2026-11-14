@@ -17,6 +17,7 @@ import math
 import os
 import re
 import subprocess
+import time
 import sys
 import urllib.parse
 import urllib.request
@@ -56,8 +57,24 @@ def discover(index_url, pattern, pick="first"):
     return hits[-1] if pick == "last" else hits[0]
 
 
+# Crawl-delay del robots.txt de cada host (segundos entre pedidos). PDS Geosciences: 10 s.
+CRAWL_DELAY = {"pds-geosciences.wustl.edu": 10}
+_last_request = {}
+
+
+def polite_wait(url):
+    """Espera lo que pida el Crawl-delay del host desde el último pedido a ese mismo host."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    delay = CRAWL_DELAY.get(host, 0)
+    wait = _last_request.get(host, -1e9) + delay - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    _last_request[host] = time.monotonic()
+
+
 def fetch(url, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
+    polite_wait(url)
     log(f"GET {url} -> {dest}")
     # --retry solo reintenta errores transitorios (timeouts, 5xx); un 404 falla enseguida
     cmd = ["curl", "--fail", "-L", "-C", "-", "--retry", "8", "--retry-delay", "10",
