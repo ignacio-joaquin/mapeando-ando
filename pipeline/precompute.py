@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -92,6 +93,7 @@ TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hi
 NEAREST_TILES = {"survival-thermal"}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
+DEM_LAYER = "relief-dem"     # relieve 3D del mapa (tiles raster-dem, ver tiles.dem_a_tiles)
 
 GTIFF_OPTS = ["-co", "TILED=YES", "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER"]
 COG_OPTS = ["-of", "COG", "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=YES", "-co", "BIGTIFF=IF_SAFER"]
@@ -680,14 +682,38 @@ def main(argv=None):
         src = out / layer["file"]
         if layer_id == "survival-thermal" and (work / "themis_display.tif").exists():
             src = work / "themis_display.tif"
+        near = layer_id in NEAREST_TILES
         try:
             layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(
                 src, out / folder, color=color, max_zoom=args.max_zoom,
-                resampling="near" if layer_id in NEAREST_TILES else None)}
+                resampling="near" if near else None, warp="near" if near else None)}
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
+
+    # 9b. Relieve 3D: tiles raster-dem desde el DTM. Solo para levantar el mapa; los
+    #     valores que ve el usuario siguen saliendo del COG. Sin dtm.tif no hay nada.
+    if not args.no_tiles:
+        dem_px_m = math.radians(tiles.grados_por_pixel(tiles.DEM_MAX_ZOOM)) * ts.MARS_RADIUS_M
+        layers[DEM_LAYER] = {
+            "file": "dem", "unit": "m", "provenance": "DERIVED", "mission": entry.get("mission"),
+            "resolution": f"~{dem_px_m:.1f} m por píxel en el zoom máximo (DTM remuestreado para dibujar)",
+            "assumptions": [
+                "Solo para dibujar el relieve en 3D: ninguna medida sale de estos tiles.",
+                "Alturas sobre el punto más bajo del DTM (datum_m): la forma es la real, el cero no.",
+                f"Huecos del DTM de hasta ~{dem_px_m * tiles.DEM_FILL_PX:.0f} m rellenados por "
+                "interpolación para no dibujar pozos; fuera de la huella del DTM, plano.",
+            ],
+        }
+        try:
+            info = tiles.dem_a_tiles(dtm, out / "dem")
+            layers[DEM_LAYER].update(status="ok", datum_m=info.pop("datum_m"),
+                                     encoding=info.pop("encoding"), tiles={"status": "ok", **info})
+        except Exception as e:
+            failed = True
+            log(f"Falló el teselado de {DEM_LAYER}: {e}")
+            layers[DEM_LAYER].update(status="error", error=str(e)[:400])
 
     # 10. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen

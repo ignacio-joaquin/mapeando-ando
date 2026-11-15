@@ -2,6 +2,8 @@ import { LAYERS, type LayerGroup } from "../map/layers";
 import { pipelineError, terrainLayer } from "../map/terrain";
 import { useStore } from "../state/store";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { PLACE_KIND_STYLE, PLACE_KINDS } from "../map/places";
+import { KIND_LABEL } from "../domain/places";
 
 const GROUP_LABEL: Record<LayerGroup, string> = {
   relieve: "Relieve",
@@ -77,7 +79,7 @@ export function LayerStack() {
                   {disabled ? (
                     <p className="mt-1.5 text-xs text-warn" title={failed ?? undefined}>
                       {failed
-                        ? "⚠ El pipeline no pudo generarla. Hay que volver a correr precompute.py."
+                        ? `⚠ El pipeline no pudo generarla. Hay que volver a correr ${spec.script ?? "precompute.py"}.`
                         : "Esperando la salida del pipeline (MAP-9)."}
                     </p>
                   ) : (
@@ -124,6 +126,60 @@ export function LayerStack() {
           </ul>
         </section>
       ))}
+      <PlacePins />
     </div>
+  );
+}
+
+/**
+ * Pines de lugares en el mapa, por tipo. Un tipo sin lugares en este sitio
+ * (o sin places.json todavía) no se puede prender y lo dice.
+ */
+function PlacePins() {
+  const places = useStore((s) => s.places);
+  const placeKinds = useStore((s) => s.placeKinds);
+  const togglePlaceKind = useStore((s) => s.togglePlaceKind);
+  const counts = new Map<string, number>();
+  for (const p of places?.places ?? []) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
+
+  return (
+    <section>
+      <h3 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">Lugares</h3>
+      {places === null ? (
+        <p className="text-xs text-warn">Esperando la salida del pipeline (places.json).</p>
+      ) : (
+        <ul className="flex flex-col gap-1 rounded border border-line p-2">
+          {PLACE_KINDS.map((kind) => {
+            const n = counts.get(kind) ?? 0;
+            const style = PLACE_KIND_STYLE[kind];
+            return (
+              <li key={kind}>
+                <label className={`flex min-h-8 items-center gap-2 text-sm ${n === 0 ? "opacity-60" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={placeKinds[kind] && n > 0}
+                    disabled={n === 0}
+                    onChange={() => togglePlaceKind(kind)}
+                    className="accent-rust"
+                  />
+                  <span
+                    aria-hidden
+                    className="inline-grid size-5 shrink-0 place-items-center rounded-full border border-black text-[10px] font-bold text-black"
+                    style={{ background: style.color }}
+                  >
+                    {style.glyph}
+                  </span>
+                  <span className="first-letter:uppercase">{KIND_LABEL[kind]}</span>
+                  <span className="ml-auto text-xs text-muted">{n}</span>
+                </label>
+              </li>
+            );
+          })}
+          <li className="mt-1 text-[11px] text-muted">
+            Tocá un pin para ver la ficha y sumarlo a la travesía. Cada lugar trae su procedencia.
+          </li>
+        </ul>
+      )}
+    </section>
   );
 }

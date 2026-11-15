@@ -13,6 +13,7 @@ import rasterio
 from rasterio.transform import from_origin
 
 import precompute
+import tiles
 
 R = 3396190.0
 # La misma proyección que los DTM de USGS: equirectangular con paralelo estándar en el ecuador.
@@ -227,7 +228,7 @@ def test_full_run(data_dir):
     out = data_dir / "output" / "jezero"
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
-        ["contours.geojson", "coverage.geojson", "dose", "dose_rate.tif", "dtm.tif", "hazard",
+        ["contours.geojson", "coverage.geojson", "dem", "dose", "dose_rate.tif", "dtm.tif", "hazard",
          "hazard.tif", "hillshade", "hillshade.tif", "loose_soil.tif", "roughness.tif", "skyview.tif",
          "slope", "slope.tif", "terrain.json", "terrain_factor.tif", "themis_night.tif", "thermal"]
 
@@ -236,7 +237,7 @@ def test_full_run(data_dir):
         "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
         "survival-thermal": "ok", "terrain-loose-soil": "ok",
         "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok",
-        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok"}
+        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "relief-dem": "ok"}
 
     # Capa térmica: badge "Mars Odyssey THEMIS · OBSERVED", el dato sin tocar y en COG.
     thermal = index["layers"]["survival-thermal"]
@@ -262,6 +263,13 @@ def test_full_run(data_dir):
     assert index["radius_m"] == R
     assert index["source"]["mission"] == "MRO HiRISE"
     assert any("0.948" in w for w in index["warnings"])  # píxel anisótropo declarado
+
+    # Relieve 3D: el piso es el fondo del cráter y la codificación viaja en el índice.
+    dem = index["layers"]["relief-dem"]
+    assert dem["datum_m"] == pytest.approx(-2560, abs=1) and dem["encoding"] == tiles.DEM_ENCODING
+    assert dem["tiles"]["status"] == "ok" and dem["tiles"]["template"] == "dem/{z}/{x}/{y}.png"
+    assert dem["tiles"]["maxzoom"] == tiles.DEM_MAX_ZOOM
+    assert any((out / "dem" / str(tiles.DEM_MAX_ZOOM)).rglob("*.png"))
 
     for name in ("dtm.tif", "slope.tif", "hillshade.tif", "hazard.tif", "roughness.tif", "terrain_factor.tif"):
         with rasterio.open(out / name) as ds:
