@@ -456,6 +456,7 @@ function StopCard({
   // Con vuelta, en el destino también se queda un rato: esos minutos cuentan.
   const roundTrip = usePlan((s) => s.roundTrip);
   const hasDwell = isStation || (roundTrip && label.kind === "destination");
+  const departAt = usePlan((s) => s.departAt);
 
   const dot =
     label.kind === "origin"
@@ -558,7 +559,13 @@ function StopCard({
       {stop ? <StopValues stop={stop} reference={reference} /> : null}
 
       {open ? (
-        <StationPhoto siteId={siteId} lat={waypoint.lat} lon={waypoint.lon} />
+        <StationPhoto
+          siteId={siteId}
+          lat={waypoint.lat}
+          lon={waypoint.lon}
+          title={label.long}
+          at={stop?.arrive_utc ? new Date(stop.arrive_utc) : departAt}
+        />
       ) : (
         <button
           type="button"

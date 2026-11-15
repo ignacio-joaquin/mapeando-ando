@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { fetchRoverPhotos } from "../../api/client";
 import type { RoverComposition, RoverPhoto, RoverPhotos } from "../../api/schemas";
 import type { SourceInfo } from "../../domain/provenance";
@@ -11,13 +11,23 @@ import { formatDistanceM } from "./format";
  * estación, con sol, cámara y crédito. Las fotos salen del backend (MAP-33);
  * si no hay, se dice que falta. Nunca una foto de ejemplo.
  *
- * M2: al lado va nuestro render del horizonte desde el mismo punto.
+ * Al lado se abre nuestro render del horizonte desde el mismo punto (MAP-43),
+ * para comparar con la foto.
  */
 interface Props {
   readonly siteId: string;
   readonly lat: number;
   readonly lon: number;
+  /** Nombre de la estación, para el título del horizonte. */
+  readonly title: string;
+  /** Cuándo se está ahí: la llegada que calculó el planificador o la salida del plan. */
+  readonly at: Date;
 }
+
+// Three.js pesa: se baja recién cuando alguien abre el horizonte.
+const HorizonView = lazy(() =>
+  import("../horizon/HorizonView").then((m) => ({ default: m.HorizonView })),
+);
 
 type State =
   | { readonly kind: "loading" }
@@ -59,9 +69,11 @@ const SUBSURFACE: Readonly<Record<string, { readonly title: string; readonly exp
   },
 };
 
-export function StationPhoto({ siteId, lat, lon }: Props) {
+export function StationPhoto({ siteId, lat, lon, title, at }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [shown, setShown] = useState(0);
+  const [horizon, setHorizon] = useState(false);
+  const photo = state.kind === "ok" ? (state.data.photos[shown] ?? state.data.photos[0] ?? null) : null;
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -101,6 +113,27 @@ export function StationPhoto({ siteId, lat, lon }: Props) {
       ) : (
         <Photos photos={state.data.photos} shown={shown} onShow={setShown} />
       )}
+
+      <button
+        type="button"
+        onClick={() => setHorizon(true)}
+        className="mt-2 w-full rounded border border-rust px-2 py-1.5 text-xs font-semibold text-rust hover:bg-rust/10"
+      >
+        ⛰ Ver el horizonte desde acá{photo ? " y comparar con la foto" : ""}
+      </button>
+      {horizon ? (
+        <Suspense fallback={<p className="mt-1 text-xs text-muted">Cargando la vista 3D…</p>}>
+          <HorizonView
+            siteId={siteId}
+            title={title}
+            lat={lat}
+            lon={lon}
+            at={at}
+            photo={photo}
+            onClose={() => setHorizon(false)}
+          />
+        </Suspense>
+      ) : null}
 
       <StationData siteId={siteId} state={state} />
     </section>

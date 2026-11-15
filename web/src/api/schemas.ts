@@ -445,9 +445,10 @@ export const TileSetSchema = z.discriminatedUnion("status", [
 ]);
 
 /**
- * Cómo viene la altura escondida en el RGB de los tiles de relieve 3D
- * (`relief-dem`): h = R·red + G·green + B·blue − base. Lo decide
- * pipeline/tiles.py (DEM_ENCODING) y se le pasa tal cual a MapLibre.
+ * Cómo viene la altura escondida en el RGB de los tiles de relieve
+ * (`relief-dem` y `relief-far`): h = R·red + G·green + B·blue − base. Lo decide
+ * pipeline/tiles.py (DEM_ENCODING); el mapa se lo pasa tal cual a MapLibre y
+ * el horizonte (src/horizon/) lo decodifica igual.
  */
 export const DemEncodingSchema = z.object({
   red_factor: z.number(),
@@ -466,9 +467,9 @@ export const TerrainLayerSchema = z.object({
   instrument: z.string().nullable().optional(),
   error: z.string().optional(),
   tiles: TileSetSchema.optional(),
-  /** Solo `relief-dem`: altura (m) que corresponde al 0 de los tiles, el punto más bajo del DTM. */
+  /** Solo `relief-dem` y `relief-far`: altura (m) que corresponde al 0 de los tiles, el punto más bajo del raster. */
   datum_m: z.number().optional(),
-  /** Solo `relief-dem`: codificación de la altura en los PNG. */
+  /** Solo `relief-dem` y `relief-far`: codificación de la altura en los PNG. */
   encoding: DemEncodingSchema.optional(),
   assumptions: z.array(z.string()).optional(),
 });
