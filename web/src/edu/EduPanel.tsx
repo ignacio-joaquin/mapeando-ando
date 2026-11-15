@@ -1,9 +1,19 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { LAYERS } from "../map/layers";
 import { FACTOR_LABEL } from "../components/route/VerdictCard";
 import { useEdu, type Attempt, type Prediction } from "../state/edu";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { useStore } from "../state/store";
-import { lessonById, LESSONS, PREDICTABLE, type Lesson, type LessonContext, type LessonStep } from "./lessons";
+import {
+  lessonById,
+  LESSONS,
+  PREDICTABLE,
+  setupAt,
+  type Lesson,
+  type LessonContext,
+  type LessonStep,
+  type StepSetup,
+} from "./lessons";
 
 /**
  * Modo entrenamiento: va arriba del planificador, que el alumno sigue usando
@@ -22,7 +32,9 @@ export function EduPanel() {
       aria-label="Entrenamiento de EVA"
       className="mb-3 flex flex-col gap-2 rounded border-2 border-rust bg-bg p-3 text-xs"
     >
-      {lesson ? <LessonView lesson={lesson} /> : <LessonList />}
+      {lesson ? <LessonView key={lesson.id} lesson={lesson} /> : <LessonList />}
+      {/* El resto de la interfaz se esconde durante la lección: el aviso va acá. */}
+      <p className="border-t border-line pt-2 text-[10px] text-muted">Prototipo educativo, no software de vuelo.</p>
     </section>
   );
 }
@@ -126,33 +138,101 @@ function useRecordAttempts() {
   }, [fresh, siteId]);
 }
 
-/** Resalta y tapa piezas de la interfaz con atributos en <body> (ver index.css). */
-function useSpotlight(step: LessonStep, revealed: boolean) {
+/**
+ * Muestra, resalta y tapa piezas de la interfaz con atributos en <body> (ver
+ * index.css). Con data-edu-ui, lo que no está en data-edu-show se esconde.
+ */
+function useStage(step: LessonStep, setup: StepSetup, revealed: boolean) {
+  const show = [...setup.ui].join(" ");
   const focus = step.focus?.join(" ") ?? "";
   const hide = revealed ? "" : (step.hide?.join(" ") ?? "");
   useEffect(() => {
     const b = document.body;
+    b.dataset.eduUi = "";
+    b.dataset.eduShow = show;
     b.dataset.eduFocus = focus;
     b.dataset.eduHide = hide;
     return () => {
+      delete b.dataset.eduUi;
+      delete b.dataset.eduShow;
       delete b.dataset.eduFocus;
       delete b.dataset.eduHide;
     };
-  }, [focus, hide]);
+  }, [show, focus, hide]);
 }
 
-/** Prende las capas que pide el paso, si el server las tiene. */
-function useStepLayers(step: LessonStep) {
-  const layersKey = step.layers?.join(",") ?? "";
-  const available = useStore((s) => layersKey.split(",").map((id) => s.layers[id]?.available ?? false).join(","));
+/** La base de imagen no la maneja la lección: es el piso de todo lo demás. */
+const UNMANAGED = new Set(["base-ortho"]);
+
+/**
+ * Mientras dura la lección, las capas y los pines los decide el paso. Al
+ * entrar se guarda cómo los tenía el usuario y al salir se le devuelven.
+ */
+function useStepLayers(setup: StepSetup) {
+  const saved = useRef<{ visible: Record<string, boolean>; kinds: ReturnType<typeof useStore.getState>["placeKinds"] } | null>(null);
   useEffect(() => {
-    if (!layersKey) return;
+    const st = useStore.getState();
+    saved.current = {
+      visible: Object.fromEntries(Object.entries(st.layers).map(([id, l]) => [id, l.visible])),
+      kinds: st.placeKinds,
+    };
+    return () => {
+      const s = saved.current;
+      if (!s) return;
+      const now = useStore.getState();
+      for (const [id, l] of Object.entries(now.layers)) {
+        if (s.visible[id] !== undefined && l.visible !== s.visible[id]) now.toggleLayer(id);
+      }
+      now.setPlaceKinds(s.kinds);
+    };
+  }, []);
+
+  const wanted = setup.layers.join(",");
+  // Una capa que llega tarde (disponibilidad) también se prende.
+  const available = useStore((s) => LAYERS.map((l) => (s.layers[l.id]?.available ? "1" : "0")).join(""));
+  useEffect(() => {
+    const want = new Set(wanted.split(","));
     const { layers, toggleLayer } = useStore.getState();
-    for (const id of layersKey.split(",")) {
-      const l = layers[id];
-      if (l?.available && !l.visible) toggleLayer(id);
+    for (const spec of LAYERS) {
+      if (UNMANAGED.has(spec.id)) continue;
+      const l = layers[spec.id];
+      if (!l) continue;
+      const on = want.has(spec.id) && l.available;
+      if (l.visible !== on) toggleLayer(spec.id);
     }
-  }, [layersKey, available]);
+  }, [wanted, available]);
+
+  useEffect(() => {
+    const kinds = saved.current?.kinds ?? useStore.getState().placeKinds;
+    useStore
+      .getState()
+      .setPlaceKinds(
+        Object.fromEntries(Object.keys(kinds).map((k) => [k, setup.pins && kinds[k as keyof typeof kinds]])) as typeof kinds,
+      );
+  }, [setup.pins]);
+}
+
+/** Cámara y zoom: vuela al entrar al paso; si encuadra la ruta y todavía no hay, vuela cuando llega. */
+function useStepCamera(lesson: Lesson, stepIndex: number, setup: StepSetup, hasRoute: boolean) {
+  const step = lesson.steps[stepIndex];
+  const spec = step?.camera;
+  const { requestCamera, setZoomLock } = useEdu.getState();
+  useEffect(() => {
+    setZoomLock(setup.lockZoom);
+  }, [setup.lockZoom, setZoomLock]);
+  useEffect(() => () => setZoomLock(false), [setZoomLock]);
+  useEffect(() => {
+    if (spec) requestCamera(spec);
+    // Solo al entrar al paso (y cuando aparece la ruta que se quiere encuadrar).
+  }, [lesson.id, stepIndex, spec?.kind === "route" && hasRoute]);
+}
+
+/** Capas que el paso quiere y el server todavía no tiene. */
+function useMissingLayers(setup: StepSetup): readonly string[] {
+  const layers = useStore((s) => s.layers);
+  return setup.layers
+    .filter((id) => !UNMANAGED.has(id) && layers[id] && !layers[id].available)
+    .map((id) => LAYERS.find((l) => l.id === id)?.label ?? id);
 }
 
 function LessonView({ lesson }: { readonly lesson: Lesson }) {
@@ -162,12 +242,16 @@ function LessonView({ lesson }: { readonly lesson: Lesson }) {
   const skipped = useEdu((s) => s.skipped);
   const { goTo, skip, predict, complete, exit } = useEdu.getState();
   const { ctx, example, loading } = useLessonContext();
-  const step = lesson.steps[Math.min(stepIndex, lesson.steps.length - 1)]!;
-  const last = stepIndex >= lesson.steps.length - 1;
+  const index = Math.min(stepIndex, lesson.steps.length - 1);
+  const step = lesson.steps[index]!;
+  const last = index >= lesson.steps.length - 1;
+  const setup = setupAt(lesson, index);
 
   useRecordAttempts();
-  useSpotlight(step, step.kind === "predict" && prediction !== null);
-  useStepLayers(step);
+  useStage(step, setup, step.kind === "predict" && prediction !== null);
+  useStepLayers(setup);
+  useStepCamera(lesson, index, setup, ctx.route !== null);
+  const missing = useMissingLayers(setup);
 
   const check = step.kind === "task" ? step.check(ctx) : null;
   const canAdvance =
@@ -197,6 +281,18 @@ function LessonView({ lesson }: { readonly lesson: Lesson }) {
       ) : null}
 
       <div className="flex flex-col gap-2 text-fg">{step.body(ctx)}</div>
+
+      {missing.length > 0 ? (
+        <p className="text-warn">
+          ⚠ Este paso usa {missing.length === 1 ? "la capa" : "las capas"} {missing.join(", ")}, que el server
+          todavía no tiene.
+        </p>
+      ) : null}
+      {setup.lockZoom ? (
+        <p className="text-muted">
+          <span aria-hidden>🔒 </span>Zoom trabado por la lección: podés mover el mapa, no acercarte.
+        </p>
+      ) : null}
 
       {example ? (
         <p role="status" className="rounded border-2 border-warn bg-warn/10 p-2 text-fg">

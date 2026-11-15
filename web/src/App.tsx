@@ -219,11 +219,13 @@ export function App() {
             {/* El perfil va debajo del mapa, como pide el ticket: se lee junto
                 con la ruta dibujada, no en otra pantalla. */}
             {site ? <SunTimeline siteId={site.id} lat={site.center.lat} lon={site.center.lon} /> : null}
-            <ElevationProfile profile={plan?.route.profile} />
+            <div data-edu="profile">
+              <ElevationProfile profile={plan?.route.profile} />
+            </div>
           </main>
 
-          <aside className="w-80 shrink-0 overflow-y-auto border-l border-line bg-panel/40 p-3">
-            <section className="mb-4">
+          <aside data-edu="right" className="w-80 shrink-0 overflow-y-auto border-l border-line bg-panel/40 p-3">
+            <section data-edu="clock" className="mb-4">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
                   Reloj marciano
@@ -238,7 +240,7 @@ export function App() {
               )}
             </section>
 
-            <section className="mb-4 border-t border-line pt-4">
+            <section data-edu="inspector" className="mb-4 border-t border-line pt-4">
               <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
                 Inspector
               </h2>

@@ -136,7 +136,7 @@ export function RoutePlanner() {
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
           Planificar travesía
         </h2>
-        <div className="flex gap-1" role="group" aria-label="Qué hace un clic en el mapa">
+        <div data-edu="tools" className="flex gap-1" role="group" aria-label="Qué hace un clic en el mapa">
           <ModeButton active={clickMode === "add"} onClick={() => setClickMode("add")}>
             + puntos
           </ModeButton>
@@ -201,7 +201,7 @@ export function RoutePlanner() {
           <VerdictCard verdict={route.verdict} />
           {result?.example ? <ExampleNotice /> : null}
           <SafetyBreakdown verdict={route.verdict} cost={route.cost} />
-          <div className="flex gap-2">
+          <div data-edu="share" className="flex gap-2">
             <button
               type="button"
               onClick={() => window.print()}

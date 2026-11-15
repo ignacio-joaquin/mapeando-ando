@@ -30,6 +30,16 @@ Un modo que enseña las dificultades de planificar una EVA en Marte **usando el 
 - `edu/EduPanel.tsx`: el panel, arriba del planificador. Prende las capas que pide el paso y marca qué resaltar u ocultar con `data-edu-focus` / `data-edu-hide` en `<body>`; el CSS está en `index.css`.
 - Piezas señalables: `data-edu="verdict" | "breakdown" | "depart" | "sun-timeline" | "layers" | "points" | "search"`. Mover o renombrar uno de esos atributos rompe el resaltado de las lecciones.
 
+## Una lección guiada
+
+Cada paso declara su puesta en escena en `edu/lessons.tsx`, y `setupAt()` la acumula paso a paso:
+
+- **`ui`: qué piezas de la interfaz se ven.** Al empezar una lección se esconde todo lo que no es el mapa y el panel. Cada paso suma piezas (`search`, `points`, `verdict`, `breakdown`, `depart`, `sun-timeline`, `profile`, `layers`, `clock`, `inspector`, `share`, `tools`), y lo que un paso resalta o tapa también se ve. Si no hay nada del panel derecho a la vista, el panel desaparece y el mapa se agranda. El aviso "no es software de vuelo" pasa al panel de la lección, que siempre está visible.
+- **`layers`: las capas prendidas, exactas.** Las demás se apagan; la ortoimagen no se toca. Si el server no tiene una capa, el paso lo dice. Al salir de la lección vuelven las capas y los pines como los tenía el usuario.
+- **`pins`: los pines de lugares.** Apagados salvo que el paso los pida (en la misión final, para elegir el destino).
+- **`camera`: a dónde vuela el mapa al entrar al paso.** Puede ser el sitio (bbox de `/api/sites`), el hábitat o la ruta calculada. Nunca una coordenada escrita a mano. Si el paso encuadra la ruta y todavía no está calculada, vuela cuando llega. Si los paneles nuevos achican el mapa justo después del vuelo, reencuadra.
+- **`lockZoom`: el zoom trabado** (min = max) en los pasos de mirar. El mapa se sigue pudiendo mover, y el panel avisa que el zoom está trabado. En los pasos donde el alumno arma la ruta el zoom queda libre.
+
 ## Contratos que consume
 
 Los ids de límite (`terrain`, `o2`, `battery`, `daylight`, `contact`, `dose`), los ids de factor de costo (`slope`, `shadow`, `contact`), `verdict.robustness` y los ids de capa `relief-slope` y `relief-hillshade`. Cambiar uno obliga a revisar `edu/lessons.tsx` en el mismo PR.

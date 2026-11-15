@@ -13,7 +13,7 @@ import { FACTOR_LABEL } from "../components/route/VerdictCard";
 import { formatDistanceM, formatMinutes, ltstShort } from "../components/route/format";
 import { PROVENANCE_LABEL, type Provenance } from "../domain/provenance";
 import type { Waypoint } from "../state/plan";
-import type { Attempt, Prediction } from "../state/edu";
+import type { Attempt, CameraSpec, Prediction } from "../state/edu";
 import {
   assumedLimits,
   costMinutes,
@@ -37,6 +37,11 @@ export const EDU_TARGET = {
   LAYERS: "layers",
   POINTS: "points",
   SEARCH: "search",
+  PROFILE: "profile",
+  CLOCK: "clock",
+  INSPECTOR: "inspector",
+  SHARE: "share",
+  TOOLS: "tools",
 } as const;
 export type EduTarget = (typeof EDU_TARGET)[keyof typeof EDU_TARGET];
 
@@ -67,8 +72,19 @@ interface StepBase {
   readonly focus?: readonly EduTarget[];
   /** Se tapan mientras dura el paso (para predecir sin ver la respuesta). */
   readonly hide?: readonly EduTarget[];
-  /** Capas del mapa que se prenden al entrar al paso, si están disponibles. */
+  /**
+   * Piezas de la interfaz que aparecen desde este paso. Se acumulan: lo que
+   * mostró un paso anterior sigue visible. Lo resaltado o tapado también se ve.
+   */
+  readonly ui?: readonly EduTarget[];
+  /** Capas del mapa prendidas, exactas (las demás se apagan). Sin definir = las del paso anterior. */
   readonly layers?: readonly string[];
+  /** Pines de lugares en el mapa. Sin definir = como en el paso anterior (al empezar, apagados). */
+  readonly pins?: boolean;
+  /** A dónde vuela la cámara al entrar al paso. */
+  readonly camera?: CameraSpec;
+  /** Zoom trabado. Sin definir = como en el paso anterior (al empezar, libre). */
+  readonly lockZoom?: boolean;
 }
 
 export interface InfoStep extends StepBase {
@@ -96,6 +112,31 @@ export interface Lesson {
   /** La dificultad, en una frase. */
   readonly tagline: string;
   readonly steps: readonly LessonStep[];
+}
+
+/** Capas al empezar una lección: solo el relieve sombreado sobre la imagen (base-ortho no se toca). */
+const START_LAYERS: readonly string[] = ["relief-hillshade"];
+
+export interface StepSetup {
+  readonly ui: ReadonlySet<EduTarget>;
+  readonly layers: readonly string[];
+  readonly pins: boolean;
+  readonly lockZoom: boolean;
+}
+
+/** Lo que vale en el paso `index`, acumulando lo que dijeron los pasos anteriores. */
+export function setupAt(lesson: Lesson, index: number): StepSetup {
+  const ui = new Set<EduTarget>();
+  let layers = START_LAYERS;
+  let pins = false;
+  let lockZoom = false;
+  for (const s of lesson.steps.slice(0, index + 1)) {
+    for (const t of [...(s.ui ?? []), ...(s.focus ?? []), ...(s.hide ?? [])]) ui.add(t);
+    if (s.layers) layers = s.layers;
+    if (s.pins !== undefined) pins = s.pins;
+    if (s.lockZoom !== undefined) lockZoom = s.lockZoom;
+  }
+  return { ui, layers, pins, lockZoom };
 }
 
 /** Factores que el alumno puede elegir al predecir. Calorías no: no tiene tope todavía. */
@@ -165,6 +206,7 @@ const datos: Lesson = {
     {
       kind: "info",
       title: "Cuatro tipos de dato",
+      camera: { kind: "site" }, lockZoom: true,
       body: () => (
         <>
           <P>
@@ -186,6 +228,7 @@ const datos: Lesson = {
     {
       kind: "task",
       title: "Armá una ruta cualquiera",
+      lockZoom: false,
       goal: "Marcá el hábitat y elegí un destino.",
       focus: [EDU_TARGET.POINTS, EDU_TARGET.SEARCH],
       body: () => <P>Cualquier destino sirve. Vamos a mirar de qué está hecha la respuesta.</P>,
@@ -194,6 +237,7 @@ const datos: Lesson = {
     {
       kind: "info",
       title: "De qué está hecha tu ruta",
+      camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
         if (!route) return <NeedRoute />;
@@ -234,7 +278,8 @@ const pendiente: Lesson = {
     {
       kind: "info",
       title: "Por qué la pendiente manda",
-      layers: ["relief-slope"],
+      camera: { kind: "site" }, lockZoom: true,
+      layers: ["relief-hillshade", "relief-slope"],
       focus: [EDU_TARGET.LAYERS],
       body: () => (
         <>
@@ -252,8 +297,8 @@ const pendiente: Lesson = {
     {
       kind: "task",
       title: "Forzá un desvío",
+      lockZoom: false,
       goal: "Elegí un destino al que no se pueda ir en línea recta.",
-      layers: ["relief-slope"],
       focus: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS],
       body: () => (
         <P>
@@ -277,6 +322,7 @@ const pendiente: Lesson = {
     {
       kind: "info",
       title: "Lo que te costó",
+      camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT, EDU_TARGET.PROFILE],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
         if (!route) return <NeedRoute />;
@@ -320,6 +366,7 @@ const reloj: Lesson = {
     {
       kind: "info",
       title: "Planificar en 4D",
+      camera: { kind: "site" }, lockZoom: true, ui: [EDU_TARGET.CLOCK], layers: ["relief-hillshade", "survival-shadows"],
       focus: [EDU_TARGET.SUN],
       body: () => (
         <>
@@ -337,6 +384,7 @@ const reloj: Lesson = {
     {
       kind: "task",
       title: "Hacé que la hora cambie el veredicto",
+      lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS, EDU_TARGET.VERDICT],
       goal: "Con los mismos puntos, encontrá dos horas de salida con veredictos distintos.",
       focus: [EDU_TARGET.DEPART, EDU_TARGET.SUN],
       body: () => (
@@ -374,6 +422,7 @@ const reloj: Lesson = {
     {
       kind: "info",
       title: "Lo que cambió",
+      camera: { kind: "route" }, lockZoom: true,
       focus: [EDU_TARGET.BREAKDOWN],
       body: (ctx) => {
         if (!ctx.route) return <NeedRoute />;
@@ -416,6 +465,7 @@ const consumibles: Lesson = {
     {
       kind: "info",
       title: "La mochila es tu vida",
+      camera: { kind: "site" }, lockZoom: true,
       body: () => (
         <>
           <P>
@@ -433,6 +483,7 @@ const consumibles: Lesson = {
     {
       kind: "task",
       title: "Gastá la mitad",
+      lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.VERDICT],
       goal: "Armá una ruta donde al O₂ o a la batería les quede menos de la mitad del margen.",
       focus: [EDU_TARGET.POINTS, EDU_TARGET.BREAKDOWN],
       body: () => (
@@ -459,6 +510,7 @@ const consumibles: Lesson = {
     {
       kind: "info",
       title: "Qué se acabó primero",
+      camera: { kind: "route" }, lockZoom: true,
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
         if (!route) return <NeedRoute />;
@@ -499,6 +551,7 @@ const contacto: Lesson = {
     {
       kind: "info",
       title: "Por qué importa la línea de vista",
+      camera: { kind: "site" }, lockZoom: true, layers: ["relief-hillshade", "relief-contours"],
       body: () => (
         <P>
           En Marte no hay GPS ni antenas en el terreno. Si una loma queda entre vos y el hábitat, perdés
@@ -510,8 +563,9 @@ const contacto: Lesson = {
     {
       kind: "task",
       title: "Escondete",
+      lockZoom: false, ui: [EDU_TARGET.POINTS, EDU_TARGET.VERDICT],
       goal: "Armá una ruta donde pases al menos un rato sin contacto con el hábitat.",
-      layers: ["relief-hillshade"],
+      layers: ["relief-hillshade", "relief-contours"],
       focus: [EDU_TARGET.SEARCH, EDU_TARGET.BREAKDOWN],
       body: () => <P>Llevá el destino detrás de una loma o al fondo de un cráter.</P>,
       check: ({ route }) => {
@@ -528,6 +582,7 @@ const contacto: Lesson = {
     {
       kind: "info",
       title: "Cuánto estuviste solo",
+      camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.PROFILE],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
         if (!route) return <NeedRoute />;
@@ -560,6 +615,7 @@ const dosis: Lesson = {
     {
       kind: "info",
       title: "Un presupuesto, no una zona",
+      camera: { kind: "site" }, lockZoom: true, ui: [EDU_TARGET.LAYERS], layers: ["relief-hillshade", "survival-dose"],
       body: () => (
         <>
           <P>
@@ -576,6 +632,7 @@ const dosis: Lesson = {
     {
       kind: "task",
       title: "Medí tu dosis",
+      lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS],
       goal: "Armá una ruta con la dosis evaluada.",
       focus: [EDU_TARGET.BREAKDOWN],
       body: () => <P>Cualquier ruta sirve. Si querés, sumá una parada larga y mirá cómo crece.</P>,
@@ -589,6 +646,7 @@ const dosis: Lesson = {
     {
       kind: "info",
       title: "Cuántas EVAs te entran",
+      camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
         if (!route) return <NeedRoute />;
@@ -630,6 +688,7 @@ const robustez: Lesson = {
     {
       kind: "info",
       title: "El plan B ya tiene que estar en el plan A",
+      camera: { kind: "site" }, lockZoom: true,
       body: () => (
         <P>
           Afuera las cosas se demoran. El planificador toma tu misma ruta y la recalcula en peores
@@ -641,6 +700,7 @@ const robustez: Lesson = {
     {
       kind: "predict",
       title: "Antes de mirar",
+      lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS],
       question: "Armá una ruta. Sin ver el veredicto: ¿qué es lo que más la limita?",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
       body: () => <P>El veredicto queda tapado hasta que elijas.</P>,
@@ -649,6 +709,7 @@ const robustez: Lesson = {
     {
       kind: "task",
       title: "Hacela robusta",
+      lockZoom: false, ui: [EDU_TARGET.VERDICT],
       goal: "Conseguí una ruta que no sea NO-GO y que aguante todos los escenarios que se pueden evaluar.",
       focus: [EDU_TARGET.BREAKDOWN, EDU_TARGET.DEPART],
       body: () => <P>Si falla, acortala, salí más temprano o sacá paradas.</P>,
@@ -670,6 +731,7 @@ const robustez: Lesson = {
     {
       kind: "info",
       title: "Cómo quedó",
+      camera: { kind: "route" }, lockZoom: true,
       focus: [EDU_TARGET.BREAKDOWN],
       body: (ctx) => {
         if (!ctx.route?.verdict.robustness) return <NeedRoute />;
@@ -709,6 +771,7 @@ const incertezas: Lesson = {
     {
       kind: "task",
       title: "Armá una ruta",
+      camera: { kind: "site" }, lockZoom: false, ui: [EDU_TARGET.SEARCH],
       goal: "Cualquier ruta: vamos a leer lo que el planificador admite que no sabe.",
       focus: [EDU_TARGET.POINTS],
       body: () => <P>Este planificador es un prototipo educativo, no software de vuelo. Veamos dónde están sus bordes.</P>,
@@ -717,6 +780,7 @@ const incertezas: Lesson = {
     {
       kind: "info",
       title: "Lo que el planificador te dice que no sabe",
+      camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
         if (!route) return <NeedRoute />;
@@ -769,6 +833,7 @@ const mision: Lesson = {
     {
       kind: "task",
       title: "Elegí el objetivo",
+      camera: { kind: "site" }, lockZoom: false, pins: true, layers: ["relief-hillshade", "relief-slope"],
       goal: "Elegí como destino un lugar con nombre: un depósito de muestras o un objetivo científico si el sitio los tiene.",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
       focus: [EDU_TARGET.SEARCH],
@@ -802,6 +867,7 @@ const mision: Lesson = {
     {
       kind: "predict",
       title: "Predecí",
+      camera: { kind: "route" }, lockZoom: true,
       question: "¿Qué va a limitar esta EVA?",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
       body: () => null,
@@ -810,6 +876,7 @@ const mision: Lesson = {
     {
       kind: "task",
       title: "GO y robusta",
+      lockZoom: false, ui: [EDU_TARGET.SUN, EDU_TARGET.PROFILE, EDU_TARGET.LAYERS],
       goal: "Dejala en GO y que aguante todos los escenarios evaluables, sin cambiar el destino.",
       focus: [EDU_TARGET.VERDICT, EDU_TARGET.DEPART, EDU_TARGET.POINTS],
       body: () => <P>Usá todo: la hora de salida, paradas intermedias, el tiempo en cada estación.</P>,
@@ -829,6 +896,7 @@ const mision: Lesson = {
     {
       kind: "info",
       title: "Lista para salir",
+      camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.SHARE],
       focus: [EDU_TARGET.VERDICT],
       body: ({ route }) => {
         if (!route) return <NeedRoute />;

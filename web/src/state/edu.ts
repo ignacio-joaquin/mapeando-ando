@@ -21,6 +21,23 @@ export interface Attempt {
 /** La predicción del alumno: un factor, o "nada me limita" (null). */
 export type Prediction = LimitingFactor | "none";
 
+/**
+ * A dónde lleva la cámara un paso. No hay coordenadas escritas a mano: todo
+ * sale del sitio (bbox de /api/sites) o de la travesía del alumno.
+ */
+export type CameraSpec =
+  | { readonly kind: "site" }
+  /** Centrado en el hábitat (si no hay, el sitio). */
+  | { readonly kind: "habitat"; readonly zoom: number }
+  /** Encuadra la ruta calculada; si no hay, los puntos; si no, el sitio. */
+  | { readonly kind: "route" };
+
+export interface CameraRequest {
+  /** Sube en cada pedido: el mapa vuela una vez por pedido. */
+  readonly seq: number;
+  readonly spec: CameraSpec;
+}
+
 interface EduState {
   /** Lista de lecciones abierta (sin lección elegida). */
   readonly open: boolean;
@@ -34,6 +51,12 @@ interface EduState {
   readonly skipped: boolean;
   /** Lecciones terminadas (por id). Se guarda en el navegador si se puede. */
   readonly done: Readonly<Record<string, true>>;
+  /** Último pedido de cámara de la lección. */
+  readonly camera: CameraRequest | null;
+  /** Zoom trabado por la lección (se puede seguir moviendo el mapa). */
+  readonly zoomLock: boolean;
+  requestCamera: (spec: CameraSpec) => void;
+  setZoomLock: (lock: boolean) => void;
   setOpen: (open: boolean) => void;
   start: (lessonId: string) => void;
   goTo: (step: number) => void;
@@ -77,6 +100,10 @@ export const useEdu = create<EduState>((set) => ({
   attempts: [],
   skipped: false,
   done: typeof window === "undefined" ? {} : loadDone(),
+  camera: null,
+  zoomLock: false,
+  requestCamera: (spec) => set((s) => ({ camera: { seq: (s.camera?.seq ?? 0) + 1, spec } })),
+  setZoomLock: (zoomLock) => set({ zoomLock }),
   setOpen: (open) => set({ open }),
   start: (lessonId) => set({ open: true, lessonId, step: 0, prediction: null, attempts: [], skipped: false }),
   goTo: (step) => set({ step, prediction: null }),
@@ -96,5 +123,5 @@ export const useEdu = create<EduState>((set) => ({
       saveDone(done);
       return { done };
     }),
-  exit: () => set({ lessonId: null, step: 0, prediction: null, attempts: [], skipped: false }),
+  exit: () => set({ lessonId: null, step: 0, prediction: null, attempts: [], skipped: false, zoomLock: false }),
 }));

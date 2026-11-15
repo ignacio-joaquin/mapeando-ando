@@ -97,3 +97,23 @@ body[data-edu-hide~="breakdown"] [data-edu="breakdown"]::after {
   color: var(--color-muted);
   font-size: 12px;
 }
+
+/* Modo entrenamiento: la lección va mostrando la interfaz de a poco. Con
+   data-edu-ui en <body>, una pieza se ve solo si está en data-edu-show. */
+body[data-edu-ui]:not([data-edu-show~="verdict"]) [data-edu="verdict"],
+body[data-edu-ui]:not([data-edu-show~="breakdown"]) [data-edu="breakdown"],
+body[data-edu-ui]:not([data-edu-show~="depart"]) [data-edu="depart"],
+body[data-edu-ui]:not([data-edu-show~="sun-timeline"]) [data-edu="sun-timeline"],
+body[data-edu-ui]:not([data-edu-show~="layers"]) [data-edu="layers"],
+body[data-edu-ui]:not([data-edu-show~="points"]) [data-edu="points"],
+body[data-edu-ui]:not([data-edu-show~="search"]) [data-edu="search"],
+body[data-edu-ui]:not([data-edu-show~="profile"]) [data-edu="profile"],
+body[data-edu-ui]:not([data-edu-show~="clock"]) [data-edu="clock"],
+body[data-edu-ui]:not([data-edu-show~="inspector"]) [data-edu="inspector"],
+body[data-edu-ui]:not([data-edu-show~="share"]) [data-edu="share"],
+body[data-edu-ui]:not([data-edu-show~="tools"]) [data-edu="tools"] {
+  display: none !important;
+}
+body[data-edu-ui]:not([data-edu-show~="clock"]):not([data-edu-show~="inspector"]):not([data-edu-show~="layers"]) [data-edu="right"] {
+  display: none !important;
+}
