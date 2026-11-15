@@ -194,15 +194,16 @@ export const LAYERS: readonly LayerSpec[] = [
     unit: "clase",
     source: {
       provenance: "DERIVED",
-      mission: "MRO + Mars Odyssey",
-      instrument: "HiRISE DTM + THEMIS",
+      // Sin THEMIS la corrida usa solo el DTM: terrain.json trae misión e instrumento reales.
+      mission: "MRO",
+      instrument: "HiRISE DTM",
       resolution: "1 m/px (suelo suelto: 100 m/px)",
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y el IR nocturno de THEMIS",
       assumptions: [
         "Manda la peor entre la clase de pendiente y la de rugosidad σ (desvío estándar del relieve en 5 m, sin la tendencia)",
         "σ ≈ la mitad de la altura de los escalones: σ 0,40 m ≈ bloques de ~1 m",
         "Un DTM de 1 m no ve rocas sueltas de menos de ~3–5 m",
-        "Suelo suelto: lo 20 % más frío de noche del sitio según THEMIS; solo sube 'bajo' a 'medio', nunca bloquea, y se ve en cuadros de 100 m",
+        "Si el badge nombra THEMIS, suelo suelto: lo ~20 % más frío de noche del sitio según THEMIS; solo sube 'bajo' a 'medio', nunca bloquea, y se ve en cuadros de 100 m",
         "Si al sitio le falta THEMIS, la capa sale solo con la geometría (lo dice terrain.json)",
         "Solo geometría del terreno: no incluye gravedad, traje ni carga",
       ],

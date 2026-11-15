@@ -167,6 +167,8 @@ Una pila reutilizada viaja como `MODELED`, con el sol de origen, ΔLs y la difer
 
 - Sale: `{ photos: [...], note? }`, ordenadas de la más cercana a la más lejana. Por foto: `url`, `url_full?`, `mission`, `rover`, `camera`, `sol`, `taken_utc?`, `credit`, `lat`/`lon` del waypoint y `distance` (valor con procedencia, m) entre el punto pedido y ese waypoint.
 - `credit` es obligatorio: NASA/JPL-Caltech; Mastcam-Z: NASA/JPL-Caltech/ASU; Mastcam: NASA/JPL-Caltech/MSSS.
+- `composition` (opcional, MAP-53): composición elemental medida por el rover cerca de ese waypoint. `{ summary?, elements: [...], note? }`; cada elemento es un valor con procedencia más `element` (ej. `"SiO2"`, unidad `"% en peso"`) y `note?`. La ficha de la estación usa la de la foto más cercana que la traiga y dice de qué sol es y a qué distancia está. Sin dato, no viene el campo y la ficha dice que falta. La valida `RoverCompositionSchema`.
+- Subsuelo (RIMFAX en Jezero, campo magnético grueso en Gale) todavía no tiene contrato: la ficha dice que falta el dato.
 - Sin fotos cerca: `photos: []` y una `note`. Nunca una foto de ejemplo.
 - Mientras el server responda 404/405/501, la ficha dice que falta el endpoint.
 
