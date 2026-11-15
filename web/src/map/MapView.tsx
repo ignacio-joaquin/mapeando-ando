@@ -1,9 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Map as MapLibreMap,
   Marker,
   NavigationControl,
   GeoJSONSource,
+  Popup,
   type ExpressionSpecification,
   type MapMouseEvent,
   type StyleSpecification,
@@ -23,6 +25,15 @@ import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
 import { checkCoverage } from "./coverage";
+import {
+  addPinImages,
+  PLACE_KINDS,
+  PLACES_LAYER,
+  PLACES_SELECTED_LAYER,
+  PLACES_SOURCE,
+  placesToGeoJSON,
+} from "./places";
+import { PlacePopup } from "../components/route/PlacePopup";
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -120,12 +131,23 @@ export function MapView({ center, bbox, siteId }: Props) {
     map.addControl(new NavigationControl({ showCompass: false }), "top-right");
     map.on("mousemove", (e: MapMouseEvent) => setCursor({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
     map.on("mouseout", () => setCursor(null));
+    map.on("mouseenter", PLACES_LAYER, () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", PLACES_LAYER, () => (map.getCanvas().style.cursor = ""));
     // La barra de escala sigue al zoom real del mapa (y a la latitud del centro).
     const syncView = () =>
       useStore.getState().setView({ zoom: map.getZoom(), lat: map.getCenter().lat });
     map.on("move", syncView);
     map.on("load", syncView);
     map.on("click", (e: MapMouseEvent) => {
+      // Un pin de lugar le gana al clic en el mapa: abre su ficha y no suma un punto.
+      const hit = map.getLayer(PLACES_LAYER)
+        ? map.queryRenderedFeatures(e.point, { layers: [PLACES_LAYER] })[0]
+        : undefined;
+      const hitId = hit?.properties?.["id"];
+      if (typeof hitId === "string") {
+        useStore.getState().setSelectedPlace(hitId);
+        return;
+      }
       const p = { lat: e.lngLat.lat, lon: e.lngLat.lng };
       // El modo se lee al momento del clic: el handler se registra una sola vez.
       const plan = usePlan.getState();
@@ -516,13 +538,126 @@ export function MapView({ center, bbox, siteId }: Props) {
         filter: ["==", ["get", "class"], "unknown"],
         paint: { "line-color": color, "line-width": 4, "line-dasharray": [1.5, 1.2] },
       });
+      // Los pines quedan arriba de la ruta.
+      if (map.getLayer(PLACES_SELECTED_LAYER)) map.moveLayer(PLACES_SELECTED_LAYER);
+      if (map.getLayer(PLACES_LAYER)) map.moveLayer(PLACES_LAYER);
     };
     whenReady(map, apply);
   }, [result]);
 
+  // 6. Pines de lugares (places.json), como en Google Maps. Los mismos lugares
+  //    que el buscador; se filtran por tipo desde el panel de capas. Al
+  //    superponerse queda el de mayor rango (IAU > muestras > objetivos > …).
+  const places = useStore((s) => s.places);
+  const placeKinds = useStore((s) => s.placeKinds);
+  const selectedPlaceId = useStore((s) => s.selectedPlaceId);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data = placesToGeoJSON(places?.places ?? []);
+      const src = map.getSource(PLACES_SOURCE);
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+      } else {
+        addPinImages(map);
+        map.addSource(PLACES_SOURCE, { type: "geojson", data });
+        // Anillo del lugar con la ficha abierta, debajo del pin.
+        map.addLayer({
+          id: PLACES_SELECTED_LAYER,
+          type: "circle",
+          source: PLACES_SOURCE,
+          filter: ["==", ["get", "id"], ""],
+          paint: {
+            "circle-radius": 14,
+            "circle-color": "rgba(224,122,74,0.25)",
+            "circle-stroke-color": "#e07a4a",
+            "circle-stroke-width": 3,
+          },
+        });
+        map.addLayer({
+          id: PLACES_LAYER,
+          type: "symbol",
+          source: PLACES_SOURCE,
+          layout: {
+            "icon-image": ["concat", "place-pin-", ["get", "kind"]],
+            "icon-anchor": "bottom",
+            "icon-allow-overlap": false,
+            "icon-padding": 1,
+            "symbol-sort-key": ["get", "rank"],
+            // Nombres solo de cerca, y se caen antes que el pin si no entran.
+            "text-field": ["step", ["zoom"], "", 14, ["get", "name"]],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 12,
+            "text-anchor": "top",
+            "text-offset": [0, 0.2],
+            "text-optional": true,
+            "text-max-width": 10,
+          },
+          paint: {
+            "text-color": "#ece6de",
+            "text-halo-color": "#0b0a09",
+            "text-halo-width": 1.5,
+          },
+        });
+      }
+      const kinds = PLACE_KINDS.filter((k) => placeKinds[k]);
+      map.setFilter(PLACES_LAYER, ["in", ["get", "kind"], ["literal", kinds]]);
+      map.setFilter(PLACES_SELECTED_LAYER, ["==", ["get", "id"], selectedPlaceId ?? ""]);
+      // La ruta va por debajo de los pines: si no, la línea los tapa.
+      if (map.getLayer("route-casing")) map.moveLayer(PLACES_SELECTED_LAYER);
+      if (map.getLayer("route-casing")) map.moveLayer(PLACES_LAYER);
+    };
+    whenReady(map, apply);
+  }, [places, placeKinds, selectedPlaceId]);
+
+  // 7. Ficha del pin tocado. El popup de MapLibre aloja un div y React dibuja
+  //    adentro con un portal, así la ficha usa los mismos componentes que el panel.
+  const [popupNode] = useState(() => document.createElement("div"));
+  const popupRef = useRef<Popup | null>(null);
+  const selectedPlace = places?.places.find((p) => p.id === selectedPlaceId) ?? null;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!selectedPlace) {
+      popupRef.current?.remove();
+      return;
+    }
+    let popup = popupRef.current;
+    if (!popup) {
+      popup = new Popup({
+        closeButton: true,
+        closeOnClick: false,
+        maxWidth: "none",
+        offset: [0, -30],
+        // Sin foco automático: si no, el badge de procedencia abre su tooltip encima de la ficha.
+        focusAfterOpen: false,
+      })
+        .setDOMContent(popupNode);
+      // Cerrar con la cruz (o con Escape) limpia la selección.
+      popup.on("close", () => {
+        if (useStore.getState().selectedPlaceId) useStore.getState().setSelectedPlace(null);
+      });
+      popupRef.current = popup;
+    }
+    popup.setLngLat([selectedPlace.lon, selectedPlace.lat]);
+    if (!popup.isOpen()) popup.addTo(map);
+  }, [selectedPlace, popupNode]);
+  // Al desmontar el mapa, el popup se va con él.
+  useEffect(() => () => {
+    popupRef.current?.remove();
+    popupRef.current = null;
+  }, []);
+
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
+      {selectedPlace
+        ? createPortal(
+            <PlacePopup place={selectedPlace} onClose={() => useStore.getState().setSelectedPlace(null)} />,
+            popupNode,
+          )
+        : null}
     </div>
   );
 }
