@@ -52,12 +52,13 @@ const SLOPE_LEGEND: readonly LegendStop[] = SLOPE_CLASSES.map((c) => ({
 
 /**
  * Clases de peligro de terreno (hazard.tif, pipeline/terrain_layers.py): manda la peor
- * entre la pendiente (mismos cortes que SLOPE_CLASSES) y la rugosidad σ. Los colores son
- * los de RAMPAS["peligro"] en pipeline/tiles.py: si cambian acá, cambian allá.
+ * entre la pendiente (mismos cortes que SLOPE_CLASSES) y la rugosidad σ; con THEMIS, el
+ * terreno "bajo" con suelo suelto probable sube a "medio". Los colores son los de
+ * RAMPAS["peligro"] en pipeline/tiles.py: si cambian acá, cambian allá.
  */
 const HAZARD_LEGEND: readonly LegendStop[] = [
-  { color: "#2f7d4f", label: "bajo: < 10° y σ < 0,15 m" },
-  { color: "#e0a24a", label: "medio: 10–20° o σ 0,15–0,25 m" },
+  { color: "#2f7d4f", label: "bajo: < 10°, σ < 0,15 m y suelo firme" },
+  { color: "#e0a24a", label: "medio: 10–20°, σ 0,15–0,25 m o suelo suelto (THEMIS)" },
   { color: "#e07a4a", label: "alto: 20–25° o σ 0,25–0,40 m" },
   { color: "#e0564a", label: "no transitable: ≥ 25° o σ ≥ 0,40 m" },
 ];
@@ -160,21 +161,49 @@ export const LAYERS: readonly LayerSpec[] = [
     defaultVisible: false,
   },
   {
+    id: "survival-thermal",
+    label: "Térmico de noche (THEMIS)",
+    group: "supervivencia",
+    unit: "brillo relativo",
+    source: {
+      provenance: "OBSERVED",
+      mission: "Mars Odyssey",
+      instrument: "THEMIS",
+      resolution: "100 m/px",
+      source:
+        "Mosaico controlado del IR nocturno de THEMIS (USGS Astrogeology / ASU), recortado al sitio sin remuestrear",
+      assumptions: [
+        "Producto cualitativo de 8 bits: brillo relativo dentro del sitio, no una temperatura",
+        "De noche la roca guarda el calor y se ve tibia; la arena y el polvo se enfrían rápido y se ven fríos",
+        "Registro de ~150–275 m: no sirve para ubicar algo más chico que unos cientos de metros",
+      ],
+    },
+    // Gris del PNG: el DN de THEMIS tal cual (pipeline/thermal.py), sin colorear.
+    legend: [
+      { color: "#2a2a2a", label: "más frío de noche: arena, polvo, grano fino" },
+      { color: "#e0e0e0", label: "más tibio de noche: roca o suelo compacto" },
+    ],
+    tiles: "/tiles/{site}/thermal/{z}/{x}/{y}.png",
+    kind: "raster",
+    defaultVisible: false,
+  },
+  {
     id: "survival-hazard",
     label: "Peligro de terreno",
     group: "supervivencia",
     unit: "clase",
     source: {
       provenance: "DERIVED",
-      mission: "MRO",
-      instrument: "HiRISE DTM",
-      resolution: "1 m/px",
-      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+      mission: "MRO + Mars Odyssey",
+      instrument: "HiRISE DTM + THEMIS",
+      resolution: "1 m/px (suelo suelto: 100 m/px)",
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y el IR nocturno de THEMIS",
       assumptions: [
         "Manda la peor entre la clase de pendiente y la de rugosidad σ (desvío estándar del relieve en 5 m, sin la tendencia)",
         "σ ≈ la mitad de la altura de los escalones: σ 0,40 m ≈ bloques de ~1 m",
         "Un DTM de 1 m no ve rocas sueltas de menos de ~3–5 m",
-        "No distingue roca firme de arena suelta",
+        "Suelo suelto: lo 20 % más frío de noche del sitio según THEMIS; solo sube 'bajo' a 'medio', nunca bloquea, y se ve en cuadros de 100 m",
+        "Si al sitio le falta THEMIS, la capa sale solo con la geometría (lo dice terrain.json)",
         "Solo geometría del terreno: no incluye gravedad, traje ni carga",
       ],
     },

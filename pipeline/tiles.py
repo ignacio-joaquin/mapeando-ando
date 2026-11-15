@@ -16,12 +16,13 @@ que ninguno tenga que saber del otro.
   python pipeline/tiles.py --vector /data/output/jezero/contours.gpkg \
                            --out /data/output/jezero/contours.geojson
 
-precompute.py lo llama para la pendiente, el sombreado y el peligro (raster_a_tiles) y anota
-el zoom y los límites en terrain.json; a mano sirve para cualquier otro raster.
+precompute.py lo llama para la pendiente, el sombreado, el térmico de THEMIS, el peligro y la
+dosis (raster_a_tiles) y anota el zoom y los límites en terrain.json; a mano sirve para
+cualquier otro raster.
 
 El nombre de la carpeta de salida es CONTRATO: tiene que ser el último segmento
 de la plantilla `tiles` de web/src/map/layers.ts (`hillshade/`, `slope/`,
-`hazard/`, `ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
+`thermal/`, `hazard/`, `dose/`, `ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
 capa queda deshabilitada.
 
 Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr),
@@ -213,7 +214,7 @@ def main():
     ap.add_argument("--out", type=Path, required=True,
                     help="carpeta de tiles, o archivo .geojson si es vectorial")
     ap.add_argument("--color", choices=sorted(RAMPAS),
-                    help="rampa de color por rangos (pendiente o peligro)")
+                    help="rampa de color por rangos (pendiente, peligro o dosis)")
     ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
                     help="tope de zoom; por defecto lo deduce gdal2tiles del tamaño del pixel")
     ap.add_argument("--resampling", default=None,
