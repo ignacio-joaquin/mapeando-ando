@@ -273,7 +273,10 @@ def fmt_ltst(seconds: float) -> str:
 
 def run_sol(grid: WorkGrid, far, sun: sg.SiteSun, et_midnight: float, args, inputs: dict, work: Path) -> Path:
     et_next = sun.et_at_ltst(et_midnight + sg.SOL_S, 0.0)
-    tag = sg.et_to_utc(et_midnight)[:16].replace("-", "").replace(":", "") + "Z"
+    # Nombre del sol por día/mes/año/hora UTC, con minutos y segundos en 0.
+    tag = dt.datetime.fromtimestamp(et_midnight, dt.timezone.utc).replace(
+        minute=0, second=0, microsecond=0
+    ).strftime("%Y%m%dT%H00Z")
     out_dir = inputs["out"] / "illumination" / tag
     out_dir.mkdir(parents=True, exist_ok=True)
     rise_et, set_et = sun.flat_horizon_crossings(et_midnight, et_next)

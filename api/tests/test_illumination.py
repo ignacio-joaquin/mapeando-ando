@@ -1,4 +1,6 @@
 """Lectura de la pila de sombras (api/illumination.py) y POST /api/illumination/window."""
+import subprocess
+
 import numpy as np
 import pytest
 
@@ -22,7 +24,9 @@ class TestStack:
     def test_ignora_work_y_carpetas_incompletas(self, data_dir):
         write_shadow_stack(data_dir)
         base = data_dir / "output" / "jezero" / "illumination"
-        (base / "_work").mkdir()
+        work = base / "_work"
+        work.mkdir()
+        (work / "z.npy").write_bytes(b"tmp")
         (base / "20261116T0040Z").mkdir()  # sin tif ni index: corrida a medias
         assert [d.name for d in sol_dirs(data_dir, "jezero")] == [SOL_TAG]
 
@@ -35,6 +39,34 @@ class TestStack:
     def test_sol_tag_con_otro_formato_se_rechaza(self, data_dir):
         with pytest.raises(ValueError):
             stack_for_tag(data_dir, "jezero", "../../etc")
+
+    def test_sol_tag_normaliza_a_hora_redondeada(self):
+        from api.illumination import sol_tag_for_time
+
+        assert sol_tag_for_time(1794752958.0) == "20261115T1400Z"
+
+    def test_ensure_fuerza_generacion_si_falta_la_pila_exacta(self, monkeypatch, data_dir):
+        from api.illumination import ensure_illumination_for_time
+
+        generated = object()
+        reused = object()
+        calls = []
+
+        def fake_exact(*args, **kwargs):
+            if not calls:
+                return None
+            return generated
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("api.illumination.exact_stack_for_time", fake_exact)
+        monkeypatch.setattr("api.illumination.stack_for_time", lambda *args, **kwargs: reused)
+        monkeypatch.setattr("api.illumination.subprocess.run", fake_run)
+
+        assert ensure_illumination_for_time(data_dir, "jezero", 0.0, data_dir) is generated
+        assert any(str(cmd[1]).endswith("pipeline/illumination.py") for cmd in calls)
 
     @pytest.mark.parametrize("ltst,band", [("00:00", 1), ("12:00", 13), ("23:00", 24)])
     def test_banda_por_hora_lee_el_paso_del_index(self, data_dir, ltst, band):

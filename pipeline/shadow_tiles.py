@@ -36,7 +36,7 @@ from pathlib import Path
 import tiles as tl
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
-SOL_TAG_RE = re.compile(r"^\d{8}T\d{4}Z$")
+SOL_TAG_RE = re.compile(r"^\d{8}T\d{2}(?:\d{2})?Z$")
 
 # Zoom tope por defecto. Los tiles son lat/lon de Marte etiquetado como EPSG:4326,
 # así que a z15 un píxel mide ~2,5 m en el ecuador marciano (2,4 m en Jezero), no

@@ -1,7 +1,8 @@
 """Lectura de la pila de sol/sombra que precomputa `pipeline/illumination.py`.
 
-Solo lee. Si la pila de un sol no está, se dice que falta: la API nunca corre el
-pipeline (tarda minutos y usa GB de RAM). Formato de la salida en docs/illumination.md:
+Cuando falta la pila exacta para el momento pedido, esta capa intenta forzar la
+precomputación antes de seguir con la ruta. Si el pipeline no puede correr, se
+degrada sin romper la API. Formato de la salida en docs/illumination.md:
 
     /data/output/<sitio>/illumination/<AAAAMMDDTHHMMZ>/
         shadow_hourly.tif   uint8, una banda por paso LTST: 1 sol, 0 sombra, 255 sin dato
@@ -40,8 +41,29 @@ LIT = 1
 SHADOW = 0
 NODATA_U8 = 255
 
-# Nombre de carpeta que escribe run_sol(): medianoche local en UTC, sin segundos.
-SOL_TAG_RE = re.compile(r"^\d{8}T\d{4}Z$")
+# Nombre de carpeta que escribe run_sol(): fecha UTC + hora redondeada a la hora, sin
+# minutos/segundos. Aceptamos también tags heredados con minutos para compatibilidad.
+SOL_TAG_RE = re.compile(r"^\d{8}T\d{2}(?:\d{2})?Z$")
+
+
+def sol_tag_for_time(t: float | dt.datetime) -> str:
+    """Tag horario de una hora UTC con minutos y segundos en 0.
+
+    Ejemplo: 2026-11-15T14:29:18Z -> 20261115T1400Z.
+    """
+    if isinstance(t, dt.datetime):
+        dt_ = t.astimezone(dt.timezone.utc) if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+    else:
+        dt_ = dt.datetime.fromtimestamp(float(t), dt.timezone.utc)
+    dt_ = dt_.replace(minute=0, second=0, microsecond=0)
+    return dt_.strftime("%Y%m%dT%H00Z")
+
+
+def start_utc_for_generation(t: float) -> str:
+    """UTC normalizado a la hora exacta, con minutos y segundos en 0."""
+    return dt.datetime.fromtimestamp(float(t), dt.timezone.utc).replace(
+        minute=0, second=0, microsecond=0
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class IlluminationNotReady(LookupError):
@@ -57,13 +79,17 @@ def parse_utc(s: str) -> float:
 
 
 def sol_dirs(data_dir: Path, site_id: str) -> list[Path]:
-    """Carpetas de sol completas (con tif e index), ordenadas por fecha."""
+    """Carpetas de sol completas (con tif e index), ordenadas por fecha.
+
+    La carpeta de trabajo del pipeline (`_work`) es un directorio auxiliar y nunca es un sol.
+    Si queda con archivos temporales como `z.npy`, se ignora por completo.
+    """
     base = Path(data_dir) / "output" / site_id / "illumination"
     if not base.is_dir():
         return []
     return sorted(
         p for p in base.iterdir()
-        if p.is_dir() and SOL_TAG_RE.match(p.name)
+        if p.is_dir() and p.name != "_work" and SOL_TAG_RE.match(p.name)
         and (p / "index.json").is_file() and (p / "shadow_hourly.tif").is_file()
     )
 
@@ -190,15 +216,8 @@ def _crossing(c: dict | None) -> float | None:
     return parse_utc(c["utc"]) if c and c.get("utc") else None
 
 
-def stack_for_time(data_dir: Path, site_id: str, t: float,
-                   max_dls_deg: float = SOL_REUSE_MAX_DLS_DEG) -> ShadowStack | None:
-    """La pila del sol que contiene el instante `t`.
-
-    Si ese sol no se precomputó, la de otro sol de la misma estación (|ΔLs| ≤
-    `max_dls_deg`, el más cercano), llevada a la fecha pedida y marcada en `reuse`.
-    None si no hay ninguna: la luz queda sin evaluar, nunca se rellena.
-    """
-    stacks: list[ShadowStack] = []
+def exact_stack_for_time(data_dir: Path, site_id: str, t: float) -> ShadowStack | None:
+    """La pila exacta del sol que contiene el instante `t`, sin reutilización por estación."""
     for d in sol_dirs(data_dir, site_id):
         try:
             s = ShadowStack(d)
@@ -206,6 +225,27 @@ def stack_for_time(data_dir: Path, site_id: str, t: float,
             continue  # index.json a medio escribir o de otra versión: se ignora
         if s.covers(t):
             return s
+    return None
+
+
+def stack_for_time(data_dir: Path, site_id: str, t: float,
+                   max_dls_deg: float = SOL_REUSE_MAX_DLS_DEG) -> ShadowStack | None:
+    """La pila del sol que contiene el instante `t`.
+
+    Primero intenta la exacta. Si no hay ninguna, usa la de otro sol de la misma
+    estación (|ΔLs| ≤ `max_dls_deg`, el más cercano), llevada a la fecha pedida y marcada
+    en `reuse`. None si no hay ninguna: la luz queda sin evaluar, nunca se rellena.
+    """
+    exact = exact_stack_for_time(data_dir, site_id, t)
+    if exact is not None:
+        return exact
+
+    stacks: list[ShadowStack] = []
+    for d in sol_dirs(data_dir, site_id):
+        try:
+            s = ShadowStack(d)
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            continue  # index.json a medio escribir o de otra versión: se ignora
         stacks.append(s)
 
     best: tuple[float, SolReuse, ShadowStack] | None = None
@@ -248,16 +288,20 @@ def ensure_illumination_for_time(data_dir: Path, site_id: str, t: float,
                                 repo_dir: Path | None = None) -> ShadowStack | None:
     """Genera la pila y tiles de iluminación si faltan, antes de pedir la ruta.
 
-    Lo hace solo cuando la API necesita la luz para ese sitio y momento. Si la corrida del
-    pipeline falla o los binarios no están, devuelve None para que la ruta siga degradando
-    sin romper la API (ver `plan_route`).
+    La regla es estricta: si no hay una pila exacta para ese instante, se fuerza la
+    generación. Si no se puede generar, se devuelve la mejor pila reutilizada disponible
+    si no hay otra opción; siempre que el pipeline esté disponible, la ruta usa el mapa
+    recién generado.
     """
-    stack = stack_for_time(data_dir, site_id, t)
-    if stack is not None:
-        return stack
+    exact = exact_stack_for_time(data_dir, site_id, t)
+    if exact is not None:
+        return exact
+
+    fallback = stack_for_time(data_dir, site_id, t)
     if repo_dir is None:
-        return None
-    start_utc = dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return fallback
+
+    start_utc = start_utc_for_generation(t)
     py = _pipeline_python(repo_dir)
     env = os.environ.copy()
     env["DATA_DIR"] = str(data_dir)
@@ -270,8 +314,8 @@ def ensure_illumination_for_time(data_dir: Path, site_id: str, t: float,
         for cmd in cmds:
             subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
     except (FileNotFoundError, OSError, subprocess.CalledProcessError):
-        return None
-    return stack_for_time(data_dir, site_id, t)
+        return fallback
+    return exact_stack_for_time(data_dir, site_id, t) or fallback
 
 
 def apply_affine(t, xs, ys):
