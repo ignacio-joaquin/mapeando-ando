@@ -61,3 +61,18 @@ def test_gives_up_after_backoff_tries(tmp_path, monkeypatch, sleeps):
     with pytest.raises(RuntimeError, match="HTTP 503"):
         download.fetch("https://pds-geosciences.wustl.edu/x.csv", tmp_path / "x.csv")
     assert len(sleeps) == download.BACKOFF_TRIES
+
+
+@pytest.mark.parametrize("code", ["500", "502", "504"])
+def test_transient_5xx_retries_short(tmp_path, monkeypatch, sleeps, code):
+    # Antes los reintentaba curl --retry; ahora el loop, con la espera corta de red.
+    monkeypatch.setattr(download.subprocess, "run", FakeCurl((22, code), (0, "200")))
+    download.fetch("https://pds-geosciences.wustl.edu/x.csv", tmp_path / "x.csv")
+    assert sleeps == [download.NET_RETRY_S]
+
+
+def test_transient_5xx_gives_up(tmp_path, monkeypatch, sleeps):
+    monkeypatch.setattr(download.subprocess, "run", FakeCurl(*[(22, "502")] * (download.NET_TRIES + 1)))
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        download.fetch("https://pds-geosciences.wustl.edu/x.csv", tmp_path / "x.csv")
+    assert len(sleeps) == download.NET_TRIES

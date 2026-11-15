@@ -101,10 +101,12 @@ def fetch(url, dest):
             log(f"HTTP {code} de {url}: espero {BACKOFF_S} s ({backoffs}/{BACKOFF_TRIES})")
             time.sleep(BACKOFF_S)
             continue
-        # 6 DNS, 7 conexión, 18 transferencia parcial, 28 timeout, 52/56 conexión cortada
-        if rc in (6, 7, 18, 28, 52, 56) and net_errors < NET_TRIES:
+        # 6 DNS, 7 conexión, 18 transferencia parcial, 28 timeout, 52/56 conexión cortada; y los
+        # 500/502/504 pasajeros del server o de un proxy, que antes reintentaba curl --retry.
+        if (rc in (6, 7, 18, 28, 52, 56) or code in ("500", "502", "504")) and net_errors < NET_TRIES:
             net_errors += 1
-            log(f"curl exit {rc} (red) para {url}: reintento en {NET_RETRY_S} s ({net_errors}/{NET_TRIES})")
+            log(f"curl exit {rc} (HTTP {code or '?'}) para {url}: reintento en {NET_RETRY_S} s "
+                f"({net_errors}/{NET_TRIES})")
             time.sleep(NET_RETRY_S)
             continue
         raise RuntimeError(f"curl exit {rc} (HTTP {code or '?'}) for {url}")
