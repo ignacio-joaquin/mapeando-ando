@@ -37,7 +37,7 @@ export function LayerStack() {
             {GROUP_LABEL[group]}
           </h3>
           <ul className="flex flex-col gap-3">
-            {LAYERS.filter((l) => l.group === group).map((spec) => {
+            {LAYERS.filter((l) => l.group === group && !l.hidden).map((spec) => {
               const state = layers[spec.id];
               if (!state) return null;
               const disabled = !state.available;
