@@ -344,8 +344,10 @@ CONTOUR_PARAMS = {"interval_m": CONTOUR_INTERVAL_M, "major_m": CONTOUR_MAJOR_M, 
 CONTOUR_ASSUMPTIONS = [f"De lejos (zoom < {CONTOUR_MINOR_MIN_ZOOM}) solo se dibujan las curvas "
                        f"cada {CONTOUR_MAJOR_M} m."]
 # Si los tiles no salen y queda el contours.geojson de una corrida anterior, el mapa usa ese.
+# No se verifica que ese GeoJSON salga del mismo DTM que esta corrida: el texto no lo afirma.
 CONTOUR_GEOJSON_ASSUMPTIONS = ["Curvas de una corrida anterior, en un GeoJSON entero: los tiles de esta "
-                               "corrida no salieron. Mismo DTM, todas las curvas a cualquier zoom."]
+                               "corrida no salieron. Salen del DTM que había en esa corrida; todas las "
+                               "curvas a cualquier zoom."]
 
 
 def split_contours(src, dst, srs_flag="-t_srs"):

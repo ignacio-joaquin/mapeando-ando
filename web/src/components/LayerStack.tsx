@@ -44,7 +44,9 @@ export function LayerStack() {
               const resolution = terrainLayer(terrain, spec.id)?.resolution ?? spec.source.resolution;
               // Por debajo del zoom mínimo de sus tiles la capa no dibuja nada: sin este
               // aviso, prenderla de lejos (Gale abre en zoom ~9) parece no hacer nada.
-              const minzoom = readyTiles(terrain, spec.id)?.minzoom;
+              // Solo vectoriales: las raster van con tileSize 256 y MapLibre ya las dibuja
+              // desde un zoom antes de su minzoom, así que el aviso mentiría por uno.
+              const minzoom = spec.kind === "vector" ? readyTiles(terrain, spec.id)?.minzoom : undefined;
               const tooFar =
                 !disabled && state.visible && minzoom !== undefined && zoom !== null && zoom < minzoom;
               return (
