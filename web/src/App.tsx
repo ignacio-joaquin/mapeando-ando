@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import { MapView } from "./map/MapView";
 import { LAYERS, tileUrl } from "./map/layers";
-import { LayerStack } from "./components/LayerStack";
-import { Inspector } from "./components/Inspector";
-import { MarsClock } from "./components/MarsClock";
+import { LayersButton, LayersPanel } from "./components/LayerStack";
+import { CursorReadout, Inspector } from "./components/Inspector";
 import { ScaleBar } from "./components/ScaleBar";
 import { FixtureBanner } from "./components/FixtureBanner";
-import { ProvenanceBadge } from "./components/ProvenanceBadge";
-import { MARS24 } from "./domain/provenance";
-import { RoutePlanner } from "./components/route/RoutePlanner";
+import { TopBar } from "./components/TopBar";
+import { ClickModeToggle, PlannerPanel } from "./components/route/PlannerPanel";
 import { ElevationProfile } from "./components/route/ElevationProfile";
 import { CuffChecklist } from "./components/route/CuffChecklist";
 import { SunTimeline } from "./components/SunTimeline";
@@ -19,28 +17,32 @@ import {
   fetchPlaces,
   fetchSites,
   fetchTerrain,
+  fetchRouteSettings,
   tileExists,
-  usingFixtures,
 } from "./api/client";
+import { useSettings } from "./state/settings";
 import type { Health, SiteSummary, TerrainIndex } from "./api/schemas";
 import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
 import { useFreshRoute, usePlan } from "./state/plan";
 import { insideCoverage } from "./map/coverage";
-import { EduOverlay, EduToggle } from "./edu/EduOverlay";
+import { EduOverlay } from "./edu/EduOverlay";
+import { useHabitatContact } from "./components/route/HabitatContact";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeSiteId = useStore((s) => s.activeSiteId);
-  const setActiveSite = useStore((s) => s.setActiveSite);
   const setAvailability = useStore((s) => s.setAvailability);
   const setTerrain = useStore((s) => s.setTerrain);
   const setPlaces = useStore((s) => s.setPlaces);
   const setCoverage = useStore((s) => s.setCoverage);
-  const view = useStore((s) => s.view);
   const plan = useFreshRoute();
+  // La zona de contacto del hábitat se pide acá: la capa vive aunque el
+  // planificador esté en otra pestaña.
+  useHabitatContact();
+  const waypoints = usePlan((s) => s.waypoints.length);
 
   // Estado del server e inventario de sitios.
   useEffect(() => {
@@ -117,6 +119,13 @@ export function App() {
     };
   }, [activeSiteId, setAvailability, setTerrain, setCoverage]);
 
+  // Qué ajustes del planificador acepta el server (pestaña Ajustes).
+  useEffect(() => {
+    fetchRouteSettings()
+      .then((s) => useSettings.getState().setSchema(s, s ? "ready" : "missing"))
+      .catch(() => useSettings.getState().setSchema(null, "error"));
+  }, []);
+
   // Lugares del sitio para el buscador de destinos (pipeline/places.py).
   useEffect(() => {
     let alive = true;
@@ -134,145 +143,83 @@ export function App() {
   }, [activeSiteId, setPlaces]);
 
   const site = sites.find((s) => s.id === activeSiteId) ?? sites[0];
+  const hasRoute = waypoints >= 2;
 
   return (
     <>
       {/* Solo en impresión: la tira de la travesía (CuffChecklist). */}
       <CuffChecklist />
       <EduOverlay />
-      <div className="flex h-full flex-col print:hidden">
+      <div className="flex h-dvh flex-col print:hidden">
         <FixtureBanner />
+        <TopBar sites={sites} site={site} health={health} error={error} />
 
-        <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-3 py-2">
-          <h1 className="text-sm font-semibold tracking-wide">
-            Mapa Marciano
-            <span className="ml-2 font-normal text-muted">mapa de supervivencia EVA</span>
-          </h1>
-
-          <nav className="flex gap-1" aria-label="Sitio">
-            {sites.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => setActiveSite(s.id)}
-                className={
-                  s.id === activeSiteId
-                    ? "rounded border border-rust bg-rust/15 px-2 py-0.5 text-xs text-fg"
-                    : "rounded border border-line px-2 py-0.5 text-xs text-muted hover:text-fg"
-                }
-              >
-                {s.name}
-              </button>
-            ))}
-          </nav>
-
-          <EduToggle />
-
-          <p className="ml-auto text-[11px] text-muted">
-            {error ? (
-              <span className="text-alert">API: {error}</span>
-            ) : health ? (
-              <>
-                commit {health.commit ?? "?"} · datos{" "}
-                <span className={health.data_ready ? "text-ok" : "text-warn"}>
-                  {health.data_ready ? "listos" : "descargándose"}
-                </span>
-              </>
-            ) : (
-              "consultando el server…"
-            )}
-          </p>
-        </header>
-
-        <div className="flex min-h-0 flex-1">
-          <aside
-            aria-label="Planificador de travesía"
-            className="w-96 shrink-0 overflow-y-auto border-r border-line bg-panel/40 p-3"
-          >
-            <RoutePlanner />
-          </aside>
-
-          <main className="flex min-w-0 flex-1 flex-col">
+        {/* Tres columnas en pantalla ancha: planificador, mapa y capas. En
+            pantalla chica el mapa ocupa todo, las capas abren desde un botón
+            y el planificador es una hoja que sube desde abajo, por encima del
+            mapa (así el mapa no cambia de tamaño). */}
+        <div className="relative flex min-h-0 flex-1 md:flex-row">
+          <main className="relative flex min-h-0 min-w-0 flex-1 flex-col pb-12 md:order-2 md:pb-0">
             <div data-edu="map" className="relative min-h-0 flex-1">
-            {site ? (
-              <>
-                <MapView center={site.center} bbox={site.bbox} siteId={site.id} />
-                <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-bg/80 px-2 py-1">
-                  {/* Con la cámara inclinada la escala cambia de punta a punta de la
-                      pantalla: una barra fija mentiría. Las distancias de la ruta
-                      siguen saliendo del planificador. */}
-                  {(view?.pitch ?? 0) > 0.5 ? (
-                    <span className="text-[10px] text-muted">
-                      sin barra de escala en 3D: la escala cambia con la distancia
-                    </span>
-                  ) : (
-                    <ScaleBar lat={view?.lat ?? site.center.lat} zoom={view?.zoom ?? 12} />
-                  )}
-                </div>
-                <div className="pointer-events-none absolute top-3 left-3 max-w-xs rounded border border-line bg-bg/85 px-2 py-1 text-[11px] text-muted">
-                  {site.name} · {site.rover} · {site.files_ok}/{site.files_total} archivos
-                  {site.files_ok === 0 ? (
-                    <span className="block text-warn">
-                      Sin datos descargados: el mapa muestra el recuadro del sitio,
-                      no imagen real.
-                    </span>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <p className="p-6 text-sm text-muted">
-                {error ? "No se pudo leer el inventario de sitios." : "Cargando sitios…"}
-              </p>
-            )}
+              {site ? (
+                <>
+                  <MapView center={site.center} bbox={site.bbox} siteId={site.id} />
+                  <MapOverlays site={site} />
+                </>
+              ) : (
+                <p className="p-6 text-sm text-muted">
+                  {error ? "No se pudo leer el inventario de sitios." : "Cargando sitios…"}
+                </p>
+              )}
             </div>
-            {/* El perfil va debajo del mapa, como pide el ticket: se lee junto
-                con la ruta dibujada, no en otra pantalla. */}
             {site ? <SunTimeline siteId={site.id} lat={site.center.lat} lon={site.center.lon} /> : null}
-            <div data-edu="profile">
-              <ElevationProfile profile={plan?.route.profile} />
-            </div>
+            {/* El perfil va debajo del mapa: se lee junto con la ruta dibujada. */}
+            {hasRoute ? (
+              <div data-edu="profile">
+                <ElevationProfile profile={plan?.route.profile} />
+              </div>
+            ) : null}
           </main>
 
-          <aside data-edu="right" className="w-80 shrink-0 overflow-y-auto border-l border-line bg-panel/40 p-3">
-            <section data-edu="clock" className="mb-4">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-                  Reloj marciano
-                </h2>
-                {/* Un badge para todo el bloque: todos los valores salen de Mars24. */}
-                <ProvenanceBadge source={MARS24} />
-              </div>
-              {site ? (
-                <MarsClock lon={site.center.lon} />
-              ) : (
-                <p className="text-xs text-muted">—</p>
-              )}
-            </section>
-
-            <section data-edu="inspector" className="mb-4 border-t border-line pt-4">
-              <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
-                Inspector
-              </h2>
-              {site ? (
-                <Inspector center={site.center} siteId={site.id} />
-              ) : (
-                <p className="text-xs text-muted">—</p>
-              )}
-            </section>
-
-            <section data-edu="layers" className="border-t border-line pt-4">
-              <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
-                Capas
-              </h2>
-              <LayerStack />
-            </section>
-
-            <p className="mt-4 border-t border-line pt-3 text-[10px] leading-relaxed text-muted">
-              Prototipo educativo, no software de vuelo.
-              {usingFixtures ? " Corriendo con datos de ejemplo." : null}
-            </p>
-          </aside>
+          <PlannerPanel />
+          <LayersPanel />
         </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Lo que flota sobre el mapa: modo de clic (y capas, sin la columna de la
+ * derecha) arriba, el inspector cuando hay un punto fijado, escala y cursor abajo.
+ */
+function MapOverlays({ site }: { readonly site: SiteSummary }) {
+  const view = useStore((s) => s.view);
+  const pitched = (view?.pitch ?? 0) > 0.5;
+  return (
+    <>
+      <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-start gap-2 pr-12">
+        <div className="flex flex-wrap items-start gap-2">
+          <LayersButton />
+          <ClickModeToggle />
+        </div>
+        {site.files_ok === 0 ? (
+          <p className="pointer-events-auto max-w-xs rounded-md border border-warn/60 bg-panel/95 px-2 py-1 text-[11px] text-warn shadow-lg">
+            Sin datos descargados de {site.name}: el mapa muestra el recuadro del sitio, no imagen real.
+          </p>
+        ) : null}
+        <Inspector center={site.center} siteId={site.id} />
+      </div>
+
+      <div className="pointer-events-none absolute bottom-8 left-3 flex flex-col items-start gap-1 rounded-md bg-bg/80 px-2 py-1.5 backdrop-blur">
+        <CursorReadout badge={pitched} />
+        {/* Con la cámara inclinada la escala cambia de punta a punta de la
+            pantalla: una barra fija mentiría. */}
+        {pitched ? (
+          <span className="text-[10px] text-muted">sin barra de escala en 3D</span>
+        ) : (
+          <ScaleBar lat={view?.lat ?? site.center.lat} zoom={view?.zoom ?? 12} maxPx={110} />
+        )}
       </div>
     </>
   );

@@ -97,8 +97,9 @@ export const MeasuredValueSchema = z.object({
  * qué entra y qué sale. Documentado en docs/context.md §4.
  *
  * Request (POST, JSON):
- *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }] }
+ *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }], params? }
  *   waypoints[0] = salida, el último = llegada, el resto = estaciones en orden.
+ *   params = ajustes del algoritmo (ver RouteParams); sin él, los defaults del server.
  */
 export interface RouteRequest {
   readonly site: string;
@@ -109,7 +110,43 @@ export interface RouteRequest {
     readonly task: string | null;
     readonly dwell_min: number;
   }[];
+  readonly params?: RouteParams;
 }
+
+export const SETTINGS_GROUPS = ["limits", "weights", "suit"] as const;
+export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
+
+/**
+ * Ajustes de POST /api/route: solo los valores que el usuario cambió, por
+ * grupo. Lo que no va queda en el default del server.
+ */
+export type RouteParams = Partial<Record<SettingsGroup, Readonly<Record<string, number>>>>;
+
+/**
+ * GET /api/route/params: qué se puede ajustar, con default, rango y unidad.
+ * Los números salen del server (api/main.py); el frontend no copia ninguno.
+ */
+export const RouteSettingsSchema = z.object({
+  groups: z.array(
+    z.object({
+      id: z.enum(SETTINGS_GROUPS),
+      label: z.string().nullable(),
+      fields: z.array(
+        z.object({
+          id: z.string(),
+          label: z.string(),
+          help: z.string().nullable(),
+          unit: z.string().nullable(),
+          step: z.number().nullable(),
+          default: z.number(),
+          min: z.number().nullable(),
+          max: z.number().nullable(),
+        }),
+      ),
+    }),
+  ),
+});
+export type RouteSettings = z.infer<typeof RouteSettingsSchema>;
 
 /**
  * Clase de terreno de un tramo, para colorear la línea. `unknown` = no se pudo

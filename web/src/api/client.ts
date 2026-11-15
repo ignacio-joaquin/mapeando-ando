@@ -16,6 +16,8 @@ import {
   PointSchema,
   type PointInfo,
   RouteResponseSchema,
+  RouteSettingsSchema,
+  type RouteSettings,
   RoverPhotosSchema,
   type RoverPhotos,
   type RouteRequest,
@@ -32,7 +34,7 @@ import {
 } from "./schemas";
 import { fixtureHealth, fixtureSiteDetail, fixtureSites } from "./fixtures";
 import { exampleRoute } from "./routeFixture";
-import type { ZodType } from "zod";
+import type { ZodError, ZodType } from "zod";
 
 /**
  * `true` cuando no hay backend: la UI tiene que avisarlo.
@@ -73,13 +75,25 @@ async function errorDetail(res: Response): Promise<string> {
   return `: ${JSON.stringify(detail)}`;
 }
 
+/**
+ * Contrato roto, en una línea: cuántos problemas y el primero. El mensaje
+ * entero de Zod trae un objeto por elemento inválido (miles en places.json) y
+ * tapaba el panel.
+ */
+function contractError(path: string, error: ZodError): Error {
+  const [first] = error.issues;
+  const where = first && first.path.length > 0 ? `${first.path.map(String).join(".")}: ` : "";
+  const more = error.issues.length > 1 ? ` (y ${error.issues.length - 1} más)` : "";
+  return new Error(`${path} no cumple el contrato: ${where}${first?.message ?? "?"}${more}`);
+}
+
 async function get<T>(path: string, schema: ZodType<T>): Promise<T> {
   const res = await fetch(path, { headers: { accept: "application/json" } });
   if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
   const parsed = schema.safeParse(await res.json());
   if (!parsed.success) {
     // El contrato cambió: que se vea acá y no como undefined tres capas arriba.
-    throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+    throw contractError(path, parsed.error);
   }
   return parsed.data;
 }
@@ -123,7 +137,7 @@ export async function fetchPoint(
   if (!res.ok) return null;
   const parsed = PointSchema.safeParse(await res.json());
   if (!parsed.success) {
-    throw new Error(`/api/sites/${siteId}/point no cumple el contrato: ${parsed.error.message}`);
+    throw contractError(`/api/sites/${siteId}/point`, parsed.error);
   }
   return parsed.data;
 }
@@ -174,7 +188,7 @@ async function fetchLayerIndex(siteId: string, file: string): Promise<TerrainInd
   if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
   const parsed = TerrainIndexSchema.safeParse(await res.json());
   if (!parsed.success) {
-    throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+    throw contractError(path, parsed.error);
   }
   return parsed.data;
 }
@@ -188,7 +202,7 @@ async function getPipelineJson<T>(path: string, schema: ZodType<T>): Promise<T |
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
   const parsed = schema.safeParse(await res.json());
-  if (!parsed.success) throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  if (!parsed.success) throw contractError(path, parsed.error);
   return parsed.data;
 }
 
@@ -238,6 +252,20 @@ export interface PlannedRoute {
  * /api/route (404/405/501), usa el planificador de ejemplo: degradar, no romper.
  * Cualquier otro error (contrato roto, 500) se muestra tal cual.
  */
+/**
+ * Qué ajustes del planificador acepta el server. null = el server todavía no
+ * los publica (404) o no hay backend: la pestaña Ajustes lo dice.
+ */
+export async function fetchRouteSettings(): Promise<RouteSettings | null> {
+  if (usingFixtures) return null;
+  const res = await fetch("/api/route/params", { headers: { accept: "application/json" } });
+  if (res.status === 404 || res.status === 405) return null;
+  if (!res.ok) throw new Error(`/api/route/params respondió ${res.status}`);
+  const parsed = RouteSettingsSchema.safeParse(await res.json());
+  if (!parsed.success) throw contractError("/api/route/params", parsed.error);
+  return parsed.data;
+}
+
 export async function planRoute(req: RouteRequest, signal?: AbortSignal): Promise<PlannedRoute> {
   if (usingFixtures) return { route: exampleRoute(req), example: true };
 
@@ -255,7 +283,7 @@ export async function planRoute(req: RouteRequest, signal?: AbortSignal): Promis
   }
   const parsed = RouteResponseSchema.safeParse(await res.json());
   if (!parsed.success) {
-    throw new Error(`/api/route no cumple el contrato: ${parsed.error.message}`);
+    throw contractError("/api/route", parsed.error);
   }
   return { route: parsed.data, example: false };
 }
@@ -283,7 +311,7 @@ export async function fetchRoverPhotos(
   if (res.status === 404 || res.status === 405 || res.status === 501) return missing;
   if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}${await errorDetail(res)}`);
   const parsed = RoverPhotosSchema.safeParse(await res.json());
-  if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
+  if (!parsed.success) throw contractError("fotos", parsed.error);
   return parsed.data;
 }
 
@@ -306,7 +334,7 @@ export async function fetchViewshed(
   if (res.status === 404 || res.status === 405 || res.status === 501) return null;
   if (!res.ok) throw new Error(`contacto: el server respondió ${res.status}${await errorDetail(res)}`);
   const parsed = ViewshedSchema.safeParse(await res.json());
-  if (!parsed.success) throw new Error(`contacto: no cumple el contrato: ${parsed.error.message}`);
+  if (!parsed.success) throw contractError("contacto", parsed.error);
   return parsed.data;
 }
 
@@ -322,7 +350,7 @@ export async function fetchIlluminationCatalog(siteId: string): Promise<Illumina
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
   const parsed = IlluminationCatalogSchema.safeParse(await res.json());
-  if (!parsed.success) throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  if (!parsed.success) throw contractError(path, parsed.error);
   return parsed.data;
 }
 
@@ -332,6 +360,6 @@ export async function fetchSolTiles(siteId: string, relPath: string): Promise<So
   const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
   if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
   const parsed = SolTilesSchema.safeParse(await res.json());
-  if (!parsed.success) throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  if (!parsed.success) throw contractError(path, parsed.error);
   return parsed.data;
 }

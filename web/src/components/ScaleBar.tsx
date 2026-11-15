@@ -36,7 +36,7 @@ export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
         style={{ width: `${px}px` }}
       />
       <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted">
-        escala marciana · R {(MARS_RADIUS_M / 1000).toFixed(1)} km
+        <span className="hidden sm:inline">escala marciana · R {(MARS_RADIUS_M / 1000).toFixed(1)} km</span>
         {/* El badge recibe eventos aunque la barra no, para poder ver el tooltip. */}
         <span className="pointer-events-auto">
           <ProvenanceBadge source={LOCAL_GEOMETRY} align="left" side="top" />

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Profile } from "../../api/schemas";
 import { formatDistance } from "../../mars/geo";
 import { SLOPE_CLASSES, slopeClass } from "../../map/layers";
@@ -16,23 +17,46 @@ interface Props {
   readonly height?: number;
 }
 
+/**
+ * Franja plegable debajo del mapa. Solo aparece con una travesía armada: sin
+ * ruta no hay perfil que mostrar. En pantalla chica arranca plegada para no
+ * comerle alto al mapa.
+ */
+export function ElevationProfile({ profile }: { readonly profile: Profile | undefined }) {
+  const [open, setOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
+  const missing = (profile?.distance_m.length ?? 0) < 2;
+  return (
+    <section className="border-t border-line bg-panel">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="flex min-h-9 w-full items-center gap-2 px-3 text-left text-[11px] font-semibold tracking-wider text-muted uppercase hover:text-fg"
+      >
+        <span aria-hidden className={`transition-transform ${open ? "rotate-90" : ""}`}>›</span>
+        Perfil de elevación
+        {missing ? <span className="font-normal tracking-normal text-warn normal-case">· falta el dato</span> : null}
+      </button>
+      {open ? (
+        <div className="px-3 pb-2">
+          <ProfileChart profile={profile} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 // `top` deja lugar arriba para la unidad del eje Y: con menos, la "m" se pisa
 // con la etiqueta de la elevación máxima.
 const PAD = { top: 18, right: 8, bottom: 20, left: 44 };
 
-export function ElevationProfile({ profile, height = 140 }: Props) {
+function ProfileChart({ profile, height = 140 }: Props) {
   if (!profile || profile.distance_m.length < 2) {
     return (
-      <div className="border-t border-line bg-panel/40 px-3 py-2">
-        <h2 className="mb-1 text-xs font-semibold tracking-wide text-muted uppercase">
-          Perfil de elevación
-        </h2>
-        <p className="text-[11px] text-warn">
-          Falta el perfil. Lo devuelve el backend al muestrear el DTM sobre la
-          ruta; mientras la ruta la calcule el planificador de ejemplo, o el DTM
-          no esté descargado, acá no se dibuja nada. No se inventa una curva.
-        </p>
-      </div>
+      <p className="text-[11px] text-warn">
+        Falta el perfil: lo devuelve el backend al muestrear el DTM sobre la ruta. Con el
+        planificador de ejemplo, o sin el DTM descargado, no se dibuja nada; no se inventa una curva.
+      </p>
     );
   }
 
@@ -90,11 +114,8 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
   const ticksZ = [zMin, (zMin + zMax) / 2, zMax];
 
   return (
-    <div className="border-t border-line bg-panel/40 px-3 py-2">
-      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-          Perfil de elevación
-        </h2>
+    <div>
+      <div className="mb-1 flex justify-end">
         <ul className="flex flex-wrap gap-x-3 gap-y-1">
           {SLOPE_CLASSES.map((c) => (
             <li key={c.label} className="flex items-center gap-1.5 text-[10px] text-muted">
@@ -119,7 +140,7 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
 
       <svg
         viewBox={`0 0 ${w} ${h}`}
-        className="h-[140px] w-full"
+        className="h-[110px] w-full sm:h-[140px]"
         role="img"
         aria-label={`Perfil de elevación de la travesía: ${formatDistance(dMax)} y entre ${Math.round(zMin)} y ${Math.round(zMax)} metros de elevación`}
       >

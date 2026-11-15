@@ -61,12 +61,13 @@ export function EduToggle() {
       }}
       className={
         open
-          ? "rounded-full border border-rust bg-rust/20 px-3 py-1 text-xs font-semibold text-fg"
-          : "rounded-full border border-rust/70 px-3 py-1 text-xs font-semibold text-fg hover:bg-rust/15"
+          ? "min-h-9 rounded-md border border-rust bg-rust/20 px-2.5 text-xs font-semibold text-fg"
+          : "min-h-9 rounded-md border border-line px-2.5 text-xs font-semibold text-fg hover:border-rust"
       }
     >
-      <span aria-hidden>🎓 </span>
-      {open ? "Salir del entrenamiento" : "Entrenamiento"}
+      <span aria-hidden>🎓</span>
+      <span className="ml-1 hidden sm:inline">{open ? "Salir del entrenamiento" : "Entrenamiento"}</span>
+      <span className="sr-only sm:hidden">{open ? "Salir del entrenamiento" : "Entrenamiento"}</span>
     </button>
   );
 }

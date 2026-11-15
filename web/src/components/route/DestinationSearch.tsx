@@ -11,6 +11,9 @@ import { useStore } from "../../state/store";
  * tercera forma y vive en MapView. Todas pasan por el mismo chequeo de
  * cobertura: sin terreno de 1 m real, no hay destino.
  */
+/** Cuántos sugeridos se ven antes de «más». */
+const CHIPS = 6;
+
 export function DestinationSearch() {
   const places = useStore((s) => s.places);
   const placesError = useStore((s) => s.placesError);
@@ -24,6 +27,9 @@ export function DestinationSearch() {
   const all = places?.places ?? [];
   const results = searchPlaces(all, query);
   const suggested = all.filter((p) => p.suggested);
+  // Los sugeridos pueden ser una docena: de entrada, los primeros.
+  const [allChips, setAllChips] = useState(false);
+  const chips = allChips ? suggested : suggested.slice(0, CHIPS);
   const hasOrigin = count >= 1;
   const canStop = count >= 2;
 
@@ -62,9 +68,11 @@ export function DestinationSearch() {
   };
 
   return (
-    <section className="flex flex-col gap-2 rounded border border-line p-2" aria-label="Elegir destino">
+    <section className="flex flex-col gap-2" aria-label="Elegir destino">
       <label className="flex flex-col gap-1 text-xs">
-        <span className="text-muted">{canStop ? "Cambiar destino o sumar parada" : "Destino"}</span>
+        <span className="text-[11px] font-semibold tracking-wider text-muted uppercase">
+          {canStop ? "Cambiar destino o sumar parada" : "Destino"}
+        </span>
         <div className="relative">
           <input
             type="search"
@@ -90,13 +98,13 @@ export function DestinationSearch() {
                   ? "Buscador sin lugares todavía"
                   : "Buscar: Belva, cráter 13-…, sol 120"
             }
-            className="w-full rounded border border-line bg-bg px-2 py-1.5 text-sm text-fg placeholder:text-muted/70 disabled:opacity-60"
+            className="min-h-10 w-full rounded-md border border-line bg-bg px-3 text-sm text-fg placeholder:text-muted/70 focus:border-rust focus:outline-none disabled:opacity-60"
           />
           {open && query && hasOrigin ? (
             <ul
               id={listId}
               role="listbox"
-              className="absolute top-full right-0 left-0 z-20 mt-1 max-h-72 overflow-y-auto rounded border border-line bg-panel shadow-lg"
+              className="absolute top-full right-0 left-0 z-20 mt-1 max-h-72 overflow-y-auto rounded-md border border-line bg-panel shadow-2xl"
             >
               {results.length === 0 ? (
                 <li className="px-2 py-2 text-xs text-muted">Sin resultados para “{query}”.</li>
@@ -159,9 +167,9 @@ export function DestinationSearch() {
 
       {suggested.length > 0 ? (
         <div className="flex flex-col gap-1">
-          <span className="text-[11px] text-muted">Lugares sugeridos</span>
+          <span className="text-[11px] text-muted">Sugeridos</span>
           <div className="flex flex-wrap gap-1.5">
-            {suggested.map((p) => {
+            {chips.map((p) => {
               const out = outside(p);
               return (
                 <button
@@ -170,13 +178,22 @@ export function DestinationSearch() {
                   disabled={!hasOrigin || out}
                   onClick={() => pick(p, "destination")}
                   title={out ? "Sin terreno de 1 m real" : `${p.detail} · ${p.source ?? ""}`}
-                  className="rounded-full border border-line px-2.5 py-1 text-xs text-fg hover:border-rust disabled:opacity-50"
+                  className="min-h-8 rounded-full border border-line px-3 text-xs text-fg hover:border-rust disabled:opacity-50"
                 >
                   {p.name}
                   {out ? " ✕" : ""}
                 </button>
               );
             })}
+            {suggested.length > CHIPS ? (
+              <button
+                type="button"
+                onClick={() => setAllChips(!allChips)}
+                className="min-h-8 rounded-full px-2 text-xs text-rust hover:underline"
+              >
+                {allChips ? "menos" : `+${suggested.length - CHIPS} más`}
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
