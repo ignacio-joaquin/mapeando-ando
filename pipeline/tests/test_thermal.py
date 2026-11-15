@@ -6,7 +6,7 @@ import rasterio
 
 import terrain_layers as tl
 import thermal
-from test_precompute import tilted_plane, write_dtm, write_themis
+from test_precompute import NODATA, tilted_plane, write_dtm, write_themis
 from test_terrain_layers import block_field, make_inputs
 
 
@@ -53,6 +53,44 @@ def test_holes_stay_holes(tmp_path):
     assert (night[:, 2] == 0).all() and (loose[:, 2] == thermal.LOOSE_NODATA).all()
     assert summary["coverage_pct"] == pytest.approx(200 / 3, abs=0.01)
     assert summary["night_dn"]["p95"] == 200          # el 0 no entró en las estadísticas
+
+
+def test_percentiles_only_count_themis_over_the_dtm(tmp_path):
+    """El recorte es un rectángulo; el DTM no. La columna fría cae donde el DTM no tiene dato:
+    no entra en los percentiles, y lo que queda (todo tibio) no tiene contraste."""
+    data = tmp_path / "data"
+    z = tilted_plane(300, 2, "e")
+    z[:, :100] = NODATA                       # los primeros 100 m del DTM, sin dato
+    write_dtm(tmp_path / "dtm.tif", z)
+    write_themis(data)
+    summary = thermal.compute("jezero", tmp_path / "dtm.tif", tmp_path / "out", data_dir=data)
+    assert summary["stats_pixels"] == 6
+    assert summary["night_dn"] == {"p5": 200, "p50": 200, "p95": 200}
+    assert summary["loose_threshold_dn"] is None and "sin contraste" in summary["warnings"][0]
+
+
+def test_display_stretch_spans_the_grey_range(tmp_path):
+    """Los tiles salen de una copia estirada (1-255); themis_night.tif queda con los DN originales."""
+    summary, night, _, _ = run_thermal(tmp_path, cold=100, warm=140)
+    assert set(np.unique(night)) == {100, 140}
+    assert summary["display_dn"] == [100.0, 140.0]
+    with rasterio.open(tmp_path / "out" / "themis_display.tif") as ds:
+        shown = ds.read(1)
+    assert shown[:, 0].tolist() == [1, 1, 1] and (shown[:, 1:] == 255).all()
+
+
+def test_display_stretch_keeps_holes_and_skips_flat_sites(tmp_path):
+    summary, _, _, _ = run_thermal(tmp_path, nodata_block=True)
+    with rasterio.open(tmp_path / "out" / "themis_display.tif") as ds:
+        assert (ds.read(1)[:, 2] == thermal.THEMIS_NODATA).all()
+    flat = tmp_path / "flat"
+    flat.mkdir()
+    summary, _, _, _ = run_thermal(flat, cold=200, warm=200)
+    assert summary["display_dn"] is None and not (flat / "out" / "themis_display.tif").exists()
+
+
+def test_nodata_constant_is_shared():
+    assert tl.LOOSE_NODATA == thermal.LOOSE_NODATA
 
 
 def test_missing_inputs_give_a_clear_error(tmp_path, capsys):

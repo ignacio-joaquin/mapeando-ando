@@ -20,9 +20,14 @@ Salidas (en out_dir):
                     dentro del sitio, 0 = no, 255 = sin dato. Es un criterio del equipo sobre
                     un brillo relativo: MODELED. Lo usa terrain_layers.py para reforzar el
                     peligro de terreno.
+  themis_display.tif  solo para teselar: el mismo recorte con el brillo estirado entre el p2
+                    y el p98 del sitio (1-255, 0 sin dato). Sin estirar, los DN de un sitio
+                    ocupan una franja angosta y el mapa se ve todo gris medio.
 
 Criterio de suelo suelto: un píxel es "suelto probable" si su brillo nocturno está en el
-LOOSE_PERCENTILE % más frío del sitio. Solo se marca si hay contraste: si el percentil queda a
+LOOSE_PERCENTILE % más frío del sitio (con DN enteros, los empates en el umbral pueden
+marcar algo más). Los percentiles se calculan solo sobre los píxeles de THEMIS que tocan
+DTM válido: el recorte es rectangular y el DTM no (Gale es una franja diagonal). Solo se marca si hay contraste: si el percentil queda a
 menos de MIN_CONTRAST_DN del valor mediano, el sitio es térmicamente parejo y no se marca nada
 (un percentil siempre encuentra "el 20 % más frío", aunque todo sea igual).
 
@@ -39,7 +44,8 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from rasterio.warp import transform_bounds
+from rasterio.enums import Resampling
+from rasterio.warp import reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
@@ -50,6 +56,9 @@ MIN_CONTRAST_DN = 5        # contraste mínimo (en DN de 0-255) entre ese percen
 
 THEMIS_NODATA = 0          # los mosaicos de 8 bits de USGS marcan "sin dato" con 0
 LOOSE_NODATA = 255
+DISPLAY_PERCENTILES = (2, 98)  # estiramiento de los tiles (solo visual)
+BAD_Z_M = 1e5              # mismo valor que precompute.py: los DTM marcan nodata con ±3,4e38
+FOOTPRINT_MAX_PX = 4000    # el DTM se lee decimado a este lado máximo para sacar la huella
 
 
 class MissingInput(Exception):
@@ -79,17 +88,39 @@ def crop_window(themis, dtm_bounds, dtm_crs):
     return Window(c0, r0, c1 - c0, r1 - r0)
 
 
+def dtm_footprint(dtm_path, transform, crs, shape):
+    """True en cada píxel de la grilla de THEMIS que tiene algo de DTM válido debajo.
+
+    El DTM se lee decimado (a lo sumo FOOTPRINT_MAX_PX por lado, vecino más cercano) y se
+    lleva a la grilla de THEMIS con promedio: alcanza para saber qué píxeles de 100 m caen
+    sobre el sitio, sin cargar en memoria un DTM de 1 m entero.
+    """
+    with rasterio.open(dtm_path) as ds:
+        f = max(1, int(np.ceil(max(ds.width, ds.height) / FOOTPRINT_MAX_PX)))
+        oh, ow = int(np.ceil(ds.height / f)), int(np.ceil(ds.width / f))
+        z = ds.read(1, out_shape=(oh, ow), resampling=Resampling.nearest, masked=True)
+        ok = ~np.ma.getmaskarray(z) & np.isfinite(z.filled(np.nan)) & (np.abs(z.filled(0)) < BAD_Z_M)
+        src_transform = ds.transform * ds.transform.scale(ds.width / ow, ds.height / oh)
+        src_crs = ds.crs
+    frac = np.zeros(shape, dtype="float32")
+    reproject(ok.astype("float32"), frac, src_transform=src_transform, src_crs=src_crs,
+              dst_transform=transform, dst_crs=crs, resampling=Resampling.average)
+    return frac > 0
+
+
 # ------------------------------------------------------------------ cálculos
 
-def loose_soil(night_dn, valid):
+def loose_soil(night_dn, valid, on_site=None):
     """1 = suelo suelto probable, 0 = no, 255 = sin dato. Devuelve (clases, umbral, avisos).
 
-    `night_dn`: brillo nocturno (DN), `valid`: dónde hay dato.
+    `night_dn`: brillo nocturno (DN), `valid`: dónde hay dato. `on_site` (opcional): qué
+    píxeles entran en los percentiles (los que tocan DTM). Se clasifican todos los válidos.
     """
     out = np.full(night_dn.shape, LOOSE_NODATA, dtype="uint8")
-    if not valid.any():
+    stats = valid if on_site is None else valid & on_site
+    if not stats.any():
         return out, None, ["El recorte de THEMIS no tiene datos sobre el DTM."]
-    v = night_dn[valid].astype("float64")
+    v = night_dn[stats].astype("float64")
     threshold = float(np.percentile(v, LOOSE_PERCENTILE))
     median = float(np.median(v))
     warnings = []
@@ -100,6 +131,20 @@ def loose_soil(night_dn, valid):
         return out, None, warnings
     out[valid] = (night_dn[valid] <= threshold).astype("uint8")
     return out, threshold, warnings
+
+
+def display_stretch(night_dn, valid, on_site):
+    """Brillo estirado para los tiles: p2-p98 del sitio -> 1-255, 0 sin dato. Devuelve
+    (imagen, [p2, p98]) o (None, None) si no hay contraste para estirar."""
+    stats = valid & on_site
+    if not stats.any():
+        return None, None
+    lo, hi = (float(np.percentile(night_dn[stats], p)) for p in DISPLAY_PERCENTILES)
+    if hi - lo < 1:
+        return None, None
+    scaled = 1 + (night_dn.astype("float64") - lo) * 254 / (hi - lo)
+    img = np.where(valid, np.clip(np.round(scaled), 1, 255), THEMIS_NODATA).astype("uint8")
+    return img, [round(lo, 1), round(hi, 1)]
 
 
 def compute(site_id, dtm_path, out_dir, data_dir=None):
@@ -125,7 +170,11 @@ def compute(site_id, dtm_path, out_dir, data_dir=None):
         units = crs.linear_units if crs.is_projected else "°"
 
     valid = dn != nodata
-    classes, threshold, warnings = loose_soil(dn, valid)
+    on_site = dtm_footprint(dtm_path, transform, crs, dn.shape)
+    if not (valid & on_site).any():
+        on_site = np.ones_like(valid)     # huella vacía (DTM raro): mejor todo el recorte que nada
+    classes, threshold, warnings = loose_soil(dn, valid, on_site)
+    display, display_dn = display_stretch(dn, valid, on_site)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     base = dict(driver="GTiff", width=dn.shape[1], height=dn.shape[0], count=1, dtype="uint8",
@@ -135,16 +184,21 @@ def compute(site_id, dtm_path, out_dir, data_dir=None):
         dst.write(np.where(valid, dn, THEMIS_NODATA).astype("uint8"), 1)
     with rasterio.open(out_dir / "loose_soil.tif", "w", **base, nodata=LOOSE_NODATA) as dst:
         dst.write(classes, 1)
+    if display is not None:
+        with rasterio.open(out_dir / "themis_display.tif", "w", **base, nodata=THEMIS_NODATA) as dst:
+            dst.write(display, 1)
 
     n_valid = int(valid.sum())
-    v = dn[valid]
+    v = dn[valid & on_site]
     return {
         "source_file": src.name,
         "pixel_size": [round(res[0], 6), round(res[1], 6)],
         "pixel_units": units,
         "coverage_pct": round(100 * n_valid / max(dn.size, 1), 2),
         "night_dn": ({k: int(np.percentile(v, p)) for k, p in (("p5", 5), ("p50", 50), ("p95", 95))}
-                     if n_valid else None),
+                     if v.size else None),
+        "stats_pixels": int(v.size),      # píxeles de THEMIS sobre el DTM (los de los percentiles)
+        "display_dn": display_dn,
         "loose_threshold_dn": None if threshold is None else round(threshold, 1),
         "loose_pct": round(100 * int((classes == 1).sum()) / max(n_valid, 1), 2),
         "warnings": warnings,

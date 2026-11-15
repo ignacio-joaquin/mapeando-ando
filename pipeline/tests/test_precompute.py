@@ -6,6 +6,7 @@ ogr2ogr): se saltea si no están instaladas.
 import json
 import math
 import shutil
+import subprocess
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ import rasterio
 from rasterio.transform import from_origin
 
 import precompute
+import tiles
 
 R = 3396190.0
 # La misma proyección que los DTM de USGS: equirectangular con paralelo estándar en el ecuador.
@@ -195,7 +197,7 @@ class TestSlope:
 
 # ------------------------------------------------------------------ corrida completa
 
-GDAL_TOOLS = ("gdalinfo", "gdal_translate", "gdaldem", "gdal_contour", "ogr2ogr", "gdalwarp",
+GDAL_TOOLS = ("gdalinfo", "gdal_translate", "gdaldem", "gdal_contour", "ogr2ogr", "ogrinfo", "gdalwarp",
               "gdal2tiles.py", "gdal_edit.py")
 # Colores de las clases de pendiente (web/src/map/layers.ts, SLOPE_CLASSES) y transparente.
 LEGEND_RGBA = {(47, 125, 79, 255), (224, 162, 74, 255), (224, 122, 74, 255), (224, 86, 74, 255), (0, 0, 0, 0)}
@@ -243,17 +245,17 @@ def test_full_run(data_dir):
     out = data_dir / "output" / "jezero"
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
-        ["contours.geojson", "coverage.geojson", "dose", "dose_rate.tif", "dtm.tif", "hazard",
-         "hazard.tif", "hillshade", "hillshade.tif", "ice_consistency.tif", "loose_soil.tif", "roughness.tif",
-         "skyview.tif", "slope", "slope.tif", "terrain.json", "terrain_factor.tif", "themis_night.tif",
-         "thermal", "water"]
+        ["contours", "contours.gpkg", "coverage.geojson", "dem", "dose", "dose_rate.tif", "dtm.tif",
+         "hazard", "hazard.tif", "hillshade", "hillshade.tif", "ice_consistency.tif", "loose_soil.tif",
+         "roughness.tif", "skyview.tif", "slope", "slope.tif", "terrain.json", "terrain_factor.tif",
+         "themis_night.tif", "thermal", "water"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
         "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
         "survival-thermal": "ok", "terrain-loose-soil": "ok",
         "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok",
-        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "survival-water": "ok"}
+        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "survival-water": "ok", "relief-dem": "ok"}
 
     # Agua: SWIM 0-1 m, MODELED, el valor original en COG y tiles hasta z10 con la leyenda.
     water = index["layers"]["survival-water"]
@@ -270,6 +272,8 @@ def test_full_run(data_dir):
     thermal = index["layers"]["survival-thermal"]
     assert (thermal["mission"], thermal["instrument"], thermal["provenance"]) == ("Mars Odyssey", "THEMIS", "OBSERVED")
     assert thermal["tiles"]["status"] == "ok" and thermal["tiles"]["template"] == "thermal/{z}/{x}/{y}.png"
+    assert thermal["tiles"]["resampling"] == "near"                 # cuadros de 100 m, sin interpolar
+    assert thermal["display"]["stretch_dn"] == [40.0, 200.0]        # tiles estirados, solo visual
     assert index["layers"]["terrain-loose-soil"]["provenance"] == "MODELED"
     with rasterio.open(out / "themis_night.tif") as ds:
         assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"
@@ -288,6 +292,13 @@ def test_full_run(data_dir):
     assert index["radius_m"] == R
     assert index["source"]["mission"] == "MRO HiRISE"
     assert any("0.948" in w for w in index["warnings"])  # píxel anisótropo declarado
+
+    # Relieve 3D: el piso es el fondo del cráter y la codificación viaja en el índice.
+    dem = index["layers"]["relief-dem"]
+    assert dem["datum_m"] == pytest.approx(-2560, abs=1) and dem["encoding"] == tiles.DEM_ENCODING
+    assert dem["tiles"]["status"] == "ok" and dem["tiles"]["template"] == "dem/{z}/{x}/{y}.png"
+    assert dem["tiles"]["maxzoom"] == tiles.DEM_MAX_ZOOM
+    assert any((out / "dem" / str(tiles.DEM_MAX_ZOOM)).rglob("*.png"))
 
     for name in ("dtm.tif", "slope.tif", "hillshade.tif", "hazard.tif", "roughness.tif", "terrain_factor.tif"):
         with rasterio.open(out / name) as ds:
@@ -330,11 +341,166 @@ def test_full_run(data_dir):
     assert tile_pixel(hazard_tiles, zmax, c_lon, c_lat) == (47, 125, 79, 255)
     assert tile_pixel(hazard_tiles, zmax, c_lon, c_lat + math.degrees(90 / R)) == (224, 86, 74, 255)
 
-    gj = json.loads((out / "contours.geojson").read_text())
-    elevs = {f["properties"]["elev"] for f in gj["features"]}
-    assert elevs and all(e % precompute.CONTOUR_INTERVAL_M == 0 for e in elevs)
-    lon, lat = gj["features"][0]["geometry"]["coordinates"][0]
-    assert LON0 < lon < LON0 + 0.01 and LAT0 - 0.01 < lat < LAT0  # lon/lat de Marte, no metros
+    # Curvas: maestras y el resto en capas separadas, en lon/lat de Marte (no metros).
+    elevs = {}
+    for layer in ("contours_major", "contours_minor"):
+        gj = json.loads(subprocess.run(["ogr2ogr", "-f", "GeoJSON", "/vsistdout/", str(out / "contours.gpkg"), layer],
+                                       capture_output=True, text=True, check=True).stdout)
+        elevs[layer] = {f["properties"]["elev"] for f in gj["features"]}
+        lon, lat = gj["features"][0]["geometry"]["coordinates"][0]
+        assert LON0 < lon < LON0 + 0.01 and LAT0 - 0.01 < lat < LAT0
+    assert elevs["contours_major"] and all(e % precompute.CONTOUR_MAJOR_M == 0 for e in elevs["contours_major"])
+    assert elevs["contours_minor"] and all(e % precompute.CONTOUR_INTERVAL_M == 0 and e % precompute.CONTOUR_MAJOR_M
+                                           for e in elevs["contours_minor"])
+
+    # Tiles MVT: de lejos solo las maestras, de cerca todas, en la capa "contours" del mapa.
+    t = index["layers"]["relief-contours"]["tiles"]
+    assert t["status"] == "ok" and t["template"] == "contours/{z}/{x}/{y}.pbf" and t["layer"] == "contours"
+    assert (t["minzoom"], t["maxzoom"]) == (precompute.CONTOUR_MAJOR_MIN_ZOOM, tiles.VECTOR_MAX_ZOOM)
+    assert any((out / "contours" / str(t["minzoom"])).rglob("*.pbf"))
+    assert any((out / "contours" / str(t["maxzoom"])).rglob("*.pbf"))
+    w, s, e, n = t["bounds"]
+    assert LON0 <= w < e < LON0 + 0.01 and LAT0 - 0.01 < s < n <= LAT0
+    def elevs_at(z):
+        found = set()
+        for pbf in (out / "contours" / str(z)).rglob("*.pbf"):
+            gj = json.loads(subprocess.run(["ogr2ogr", "-f", "GeoJSON", "/vsistdout/", f"MVT:{pbf}", "contours"],
+                                           capture_output=True, text=True, check=True).stdout)
+            found |= {f["properties"]["elev"] for f in gj["features"]}
+        return found
+    assert elevs_at(precompute.CONTOUR_MAJOR_MIN_ZOOM) == elevs["contours_major"]
+    assert elevs_at(tiles.VECTOR_MAX_ZOOM) == elevs["contours_major"] | elevs["contours_minor"]
+
+
+@needs_gdal
+def test_solo_tiles_curvas_parte_del_geojson_viejo(data_dir):
+    """Una corrida de antes de los tiles: se teselan sus curvas sin rehacer el resto."""
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    assert precompute.main(["--site", "jezero"]) == 0
+    out = data_dir / "output" / "jezero"
+    # Dejarla como la dejaba el pipeline viejo: contours.geojson y sin tiles de curvas.
+    shutil.rmtree(out / "contours")
+    (out / "contours.gpkg").unlink()
+    subprocess.run(["gdal_contour", "-a", "elev", "-i", "10", str(out / "dtm.tif"), str(data_dir / "raw.gpkg")], check=True)
+    subprocess.run(["ogr2ogr", "-f", "GeoJSON", "-t_srs", precompute.MARS_LONGLAT,
+                    str(out / "contours.geojson"), str(data_dir / "raw.gpkg")], check=True)
+    index = json.loads((out / "terrain.json").read_text())
+    del index["layers"]["relief-contours"]["tiles"]
+    index["layers"]["relief-contours"]["file"] = "contours.geojson"
+    (out / "terrain.json").write_text(json.dumps(index))
+    slope_mtime = (out / "slope.tif").stat().st_mtime_ns
+
+    assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 0
+
+    index = json.loads((out / "terrain.json").read_text())
+    layer = index["layers"]["relief-contours"]
+    assert layer["status"] == "ok" and layer["file"] == "contours.gpkg"
+    assert layer["tiles"]["status"] == "ok" and layer["tiles"]["template"] == "contours/{z}/{x}/{y}.pbf"
+    w, s, e, n = layer["tiles"]["bounds"]  # lon/lat de Marte, sin correrse al etiquetar
+    assert LON0 <= w < e < LON0 + 0.01 and LAT0 - 0.01 < s < n <= LAT0
+    assert any((out / "contours").rglob("*.pbf"))
+    assert index["layers"]["relief-slope"]["tiles"]["status"] == "ok"  # el resto, intacto
+    assert (out / "slope.tif").stat().st_mtime_ns == slope_mtime
+    assert (out / "contours.geojson").exists()  # el frontend lo usa hasta que haya tiles
+    assert not (out / ".work-contours").exists()
+
+
+OLD_GEOJSON = '{"type": "FeatureCollection", "features": []}'
+
+
+@needs_gdal
+def test_con_tiles_se_borra_el_geojson_viejo(data_dir):
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.geojson").write_text(OLD_GEOJSON)  # de una corrida de antes de los tiles
+    assert precompute.main(["--site", "jezero"]) == 0
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["file"] == "contours.gpkg" and layer["tiles"]["status"] == "ok"
+    assert not (out / "contours.geojson").exists()
+
+
+@needs_gdal
+def test_si_falla_el_teselado_queda_el_geojson_viejo(data_dir, monkeypatch):
+    """Degradar, no romper: sin tiles, el mapa sigue con las curvas de la corrida anterior."""
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.geojson").write_text(OLD_GEOJSON)
+
+    def falla(*a, **k):
+        raise RuntimeError("ogr2ogr MVT explotó")
+
+    monkeypatch.setattr(tiles, "vector_a_tiles", falla)
+    assert precompute.main(["--site", "jezero"]) == 1
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["status"] == "ok" and layer["tiles"]["status"] == "error"
+    assert layer["file"] == "contours.geojson"
+    assert layer["assumptions"] == precompute.CONTOUR_GEOJSON_ASSUMPTIONS
+    assert (out / "contours.geojson").read_text() == OLD_GEOJSON
+    assert (out / "contours.gpkg").exists()  # el próximo --solo-tiles-curvas parte de acá
+
+
+@needs_gdal
+def test_sin_tiles_queda_el_geojson_viejo(data_dir):
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.geojson").write_text(OLD_GEOJSON)
+    assert precompute.main(["--site", "jezero", "--no-tiles"]) == 0
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["file"] == "contours.geojson" and "tiles" not in layer
+    assert (out / "contours.geojson").exists()
+
+
+def test_solo_tiles_curvas_que_falla_no_apaga_el_geojson(data_dir, monkeypatch):
+    """Sin GDAL: el teselado se simula. Si falla, `file` sigue en el GeoJSON que andaba."""
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.gpkg").write_bytes(b"")
+    (out / "contours.geojson").write_text(OLD_GEOJSON)
+    viejo = {"file": "contours.geojson", "status": "ok", "params": {"interval_m": 10}, "assumptions": []}
+    (out / "terrain.json").write_text(json.dumps({"site": "jezero", "generated_at": "2026-11-01T00:00:00Z",
+                                                  "layers": {"relief-contours": dict(viejo)}}))
+    monkeypatch.setattr(tiles, "faltan_herramientas", lambda: [])
+
+    def falla(out):
+        raise RuntimeError("ogr2ogr MVT explotó")
+
+    monkeypatch.setattr(precompute, "contour_tiles", falla)
+    assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 1
+    index = json.loads((out / "terrain.json").read_text())
+    layer = index["layers"]["relief-contours"]
+    assert layer["tiles"]["status"] == "error" and "explotó" in layer["tiles"]["error"]
+    assert {k: layer[k] for k in viejo} == viejo  # file, params y assumptions, sin tocar
+    assert index["generated_at"] != "2026-11-01T00:00:00Z"  # el mapa ve que el índice cambió
+    assert (out / "contours.geojson").exists()
+    assert not (out / ".work-contours").exists()
+
+
+def test_solo_tiles_curvas_que_anda_cambia_a_tiles(data_dir, monkeypatch):
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.gpkg").write_bytes(b"")
+    (out / "terrain.json").write_text(json.dumps({"site": "jezero", "generated_at": "2026-11-01T00:00:00Z",
+                                                  "layers": {"relief-contours": {"file": "contours.geojson",
+                                                                                 "status": "ok"}}}))
+    monkeypatch.setattr(tiles, "faltan_herramientas", lambda: [])
+    info = {"status": "ok", "template": "contours/{z}/{x}/{y}.pbf", "minzoom": 10, "maxzoom": 14,
+            "bounds": [0, 0, 1, 1], "count": 1, "layer": "contours"}
+    monkeypatch.setattr(precompute, "contour_tiles", lambda out: dict(info))
+    assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 0
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["file"] == "contours.gpkg" and layer["tiles"] == info
+    assert layer["assumptions"] == precompute.CONTOUR_ASSUMPTIONS
+
+
+def test_solo_tiles_curvas_sin_corrida_previa(data_dir):
+    assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 2
 
 
 @needs_gdal
@@ -387,7 +553,8 @@ def test_a_failed_layer_does_not_stop_the_others(data_dir, monkeypatch):
     assert index["layers"]["relief-contours"]["status"] == "error"
     assert index["layers"]["relief-slope"]["status"] == "ok"
     assert index["layers"]["survival-hazard"]["status"] == "ok"  # no depende de las curvas
-    assert not (out / "contours.geojson").exists() and not (out / ".work").exists()
+    assert not (out / "contours.gpkg").exists() and not (out / "contours").exists()
+    assert not (out / ".work").exists()
 
 
 # ------------------------------------------------------------------ ortoimagen

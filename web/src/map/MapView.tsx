@@ -1,9 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Map as MapLibreMap,
   Marker,
   NavigationControl,
   GeoJSONSource,
+  Popup,
   type ExpressionSpecification,
   type MapMouseEvent,
   type StyleSpecification,
@@ -14,8 +16,10 @@ import {
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from "geojson";
-import { LAYERS, tileUrl } from "./layers";
-import { readyTiles } from "./terrain";
+import { geojsonUrl, LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
+import { readyTiles, terrainLayer, usesGeojson } from "./terrain";
+import { TERRAIN_TRUE_SCALE } from "../mars/constants";
+import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
 import { useStore } from "../state/store";
@@ -23,6 +27,15 @@ import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
 import { checkCoverage } from "./coverage";
+import {
+  addPinImages,
+  PLACE_KINDS,
+  PLACES_LAYER,
+  PLACES_SELECTED_LAYER,
+  PLACES_SOURCE,
+  placesToGeoJSON,
+} from "./places";
+import { PlacePopup } from "../components/route/PlacePopup";
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -32,7 +45,15 @@ import { checkCoverage } from "./coverage";
  * Las medidas que se le muestran al usuario (escala, distancias) NO salen de
  * MapLibre: salen de src/mars/geo.ts con el radio marciano. Servir los tiles en
  * la proyección del DTM (Equidistant Cylindrical) es trabajo del pipeline.
+ *
+ * En 3D la misma limitación estira el terreno en horizontal R_Tierra / R_Marte;
+ * el relieve se estira igual (TERRAIN_TRUE_SCALE) para que las pendientes se
+ * vean como son.
  */
+
+/** Inclinación de la cámara al pasar a 3D, y el tope. En 2D el tope es 0. */
+const PITCH_3D = 55;
+const MAX_PITCH_3D = 70;
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -109,6 +130,8 @@ export function MapView({ center, bbox, siteId }: Props) {
       style: emptyStyle,
       center: [center.lon, center.lat],
       zoom: 12,
+      // Arranca en 2D: sin inclinar, para que la barra de escala valga en todo el mapa.
+      maxPitch: 0,
       attributionControl: false,
     });
     // Primer listener de "load": los once("load") de los otros efectos corren
@@ -117,15 +140,29 @@ export function MapView({ center, bbox, siteId }: Props) {
     map.on("load", () => {
       readyRef.current = true;
     });
-    map.addControl(new NavigationControl({ showCompass: false }), "top-right");
+    // Brújula: en 3D se puede girar, y tiene que haber cómo volver al norte.
+    map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     map.on("mousemove", (e: MapMouseEvent) => setCursor({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
     map.on("mouseout", () => setCursor(null));
+    map.on("mouseenter", PLACES_LAYER, () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", PLACES_LAYER, () => (map.getCanvas().style.cursor = ""));
     // La barra de escala sigue al zoom real del mapa (y a la latitud del centro).
     const syncView = () =>
-      useStore.getState().setView({ zoom: map.getZoom(), lat: map.getCenter().lat });
+      useStore
+        .getState()
+        .setView({ zoom: map.getZoom(), lat: map.getCenter().lat, pitch: map.getPitch() });
     map.on("move", syncView);
     map.on("load", syncView);
     map.on("click", (e: MapMouseEvent) => {
+      // Un pin de lugar le gana al clic en el mapa: abre su ficha y no suma un punto.
+      const hit = map.getLayer(PLACES_LAYER)
+        ? map.queryRenderedFeatures(e.point, { layers: [PLACES_LAYER] })[0]
+        : undefined;
+      const hitId = hit?.properties?.["id"];
+      if (typeof hitId === "string") {
+        useStore.getState().setSelectedPlace(hitId);
+        return;
+      }
       const p = { lat: e.lngLat.lat, lon: e.lngLat.lng };
       // El modo se lee al momento del clic: el handler se registra una sola vez.
       const plan = usePlan.getState();
@@ -246,7 +283,8 @@ export function MapView({ center, bbox, siteId }: Props) {
         const state = layers[spec.id];
         if (!state) continue;
         const tiles = readyTiles(terrain, spec.id);
-        const usable = state.available && (spec.kind === "vector" || tiles !== null);
+        const geojson = !tiles && usesGeojson(spec, terrain) ? geojsonUrl(spec, siteId) : null;
+        const usable = state.available && (tiles !== null || geojson !== null);
 
         if (keys.get(spec.id) !== sourceKey && (map.getLayer(spec.id) || map.getSource(spec.id))) {
           if (map.getLayer(spec.id)) map.removeLayer(spec.id);
@@ -260,16 +298,32 @@ export function MapView({ center, bbox, siteId }: Props) {
           continue;
         }
 
-        // Vectoriales (curvas de nivel): un GeoJSON que sirve el pipeline en
-        // /tiles/<sitio>/contours.geojson. MapLibre lo descarga solo.
+        // Vectoriales (curvas de nivel): tiles MVT. MapLibre pide solo los de
+        // la vista, y ninguno mientras la capa está apagada. Si terrain.json dice
+        // que la capa es un GeoJSON (corrida vieja, o el teselado falló), el GeoJSON
+        // entero, y recién al prender la capa: en Gale pesa cientos de MB.
         if (spec.kind === "vector") {
           if (!existing) {
-            map.addSource(spec.id, { type: "geojson", data: tileUrl(spec, siteId) });
+            if (tiles) {
+              map.addSource(spec.id, {
+                type: "vector",
+                tiles: [tileUrl(spec, siteId)],
+                minzoom: tiles.minzoom,
+                maxzoom: tiles.maxzoom,
+                bounds: tiles.bounds,
+              });
+            } else if (geojson && state.visible) {
+              map.addSource(spec.id, { type: "geojson", data: geojson });
+            } else {
+              continue;
+            }
             map.addLayer(
               {
                 id: spec.id,
                 type: "line",
                 source: spec.id,
+                // La capa del MVT la dice terrain.json; la de layers.ts es el respaldo.
+                ...(tiles ? { "source-layer": tiles.layer ?? spec.sourceLayer ?? spec.id } : {}),
                 paint: {
                   "line-color": spec.legend[0]?.color ?? "#e0a24a",
                   // Finas de lejos y más marcadas de cerca: de otro modo, a
@@ -403,6 +457,55 @@ export function MapView({ center, bbox, siteId }: Props) {
     });
   }, [shadowKey, shadowOn, shadowOpacity, sunSol]);
 
+  // 3b. Relieve 3D. La fuente raster-dem se arma cuando terrain.json la trae lista
+  //     (y se rearma si cambia el sitio o la corrida); el botón prende o apaga el
+  //     terreno sobre ella. Sin relief-dem el mapa queda en 2D y el botón lo dice.
+  const view3d = useStore((s) => s.view3d);
+  const setView3d = useStore((s) => s.setView3d);
+  const demTiles = readyTiles(terrain, RELIEF_DEM_ID);
+  const demLayer = terrainLayer(terrain, RELIEF_DEM_ID);
+  const demEncoding = demLayer?.encoding;
+  const demReady = demTiles !== null && demEncoding !== undefined;
+  const demKeyRef = useRef("");
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const key = `${siteId}|${terrain?.generated_at ?? ""}`;
+    const apply = () => {
+      if (map.getSource(RELIEF_DEM_ID) && (demKeyRef.current !== key || !demReady)) {
+        map.setTerrain(null);
+        map.removeSource(RELIEF_DEM_ID);
+      }
+      if (demTiles && demEncoding && !map.getSource(RELIEF_DEM_ID)) {
+        map.addSource(RELIEF_DEM_ID, {
+          type: "raster-dem",
+          tiles: [`/tiles/${siteId}/${demTiles.template}`],
+          tileSize: 256,
+          minzoom: demTiles.minzoom,
+          maxzoom: demTiles.maxzoom,
+          bounds: demTiles.bounds,
+          encoding: "custom",
+          redFactor: demEncoding.red_factor,
+          greenFactor: demEncoding.green_factor,
+          blueFactor: demEncoding.blue_factor,
+          baseShift: demEncoding.base_shift,
+        });
+        demKeyRef.current = key;
+      }
+      if (view3d && demReady) {
+        map.setTerrain({ source: RELIEF_DEM_ID, exaggeration: TERRAIN_TRUE_SCALE });
+        map.setMaxPitch(MAX_PITCH_3D);
+        if (map.getPitch() < 10) map.easeTo({ pitch: PITCH_3D, duration: 700 });
+      } else {
+        map.setTerrain(null);
+        // Tope 0: la cámara vuelve a mirar derecho hacia abajo y no se puede inclinar.
+        map.setMaxPitch(0);
+        if (map.getBearing() !== 0) map.easeTo({ bearing: 0, duration: 400 });
+      }
+    };
+    whenReady(map, apply);
+  }, [view3d, demReady, siteId, terrain]);
+
   // El contenedor de MapLibre va adentro de otro div: maplibre-gl.css le pone
   // `position: relative` a .maplibregl-map y le gana al `absolute inset-0` de
   // Tailwind (que va en @layer). Sin el wrapper el mapa mide 0 px de alto.
@@ -516,13 +619,159 @@ export function MapView({ center, bbox, siteId }: Props) {
         filter: ["==", ["get", "class"], "unknown"],
         paint: { "line-color": color, "line-width": 4, "line-dasharray": [1.5, 1.2] },
       });
+      // Los pines quedan arriba de la ruta.
+      if (map.getLayer(PLACES_SELECTED_LAYER)) map.moveLayer(PLACES_SELECTED_LAYER);
+      if (map.getLayer(PLACES_LAYER)) map.moveLayer(PLACES_LAYER);
     };
     whenReady(map, apply);
   }, [result]);
 
+  // 6. Pines de lugares (places.json), como en Google Maps. Los mismos lugares
+  //    que el buscador; se filtran por tipo desde el panel de capas. Al
+  //    superponerse queda el de mayor rango (IAU > muestras > objetivos > …).
+  const places = useStore((s) => s.places);
+  const placeKinds = useStore((s) => s.placeKinds);
+  const selectedPlaceId = useStore((s) => s.selectedPlaceId);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data = placesToGeoJSON(places?.places ?? []);
+      const src = map.getSource(PLACES_SOURCE);
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+      } else {
+        addPinImages(map);
+        map.addSource(PLACES_SOURCE, { type: "geojson", data });
+        // Anillo del lugar con la ficha abierta, debajo del pin.
+        map.addLayer({
+          id: PLACES_SELECTED_LAYER,
+          type: "circle",
+          source: PLACES_SOURCE,
+          filter: ["==", ["get", "id"], ""],
+          paint: {
+            "circle-radius": 14,
+            "circle-color": "rgba(224,122,74,0.25)",
+            "circle-stroke-color": "#e07a4a",
+            "circle-stroke-width": 3,
+          },
+        });
+        map.addLayer({
+          id: PLACES_LAYER,
+          type: "symbol",
+          source: PLACES_SOURCE,
+          layout: {
+            "icon-image": ["concat", "place-pin-", ["get", "kind"]],
+            "icon-anchor": "bottom",
+            "icon-allow-overlap": false,
+            "icon-padding": 1,
+            "symbol-sort-key": ["get", "rank"],
+            // Nombres solo de cerca, y se caen antes que el pin si no entran.
+            "text-field": ["step", ["zoom"], "", 14, ["get", "name"]],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 12,
+            "text-anchor": "top",
+            "text-offset": [0, 0.2],
+            "text-optional": true,
+            "text-max-width": 10,
+          },
+          paint: {
+            "text-color": "#ece6de",
+            "text-halo-color": "#0b0a09",
+            "text-halo-width": 1.5,
+          },
+        });
+      }
+      const kinds = PLACE_KINDS.filter((k) => placeKinds[k]);
+      map.setFilter(PLACES_LAYER, ["in", ["get", "kind"], ["literal", kinds]]);
+      map.setFilter(PLACES_SELECTED_LAYER, ["==", ["get", "id"], selectedPlaceId ?? ""]);
+      // La ruta va por debajo de los pines: si no, la línea los tapa.
+      if (map.getLayer("route-casing")) map.moveLayer(PLACES_SELECTED_LAYER);
+      if (map.getLayer("route-casing")) map.moveLayer(PLACES_LAYER);
+    };
+    whenReady(map, apply);
+  }, [places, placeKinds, selectedPlaceId]);
+
+  // 7. Ficha del pin tocado. El popup de MapLibre aloja un div y React dibuja
+  //    adentro con un portal, así la ficha usa los mismos componentes que el panel.
+  const [popupNode] = useState(() => document.createElement("div"));
+  const popupRef = useRef<Popup | null>(null);
+  const selectedPlace = places?.places.find((p) => p.id === selectedPlaceId) ?? null;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!selectedPlace) {
+      popupRef.current?.remove();
+      return;
+    }
+    let popup = popupRef.current;
+    if (!popup) {
+      popup = new Popup({
+        closeButton: true,
+        closeOnClick: false,
+        maxWidth: "none",
+        offset: [0, -30],
+        // Sin foco automático: si no, el badge de procedencia abre su tooltip encima de la ficha.
+        focusAfterOpen: false,
+      })
+        .setDOMContent(popupNode);
+      // Cerrar con la cruz (o con Escape) limpia la selección.
+      popup.on("close", () => {
+        if (useStore.getState().selectedPlaceId) useStore.getState().setSelectedPlace(null);
+      });
+      popupRef.current = popup;
+    }
+    popup.setLngLat([selectedPlace.lon, selectedPlace.lat]);
+    if (!popup.isOpen()) popup.addTo(map);
+  }, [selectedPlace, popupNode]);
+  // Al desmontar el mapa, el popup se va con él.
+  useEffect(() => () => {
+    popupRef.current?.remove();
+    popupRef.current = null;
+  }, []);
+
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
+      <div className="absolute right-3 bottom-3 flex flex-col items-end gap-1">
+        <button
+          type="button"
+          aria-pressed={view3d && demReady}
+          disabled={!demReady}
+          onClick={() => setView3d(!view3d)}
+          title={
+            demReady
+              ? "Relieve a escala real. Arrastrá con el botón derecho (o Ctrl + arrastrar) para girar e inclinar."
+              : "El relieve 3D espera al pipeline (relief-dem en terrain.json)."
+          }
+          className="min-h-11 min-w-16 rounded border-2 border-fg/70 bg-bg/90 px-3 text-sm font-bold text-fg shadow-lg hover:bg-panel disabled:cursor-not-allowed disabled:border-line disabled:text-muted aria-pressed:border-rust aria-pressed:bg-rust/20"
+        >
+          {view3d && demReady ? "Ver en 2D" : "Ver en 3D"}
+        </button>
+        {!demReady ? (
+          <span className="rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+            3D: esperando el pipeline
+          </span>
+        ) : view3d ? (
+          <span className="flex items-center gap-1.5 rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+            relieve a escala real · ×{TERRAIN_TRUE_SCALE.toFixed(2)} por el radio
+            <ProvenanceBadge
+              source={{
+                ...RELIEF_DEM_SOURCE,
+                resolution: demLayer?.resolution ?? RELIEF_DEM_SOURCE.resolution,
+                assumptions: [...(RELIEF_DEM_SOURCE.assumptions ?? []), ...(demLayer?.assumptions ?? [])],
+              }}
+              side="top"
+            />
+          </span>
+        ) : null}
+      </div>
+      {selectedPlace
+        ? createPortal(
+            <PlacePopup place={selectedPlace} onClose={() => useStore.getState().setSelectedPlace(null)} />,
+            popupNode,
+          )
+        : null}
     </div>
   );
 }
@@ -542,7 +791,7 @@ function markerClass(kind: ReturnType<typeof waypointLabel>["kind"], open: boole
   const base =
     "grid size-7 cursor-grab place-items-center rounded-full border-2 text-xs font-bold shadow-lg active:cursor-grabbing";
   const tone =
-    kind === "origin"
+    kind === "origin" || kind === "return"
       ? "border-fg bg-ok text-bg"
       : kind === "destination"
         ? "border-fg bg-alert text-bg"

@@ -3,6 +3,7 @@
 El DTM de los tests es un plano inclinado con pendiente conocida, así se
 verifica el número y no solo que el endpoint conteste.
 """
+import json
 import math
 
 import pytest
@@ -139,3 +140,37 @@ class TestSinDatos:
         write_manifest({"generated_at": "x", "sites": {}})
         r = client.get("/api/sites/marte/point", params={"lat": 0, "lon": 0})
         assert r.status_code == 404
+
+
+class TestRefugio:
+    """Capas de pipeline/shelter.py: se muestrean de su COG si shelter.json las da por ok."""
+
+    @pytest.fixture
+    def shelter_json(self, data_dir, dtm_plano):
+        import shutil
+
+        out = data_dir / "output" / "jezero"
+        out.mkdir(parents=True)
+        # Mismo raster que el DTM de prueba: alcanza para verificar que se muestrea el archivo.
+        shutil.copy(dtm_plano, out / "shelter_minutes.tif")
+        (out / "shelter.json").write_text(json.dumps({"layers": {
+            "survival-shelter-minutes": {
+                "file": "shelter_minutes.tif", "status": "ok", "provenance": "MODELED",
+                "mission": "MRO HiRISE", "instrument": "HiRISE DTM",
+                "resolution": "modelada, 10 × 10 m/px", "assumptions": ["Tobler"]},
+            "survival-shelter-skyview": {"file": "shelter_skyview.tif", "status": "error"},
+        }}))
+
+    def test_minutos_con_procedencia(self, client, manifest_con_dtm, shelter_json):
+        cuerpo = client.get("/api/sites/jezero/point",
+                            params={"lat": CENTRO[0], "lon": CENTRO[1]}).json()
+        assert [c["id"] for c in cuerpo["layers"]] == ["survival-shelter-minutes"]
+        capa = cuerpo["layers"][0]
+        assert capa["unit"] == "min" and capa["provenance"] == "MODELED"
+        assert capa["value"] == pytest.approx(cuerpo["elevation"]["value"], abs=0.1)
+        assert capa["assumptions"] == ["Tobler"]
+
+    def test_sin_shelter_json_no_hay_capas(self, client, manifest_con_dtm):
+        cuerpo = client.get("/api/sites/jezero/point",
+                            params={"lat": CENTRO[0], "lon": CENTRO[1]}).json()
+        assert cuerpo["layers"] == []
