@@ -16,8 +16,10 @@ import {
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from "geojson";
-import { LAYERS, tileUrl } from "./layers";
-import { readyTiles } from "./terrain";
+import { LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
+import { readyTiles, terrainLayer } from "./terrain";
+import { TERRAIN_TRUE_SCALE } from "../mars/constants";
+import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
 import { useStore } from "../state/store";
@@ -43,7 +45,15 @@ import { PlacePopup } from "../components/route/PlacePopup";
  * Las medidas que se le muestran al usuario (escala, distancias) NO salen de
  * MapLibre: salen de src/mars/geo.ts con el radio marciano. Servir los tiles en
  * la proyección del DTM (Equidistant Cylindrical) es trabajo del pipeline.
+ *
+ * En 3D la misma limitación estira el terreno en horizontal R_Tierra / R_Marte;
+ * el relieve se estira igual (TERRAIN_TRUE_SCALE) para que las pendientes se
+ * vean como son.
  */
+
+/** Inclinación de la cámara al pasar a 3D, y el tope. En 2D el tope es 0. */
+const PITCH_3D = 55;
+const MAX_PITCH_3D = 70;
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -120,6 +130,8 @@ export function MapView({ center, bbox, siteId }: Props) {
       style: emptyStyle,
       center: [center.lon, center.lat],
       zoom: 12,
+      // Arranca en 2D: sin inclinar, para que la barra de escala valga en todo el mapa.
+      maxPitch: 0,
       attributionControl: false,
     });
     // Primer listener de "load": los once("load") de los otros efectos corren
@@ -128,14 +140,17 @@ export function MapView({ center, bbox, siteId }: Props) {
     map.on("load", () => {
       readyRef.current = true;
     });
-    map.addControl(new NavigationControl({ showCompass: false }), "top-right");
+    // Brújula: en 3D se puede girar, y tiene que haber cómo volver al norte.
+    map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     map.on("mousemove", (e: MapMouseEvent) => setCursor({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
     map.on("mouseout", () => setCursor(null));
     map.on("mouseenter", PLACES_LAYER, () => (map.getCanvas().style.cursor = "pointer"));
     map.on("mouseleave", PLACES_LAYER, () => (map.getCanvas().style.cursor = ""));
     // La barra de escala sigue al zoom real del mapa (y a la latitud del centro).
     const syncView = () =>
-      useStore.getState().setView({ zoom: map.getZoom(), lat: map.getCenter().lat });
+      useStore
+        .getState()
+        .setView({ zoom: map.getZoom(), lat: map.getCenter().lat, pitch: map.getPitch() });
     map.on("move", syncView);
     map.on("load", syncView);
     map.on("click", (e: MapMouseEvent) => {
@@ -425,6 +440,55 @@ export function MapView({ center, bbox, siteId }: Props) {
     });
   }, [shadowKey, shadowOn, shadowOpacity, sunSol]);
 
+  // 3b. Relieve 3D. La fuente raster-dem se arma cuando terrain.json la trae lista
+  //     (y se rearma si cambia el sitio o la corrida); el botón prende o apaga el
+  //     terreno sobre ella. Sin relief-dem el mapa queda en 2D y el botón lo dice.
+  const view3d = useStore((s) => s.view3d);
+  const setView3d = useStore((s) => s.setView3d);
+  const demTiles = readyTiles(terrain, RELIEF_DEM_ID);
+  const demLayer = terrainLayer(terrain, RELIEF_DEM_ID);
+  const demEncoding = demLayer?.encoding;
+  const demReady = demTiles !== null && demEncoding !== undefined;
+  const demKeyRef = useRef("");
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const key = `${siteId}|${terrain?.generated_at ?? ""}`;
+    const apply = () => {
+      if (map.getSource(RELIEF_DEM_ID) && (demKeyRef.current !== key || !demReady)) {
+        map.setTerrain(null);
+        map.removeSource(RELIEF_DEM_ID);
+      }
+      if (demTiles && demEncoding && !map.getSource(RELIEF_DEM_ID)) {
+        map.addSource(RELIEF_DEM_ID, {
+          type: "raster-dem",
+          tiles: [`/tiles/${siteId}/${demTiles.template}`],
+          tileSize: 256,
+          minzoom: demTiles.minzoom,
+          maxzoom: demTiles.maxzoom,
+          bounds: demTiles.bounds,
+          encoding: "custom",
+          redFactor: demEncoding.red_factor,
+          greenFactor: demEncoding.green_factor,
+          blueFactor: demEncoding.blue_factor,
+          baseShift: demEncoding.base_shift,
+        });
+        demKeyRef.current = key;
+      }
+      if (view3d && demReady) {
+        map.setTerrain({ source: RELIEF_DEM_ID, exaggeration: TERRAIN_TRUE_SCALE });
+        map.setMaxPitch(MAX_PITCH_3D);
+        if (map.getPitch() < 10) map.easeTo({ pitch: PITCH_3D, duration: 700 });
+      } else {
+        map.setTerrain(null);
+        // Tope 0: la cámara vuelve a mirar derecho hacia abajo y no se puede inclinar.
+        map.setMaxPitch(0);
+        if (map.getBearing() !== 0) map.easeTo({ bearing: 0, duration: 400 });
+      }
+    };
+    whenReady(map, apply);
+  }, [view3d, demReady, siteId, terrain]);
+
   // El contenedor de MapLibre va adentro de otro div: maplibre-gl.css le pone
   // `position: relative` a .maplibregl-map y le gana al `absolute inset-0` de
   // Tailwind (que va en @layer). Sin el wrapper el mapa mide 0 px de alto.
@@ -652,6 +716,39 @@ export function MapView({ center, bbox, siteId }: Props) {
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
+      <div className="absolute right-3 bottom-3 flex flex-col items-end gap-1">
+        <button
+          type="button"
+          aria-pressed={view3d && demReady}
+          disabled={!demReady}
+          onClick={() => setView3d(!view3d)}
+          title={
+            demReady
+              ? "Relieve a escala real. Arrastrá con el botón derecho (o Ctrl + arrastrar) para girar e inclinar."
+              : "El relieve 3D espera al pipeline (relief-dem en terrain.json)."
+          }
+          className="min-h-11 min-w-16 rounded border-2 border-fg/70 bg-bg/90 px-3 text-sm font-bold text-fg shadow-lg hover:bg-panel disabled:cursor-not-allowed disabled:border-line disabled:text-muted aria-pressed:border-rust aria-pressed:bg-rust/20"
+        >
+          {view3d && demReady ? "Ver en 2D" : "Ver en 3D"}
+        </button>
+        {!demReady ? (
+          <span className="rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+            3D: esperando el pipeline
+          </span>
+        ) : view3d ? (
+          <span className="flex items-center gap-1.5 rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+            relieve a escala real · ×{TERRAIN_TRUE_SCALE.toFixed(2)} por el radio
+            <ProvenanceBadge
+              source={{
+                ...RELIEF_DEM_SOURCE,
+                resolution: demLayer?.resolution ?? RELIEF_DEM_SOURCE.resolution,
+                assumptions: [...(RELIEF_DEM_SOURCE.assumptions ?? []), ...(demLayer?.assumptions ?? [])],
+              }}
+              side="top"
+            />
+          </span>
+        ) : null}
+      </div>
       {selectedPlace
         ? createPortal(
             <PlacePopup place={selectedPlace} onClose={() => useStore.getState().setSelectedPlace(null)} />,

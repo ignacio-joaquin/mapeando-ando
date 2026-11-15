@@ -366,6 +366,25 @@ export const LAYERS: readonly LayerSpec[] = [
   },
 ];
 
+/**
+ * Relieve 3D. No es una capa que se prende en la lista: es la fuente `raster-dem`
+ * sobre la que MapLibre levanta todo el mapa cuando se pasa a 3D. Id de CONTRATO
+ * con pipeline/precompute.py (clave en terrain.json, tiles en `dem/`).
+ */
+export const RELIEF_DEM_ID = "relief-dem";
+
+export const RELIEF_DEM_SOURCE: SourceInfo = {
+  provenance: "DERIVED",
+  mission: "MRO",
+  instrument: "HiRISE DTM",
+  resolution: "DTM de 1 m remuestreado a ~2,5 m/px para dibujar",
+  source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+  assumptions: [
+    "Escala vertical real: se corrige que MapLibre mide con el radio de la Tierra",
+    "Solo para ver el relieve: alturas y pendientes salen del DTM de 1 m, no del 3D",
+  ],
+};
+
 export function tileUrl(spec: LayerSpec, siteId: string): string {
   return spec.tiles.replace("{site}", siteId);
 }
