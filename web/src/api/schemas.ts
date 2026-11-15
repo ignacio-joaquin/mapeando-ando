@@ -329,6 +329,8 @@ export const TileSetSchema = z.discriminatedUnion("status", [
     maxzoom: z.number().int(),
     /** [oeste, sur, este, norte] */
     bounds: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+    /** Solo tiles vectoriales: capa dentro del MVT (el `source-layer` del mapa). */
+    layer: z.string().optional(),
   }),
   z.object({ status: z.literal("error"), error: z.string() }),
 ]);

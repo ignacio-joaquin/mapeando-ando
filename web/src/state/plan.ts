@@ -4,6 +4,11 @@
  * para que el planificador se pueda leer de punta a punta en un archivo.
  *
  * El hábitat no es un punto fijo del sitio: lo marca el usuario cada vez.
+ *
+ * Con `roundTrip` (prendido por defecto) el cálculo suma la vuelta del destino
+ * al hábitat: una EVA termina adentro, y un GO que solo alcanza para ir no
+ * sirve para decidir. La vuelta no es un punto más de la lista: se agrega al
+ * armar el pedido (ver routeWaypoints).
  */
 import { create } from "zustand";
 import type { LatLon } from "../mars/geo";
@@ -33,6 +38,8 @@ interface PlanState {
   readonly siteId: string;
   readonly waypoints: readonly Waypoint[];
   readonly departAt: Date;
+  /** Calcular también la vuelta del destino al hábitat. */
+  readonly roundTrip: boolean;
   readonly clickMode: ClickMode;
   readonly result: PlannedRoute | null;
   /** Huella (planKey) del pedido que generó `result`. */
@@ -57,6 +64,7 @@ interface PlanState {
   reverse: () => void;
   clear: () => void;
   setDepartAt: (d: Date) => void;
+  setRoundTrip: (on: boolean) => void;
   setClickMode: (m: ClickMode) => void;
   setResult: (r: PlannedRoute | null, key?: string | null) => void;
   setStatus: (s: Status) => void;
@@ -102,6 +110,7 @@ export const usePlan = create<PlanState>((set) => ({
   siteId: useStore.getState().activeSiteId,
   waypoints: (shared?.points ?? []).map((p) => point(p, p.placeId, p.dwellMin)),
   departAt: shared?.departAt ?? new Date(),
+  roundTrip: shared?.roundTrip ?? true,
   clickMode: "add",
   result: null,
   resultKey: null,
@@ -169,6 +178,7 @@ export const usePlan = create<PlanState>((set) => ({
       notice: null,
     }),
   setDepartAt: (departAt) => set({ departAt }),
+  setRoundTrip: (roundTrip) => set({ roundTrip }),
   setClickMode: (clickMode) => set({ clickMode }),
   setResult: (result, key = null) => set({ result, resultKey: result ? key : null }),
   setStatus: (status) => set({ status }),
@@ -224,15 +234,37 @@ export const usePlan = create<PlanState>((set) => ({
     ),
 }));
 
+/** Tarea de la vuelta: el último punto del pedido, una copia del hábitat. */
+export const RETURN_TASK = "Vuelta al hábitat";
+
 /**
- * Huella de lo que cambia el cálculo: sitio, hora de salida, posición y
- * permanencia de cada punto, en orden. El texto de la tarea no entra: no
- * cambia tiempos ni consumos, y el veredicto no tiene que parpadear por tecla.
+ * Los puntos que van al pedido de /api/route, en orden. Con ida y vuelta se
+ * agrega el hábitat otra vez al final: el contrato ya admite que la llegada
+ * sea cualquier punto, así que la API no necesita saber nada nuevo. La
+ * respuesta trae entonces una parada y un tramo más que `waypoints`.
  */
-export function planKey(siteId: string, departAt: Date, waypoints: readonly Waypoint[]): string {
+export function routeWaypoints(waypoints: readonly Waypoint[], roundTrip: boolean): Waypoint[] {
+  const home = waypoints[0];
+  if (!roundTrip || !home || waypoints.length < 2) return [...waypoints];
+  return [...waypoints, { ...home, id: `${home.id}-return`, task: RETURN_TASK, dwellMin: 0 }];
+}
+
+/**
+ * Huella de lo que cambia el cálculo: sitio, hora de salida, ida y vuelta, y
+ * posición y permanencia de cada punto, en orden. El texto de la tarea no
+ * entra: no cambia tiempos ni consumos, y el veredicto no tiene que parpadear
+ * por tecla.
+ */
+export function planKey(
+  siteId: string,
+  departAt: Date,
+  waypoints: readonly Waypoint[],
+  roundTrip: boolean,
+): string {
   return JSON.stringify([
     siteId,
     departAt.getTime(),
+    roundTrip,
     waypoints.map((w) => [w.lat, w.lon, w.dwellMin]),
   ]);
 }
@@ -248,6 +280,7 @@ export function planKey(siteId: string, departAt: Date, waypoints: readonly Wayp
 export function useFreshRoute(): PlannedRoute | null {
   const siteId = useStore((s) => s.activeSiteId);
   return usePlan((s) =>
-    s.result !== null && s.resultKey === planKey(siteId, s.departAt, s.waypoints) ? s.result : null,
+    s.result !== null && s.resultKey === planKey(siteId, s.departAt, s.waypoints, s.roundTrip)
+      ? s.result : null,
   );
 }

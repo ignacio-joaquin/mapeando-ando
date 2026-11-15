@@ -2,7 +2,7 @@ import type { MeasuredValue } from "../../api/schemas";
 import { MARS24_LTST, sourceLabel, type SourceInfo } from "../../domain/provenance";
 import { useFreshRoute, usePlan } from "../../state/plan";
 import { useStore } from "../../state/store";
-import { waypointLabel } from "../../map/route";
+import { stopLabel } from "../../map/route";
 import { earthShort, formatBearing, formatDistanceM, formatMinutes, ltstShort, sameSource } from "./format";
 
 /**
@@ -20,6 +20,7 @@ export function CuffChecklist() {
   const result = useFreshRoute();
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
+  const roundTrip = usePlan((s) => s.roundTrip);
   const siteId = useStore((s) => s.activeSiteId);
   if (!result) {
     // Ctrl+P sin travesía: que el papel lo diga en vez de salir en blanco.
@@ -61,7 +62,7 @@ export function CuffChecklist() {
             {departAt.toLocaleDateString("es-AR")})
           </span>
           <span>
-            {route.stops.length} PUNTOS · {totalDistance(route.legs.map((l) => l.distance))}
+            {route.stops.length} PUNTOS{roundTrip ? " (IDA Y VUELTA)" : " (SOLO IDA)"} · {totalDistance(route.legs.map((l) => l.distance))}
           </span>
         </div>
         <div className="mt-1.5 border-t-2 border-black pt-1.5 text-[13pt] font-bold">
@@ -99,7 +100,7 @@ export function CuffChecklist() {
         </thead>
         <tbody>
           {route.stops.map((s, i) => {
-            const label = waypointLabel(i, route.stops.length);
+            const label = stopLabel(i, route.stops.length, roundTrip);
             const next = route.legs[i];
             const wp = waypoints[i];
             return (
@@ -112,7 +113,9 @@ export function CuffChecklist() {
                 <td className="font-sans">
                   {/* La tarea de ahora: editarla no recalcula la ruta (ver planKey). */}
                   {wp?.task.trim() || s.task || label.long}
-                  {label.kind === "station" && wp ? ` (${wp.dwellMin} min)` : ""}
+                  {(label.kind === "station" || (roundTrip && label.kind === "destination")) && wp
+                    ? ` (${wp.dwellMin} min)`
+                    : ""}
                 </td>
                 <td className="text-right">{value(s.o2_remaining, (v) => v.toFixed(1))}</td>
                 <td className="text-right">{value(s.margin, formatMinutes)}</td>

@@ -16,8 +16,8 @@ import {
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from "geojson";
-import { LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
-import { readyTiles, terrainLayer } from "./terrain";
+import { geojsonUrl, LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
+import { readyTiles, terrainLayer, usesGeojson } from "./terrain";
 import { TERRAIN_TRUE_SCALE } from "../mars/constants";
 import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
@@ -283,7 +283,8 @@ export function MapView({ center, bbox, siteId }: Props) {
         const state = layers[spec.id];
         if (!state) continue;
         const tiles = readyTiles(terrain, spec.id);
-        const usable = state.available && (spec.kind === "vector" || tiles !== null);
+        const geojson = !tiles && usesGeojson(spec, terrain) ? geojsonUrl(spec, siteId) : null;
+        const usable = state.available && (tiles !== null || geojson !== null);
 
         if (keys.get(spec.id) !== sourceKey && (map.getLayer(spec.id) || map.getSource(spec.id))) {
           if (map.getLayer(spec.id)) map.removeLayer(spec.id);
@@ -297,16 +298,32 @@ export function MapView({ center, bbox, siteId }: Props) {
           continue;
         }
 
-        // Vectoriales (curvas de nivel): un GeoJSON que sirve el pipeline en
-        // /tiles/<sitio>/contours.geojson. MapLibre lo descarga solo.
+        // Vectoriales (curvas de nivel): tiles MVT. MapLibre pide solo los de
+        // la vista, y ninguno mientras la capa está apagada. Si terrain.json dice
+        // que la capa es un GeoJSON (corrida vieja, o el teselado falló), el GeoJSON
+        // entero, y recién al prender la capa: en Gale pesa cientos de MB.
         if (spec.kind === "vector") {
           if (!existing) {
-            map.addSource(spec.id, { type: "geojson", data: tileUrl(spec, siteId) });
+            if (tiles) {
+              map.addSource(spec.id, {
+                type: "vector",
+                tiles: [tileUrl(spec, siteId)],
+                minzoom: tiles.minzoom,
+                maxzoom: tiles.maxzoom,
+                bounds: tiles.bounds,
+              });
+            } else if (geojson && state.visible) {
+              map.addSource(spec.id, { type: "geojson", data: geojson });
+            } else {
+              continue;
+            }
             map.addLayer(
               {
                 id: spec.id,
                 type: "line",
                 source: spec.id,
+                // La capa del MVT la dice terrain.json; la de layers.ts es el respaldo.
+                ...(tiles ? { "source-layer": tiles.layer ?? spec.sourceLayer ?? spec.id } : {}),
                 paint: {
                   "line-color": spec.legend[0]?.color ?? "#e0a24a",
                   // Finas de lejos y más marcadas de cerca: de otro modo, a
@@ -774,7 +791,7 @@ function markerClass(kind: ReturnType<typeof waypointLabel>["kind"], open: boole
   const base =
     "grid size-7 cursor-grab place-items-center rounded-full border-2 text-xs font-bold shadow-lg active:cursor-grabbing";
   const tone =
-    kind === "origin"
+    kind === "origin" || kind === "return"
       ? "border-fg bg-ok text-bg"
       : kind === "destination"
         ? "border-fg bg-alert text-bg"
