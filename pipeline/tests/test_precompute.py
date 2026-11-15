@@ -208,21 +208,27 @@ def test_full_run(data_dir):
     out = data_dir / "output" / "jezero"
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
-        ["contours.geojson", "dtm.tif", "hillshade", "hillshade.tif", "slope", "slope.tif", "terrain.json"]
+        ["contours.geojson", "dtm.tif", "hazard", "hazard.tif", "hillshade", "hillshade.tif", "roughness.tif",
+         "slope", "slope.tif", "terrain.json", "terrain_factor.tif"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
-        "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok"}
+        "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
+        "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok"}
+    hazard = index["layers"]["survival-hazard"]
+    assert hazard["provenance"] == "DERIVED" and hazard["instrument"] == "HiRISE DTM" and hazard["resolution"]
+    assert "error" not in index["layers"]["terrain-roughness"]
     assert index["radius_m"] == R
     assert index["source"]["mission"] == "MRO HiRISE"
     assert any("0.948" in w for w in index["warnings"])  # píxel anisótropo declarado
 
-    for name in ("dtm.tif", "slope.tif", "hillshade.tif"):
+    for name in ("dtm.tif", "slope.tif", "hillshade.tif", "hazard.tif", "roughness.tif", "terrain_factor.tif"):
         with rasterio.open(out / name) as ds:
             assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG", name
             assert (ds.width, ds.height) == (300, 300)
 
-    for layer_id, folder in (("relief-slope", "slope"), ("relief-hillshade", "hillshade")):
+    for layer_id, folder in (("relief-slope", "slope"), ("relief-hillshade", "hillshade"),
+                             ("survival-hazard", "hazard")):
         t = index["layers"][layer_id]["tiles"]
         assert t["status"] == "ok" and t["template"] == f"{folder}/{{z}}/{{x}}/{{y}}.png"
         assert (out / folder / str(t["maxzoom"])).is_dir() and t["minzoom"] <= t["maxzoom"]
@@ -238,6 +244,14 @@ def test_full_run(data_dir):
     c_lon, c_lat = LON0 + math.degrees(150 / R), LAT0 - math.degrees(150 / R)
     assert tile_pixel(slope_tiles, zmax, c_lon, c_lat) == (47, 125, 79, 255)
     assert tile_pixel(slope_tiles, zmax, c_lon, c_lat + math.degrees(90 / R)) == (224, 86, 74, 255)
+
+    # El peligro también, con los colores de su leyenda (los mismos que la pendiente) y sin
+    # colores intermedios: es un raster por clases. Fondo del cráter bajo, pared no transitable.
+    hazard_tiles = out / "hazard"
+    assert tile_colors(hazard_tiles) <= LEGEND_RGBA
+    zmax = index["layers"]["survival-hazard"]["tiles"]["maxzoom"]
+    assert tile_pixel(hazard_tiles, zmax, c_lon, c_lat) == (47, 125, 79, 255)
+    assert tile_pixel(hazard_tiles, zmax, c_lon, c_lat + math.degrees(90 / R)) == (224, 86, 74, 255)
 
     gj = json.loads((out / "contours.geojson").read_text())
     elevs = {f["properties"]["elev"] for f in gj["features"]}
@@ -276,6 +290,7 @@ def test_a_failed_layer_does_not_stop_the_others(data_dir, monkeypatch):
     index = json.loads((out / "terrain.json").read_text())
     assert index["layers"]["relief-contours"]["status"] == "error"
     assert index["layers"]["relief-slope"]["status"] == "ok"
+    assert index["layers"]["survival-hazard"]["status"] == "ok"  # no depende de las curvas
     assert not (out / "contours.geojson").exists() and not (out / ".work").exists()
 
 
@@ -335,8 +350,9 @@ def test_ortho_and_relief_have_separate_max_zoom(data_dir, monkeypatch):
     monkeypatch.setattr(precompute.tiles, "raster_a_tiles", raster_a_tiles)
 
     precompute.main(["--site", "jezero", "--ortho", "--max-zoom", "15"])
-    assert zooms == {"slope": 15, "ortho": 17}  # la ortoimagen, con el default de --ortho-max-zoom
+    # El peligro sale del DTM como la pendiente: usa el tope del relieve.
+    assert zooms == {"slope": 15, "hazard": 15, "ortho": 17}  # la ortoimagen, con el default de --ortho-max-zoom
 
     zooms.clear()
     precompute.main(["--site", "jezero", "--ortho", "--ortho-max-zoom", "18"])
-    assert zooms == {"slope": None, "ortho": 18}  # el relieve, con el zoom que deduce gdal2tiles
+    assert zooms == {"slope": None, "hazard": None, "ortho": 18}  # el relieve, con el zoom que deduce gdal2tiles
