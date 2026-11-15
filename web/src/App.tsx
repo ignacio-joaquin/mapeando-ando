@@ -27,6 +27,7 @@ import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
 import { useFreshRoute, usePlan } from "./state/plan";
 import { insideCoverage } from "./map/coverage";
+import { EduPanel, EduToggle } from "./edu/EduPanel";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
@@ -164,6 +165,8 @@ export function App() {
             ))}
           </nav>
 
+          <EduToggle />
+
           <p className="ml-auto text-[11px] text-muted">
             {error ? (
               <span className="text-alert">API: {error}</span>
@@ -185,6 +188,7 @@ export function App() {
             aria-label="Planificador de travesía"
             className="w-96 shrink-0 overflow-y-auto border-r border-line bg-panel/40 p-3"
           >
+            <EduPanel />
             <RoutePlanner />
           </aside>
 
@@ -245,7 +249,7 @@ export function App() {
               )}
             </section>
 
-            <section className="border-t border-line pt-4">
+            <section data-edu="layers" className="border-t border-line pt-4">
               <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
                 Capas
               </h2>

@@ -1,0 +1,41 @@
+# Modo entrenamiento · `web/src/edu/`
+
+Un modo que enseña las dificultades de planificar una EVA en Marte **usando el planificador real**. El alumno arma rutas con el planificador de siempre y cada lección lee lo que contesta `POST /api/route`.
+
+## La regla
+
+**Una lección no trae números propios.** Todo número que muestra sale de la respuesta real (`web/src/edu/read.ts`), y las consignas se corrigen con predicados sobre esa respuesta (`status`, `limiting_factor`, `margin`, `robustness`), nunca contra un valor esperado escrito en la lección. Si el equipo cambia un límite en `api/safety.py`, las lecciones siguen andando y el texto cambia solo.
+
+- Con el planificador de ejemplo (sin backend) no se corrige nada: lo dice en pantalla.
+- Si los datos del server no dejan cumplir una consigna (falta la pila de sombras, el DTM, la dosis, los lugares), el paso lo dice y se puede saltear, pero **la lección no queda como hecha**. Nunca se finge el resultado.
+
+## Lecciones
+
+| Id | Dificultad | Lo que lee de la respuesta | Consigna |
+|---|---|---|---|
+| `datos` | Desconfiá de un número sin fuente | `provenance` de todos los valores, tramos `unknown`, límites `ASSUMED` | Armar cualquier ruta |
+| `pendiente` | No se puede caminar por cualquier lado | `legs[].distance`, `max_slope`, límite `terrain`, costo `slope` | Desvío ≥ 15 % sobre la línea recta, o un tramo `caution`/`limit`/`blocked` |
+| `reloj` | El mapa cambia con la hora (4D) | límite `daylight`, costo `shadow` | Mismos puntos, dos horas de salida con veredictos distintos |
+| `consumibles` | El aire y la batería se acaban | límites `o2`, `battery` | Margen de O₂ o batería < 50 % |
+| `contacto` | Perder de vista el hábitat | límite `contact`, costo `contact` | Al menos un rato sin línea de vista |
+| `dosis` | La radiación se acumula | límite `dose` | Dosis evaluada; muestra cuántas EVAs así entran en el presupuesto |
+| `robustez` | Los planes fallan | `robustness.scenarios` | Predecir el factor limitante; después no NO-GO y todos los escenarios evaluables aguantan |
+| `incertezas` | Lo que no sabemos | escenarios `not_evaluated`, factores de costo inactivos, límites sin evaluar o `ASSUMED` | Armar cualquier ruta |
+| `mision` | Misión final | todo | Destino = lugar de `places.json` (muestra u objetivo si el sitio los tiene), predecir, dejarla GO y robusta |
+
+## Cómo funciona
+
+- `state/edu.ts`: lección y paso activos, predicción, intentos (cada ruta real que llega con la lección abierta) y lecciones hechas (en `localStorage`, con try/catch: si no hay, el progreso dura lo que la pestaña).
+- `edu/lessons.tsx`: las lecciones como datos. Pasos `info`, `task` (con `check`) y `predict` (con `reveal`).
+- `edu/EduPanel.tsx`: el panel, arriba del planificador. Prende las capas que pide el paso y marca qué resaltar u ocultar con `data-edu-focus` / `data-edu-hide` en `<body>`; el CSS está en `index.css`.
+- Piezas señalables: `data-edu="verdict" | "breakdown" | "depart" | "sun-timeline" | "layers" | "points" | "search"`. Mover o renombrar uno de esos atributos rompe el resaltado de las lecciones.
+
+## Contratos que consume
+
+Los ids de límite (`terrain`, `o2`, `battery`, `daylight`, `contact`, `dose`), los ids de factor de costo (`slope`, `shadow`, `contact`), `verdict.robustness` y los ids de capa `relief-slope` y `relief-hillshade`. Cambiar uno obliga a revisar `edu/lessons.tsx` en el mismo PR.
+
+## Estado de los datos (2026-11-15)
+
+- `reloj` no se puede completar en ningún sitio hasta que el server tenga pilas de sombras (`illumination.py` + `shadow_tiles.py`): sin atardecer, la hora no cambia el veredicto.
+- Jezero todavía no tiene muestras ni objetivos en `places.json`: la misión final acepta cualquier lugar con nombre y lo avisa.
+- Gale no tiene `places.json`: la misión final queda bloqueada ahí.

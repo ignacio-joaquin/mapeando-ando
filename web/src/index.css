@@ -60,3 +60,40 @@ body {
   html, body, #root { height: auto; }
   body { background: #fff; color: #000; }
 }
+
+/* Modo entrenamiento (src/edu/): el paso de la lección resalta o tapa piezas
+   marcadas con data-edu. Resaltar es borde + etiqueta, no solo color. */
+body[data-edu-focus~="verdict"] [data-edu="verdict"],
+body[data-edu-focus~="breakdown"] [data-edu="breakdown"],
+body[data-edu-focus~="depart"] [data-edu="depart"],
+body[data-edu-focus~="sun-timeline"] [data-edu="sun-timeline"],
+body[data-edu-focus~="layers"] [data-edu="layers"],
+body[data-edu-focus~="points"] [data-edu="points"],
+body[data-edu-focus~="search"] [data-edu="search"] {
+  outline: 3px dashed var(--color-rust);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+body[data-edu-hide~="verdict"] [data-edu="verdict"],
+body[data-edu-hide~="breakdown"] [data-edu="breakdown"] {
+  position: relative;
+  min-height: 3rem;
+}
+/* visibility: hidden también lo saca del lector de pantalla: no se filtra la respuesta. */
+body[data-edu-hide~="verdict"] [data-edu="verdict"] > *,
+body[data-edu-hide~="breakdown"] [data-edu="breakdown"] > * {
+  visibility: hidden;
+}
+body[data-edu-hide~="verdict"] [data-edu="verdict"]::after,
+body[data-edu-hide~="breakdown"] [data-edu="breakdown"]::after {
+  content: "Tapado por la lección";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--color-line);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-muted);
+  font-size: 12px;
+}

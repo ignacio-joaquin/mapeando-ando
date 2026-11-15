@@ -31,7 +31,7 @@ export function SafetyBreakdown({ verdict, cost }: Props) {
   const { limits, robustness } = verdict;
   if (!limits && !robustness && !cost) return null;
   return (
-    <div className="flex flex-col gap-2 text-xs">
+    <div data-edu="breakdown" className="flex flex-col gap-2 text-xs">
       {limits ? (
         <Section title="Límites duros" open={verdict.status !== "GO"}>
           <p className="mb-1.5 text-muted">

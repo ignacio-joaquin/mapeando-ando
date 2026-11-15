@@ -34,7 +34,7 @@ export function VerdictCard({ verdict }: Props) {
   const rob = verdict.robustness;
   const skipped = rob ? rob.scenarios.length - rob.evaluated : 0;
   return (
-    <section aria-live="polite" className={`rounded border-2 p-3 ${look.box}`}>
+    <section data-edu="verdict" aria-live="polite" className={`rounded border-2 p-3 ${look.box}`}>
       <div className="flex items-baseline gap-3">
         <span aria-hidden className={`text-3xl font-black ${look.text}`}>
           {look.icon}
