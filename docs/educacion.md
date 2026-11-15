@@ -2,6 +2,10 @@
 
 Un modo que enseña las dificultades de planificar una EVA en Marte **usando el planificador real**. El alumno arma rutas con el planificador de siempre y cada lección lee lo que contesta `POST /api/route`.
 
+Funciona como un onboarding. El botón 🎓 del encabezado abre un selector de misiones a pantalla completa, y durante la misión una tarjeta flotante apunta a la pieza de la interfaz de la que habla. En los pasos de mirar se atenúa el resto de la pantalla; en los de hacer, no, para poder usar el mapa. La tarjeta se achica con ▾ o con Esc. Pensado para cualquier edad: cada paso tiene una frase corta y clara (`say`), y abajo, en "Más a fondo", el detalle con los números y la letra chica. El detalle viene abierto en los pasos de mirar y cerrado en los de hacer.
+
+Cada misión arranca con la travesía vacía, para que la consigna la cumpla lo que hace el alumno y no una ruta que ya estaba. Al salir, si armó una ruta se la queda; si no, vuelve la que tenía.
+
 ## La regla
 
 **Una lección no trae números propios.** Todo número que muestra sale de la respuesta real (`web/src/edu/read.ts`), y las consignas se corrigen con predicados sobre esa respuesta (`status`, `limiting_factor`, `margin`, `robustness`), nunca contra un valor esperado escrito en la lección. Si el equipo cambia un límite en `api/safety.py`, las lecciones siguen andando y el texto cambia solo.
@@ -27,8 +31,9 @@ Un modo que enseña las dificultades de planificar una EVA en Marte **usando el 
 
 - `state/edu.ts`: lección y paso activos, predicción, intentos (cada ruta real que llega con la lección abierta) y lecciones hechas (en `localStorage`, con try/catch: si no hay, el progreso dura lo que la pestaña).
 - `edu/lessons.tsx`: las lecciones como datos. Pasos `info`, `task` (con `check`) y `predict` (con `reveal`).
-- `edu/EduPanel.tsx`: el panel, arriba del planificador. Prende las capas que pide el paso y marca qué resaltar u ocultar con `data-edu-focus` / `data-edu-hide` en `<body>`; el CSS está en `index.css`.
-- Piezas señalables: `data-edu="verdict" | "breakdown" | "depart" | "sun-timeline" | "layers" | "points" | "search"`. Mover o renombrar uno de esos atributos rompe el resaltado de las lecciones.
+- `edu/EduOverlay.tsx`: el selector de misiones y la tarjeta flotante (se ubica al costado de la pieza `anchor`, o adentro del mapa).
+- `edu/stage.ts`: la puesta en escena (piezas visibles, capas, pines, cámara, travesía vacía al empezar) con atributos `data-edu-*` en `<body>`; el CSS está en `index.css`.
+- Piezas señalables: `data-edu="verdict" | "breakdown" | "depart" | "sun-timeline" | "layers" | "points" | "search" | "profile" | "clock" | "inspector" | "share" | "tools" | "map"`. Mover o renombrar uno de esos atributos rompe el resaltado de las lecciones.
 
 ## Una lección guiada
 

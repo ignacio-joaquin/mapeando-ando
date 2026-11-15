@@ -27,7 +27,7 @@ import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
 import { useFreshRoute, usePlan } from "./state/plan";
 import { insideCoverage } from "./map/coverage";
-import { EduPanel, EduToggle } from "./edu/EduPanel";
+import { EduOverlay, EduToggle } from "./edu/EduOverlay";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
@@ -139,6 +139,7 @@ export function App() {
     <>
       {/* Solo en impresión: la tira de la travesía (CuffChecklist). */}
       <CuffChecklist />
+      <EduOverlay />
       <div className="flex h-full flex-col print:hidden">
         <FixtureBanner />
 
@@ -188,12 +189,11 @@ export function App() {
             aria-label="Planificador de travesía"
             className="w-96 shrink-0 overflow-y-auto border-r border-line bg-panel/40 p-3"
           >
-            <EduPanel />
             <RoutePlanner />
           </aside>
 
           <main className="flex min-w-0 flex-1 flex-col">
-            <div className="relative min-h-0 flex-1">
+            <div data-edu="map" className="relative min-h-0 flex-1">
             {site ? (
               <>
                 <MapView center={site.center} bbox={site.bbox} siteId={site.id} />

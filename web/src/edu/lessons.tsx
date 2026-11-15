@@ -67,6 +67,13 @@ export interface CheckResult {
 
 interface StepBase {
   readonly title: string;
+  /**
+   * Lo central del paso en una frase corta y clara, para cualquier edad. Va
+   * grande en la tarjeta; `body` queda abajo, para quien quiera el detalle.
+   */
+  readonly say: string;
+  /** A qué pieza apunta la tarjeta. Sin definir: la primera resaltada, o el mapa. */
+  readonly anchor?: EduTarget | "map";
   readonly body: (ctx: LessonContext) => ReactNode;
   /** Se resaltan en la interfaz mientras dura el paso. */
   readonly focus?: readonly EduTarget[];
@@ -108,6 +115,8 @@ export type LessonStep = InfoStep | TaskStep | PredictStep;
 
 export interface Lesson {
   readonly id: string;
+  /** Emoji decorativo de la tarjeta (va con aria-hidden). */
+  readonly icon: string;
   readonly title: string;
   /** La dificultad, en una frase. */
   readonly tagline: string;
@@ -200,12 +209,14 @@ function revealFactor(route: RouteResponse | null, prediction: Prediction): Reac
 
 const datos: Lesson = {
   id: "datos",
+  icon: "🔎",
   title: "Desconfiá de un número sin fuente",
   tagline: "En Marte no hay segunda opinión: tenés que saber de dónde sale cada dato.",
   steps: [
     {
       kind: "info",
       title: "Cuatro tipos de dato",
+      say: "Cada número del mapa dice de dónde salió. Antes de confiar en uno, mirá su etiqueta.",
       camera: { kind: "site" }, lockZoom: true,
       body: () => (
         <>
@@ -228,6 +239,7 @@ const datos: Lesson = {
     {
       kind: "task",
       title: "Armá una ruta cualquiera",
+      say: "Hacé clic en el mapa para marcar tu base (el hábitat) y después elegí a dónde ir.",
       lockZoom: false,
       goal: "Marcá el hábitat y elegí un destino.",
       focus: [EDU_TARGET.POINTS, EDU_TARGET.SEARCH],
@@ -237,6 +249,7 @@ const datos: Lesson = {
     {
       kind: "info",
       title: "De qué está hecha tu ruta",
+      say: "Esto es lo que el planificador midió, lo que calculó y lo que supuso para tu ruta.",
       camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
@@ -272,12 +285,14 @@ const datos: Lesson = {
 
 const pendiente: Lesson = {
   id: "pendiente",
+  icon: "⛰️",
   title: "No se puede caminar por cualquier lado",
   tagline: "La línea recta casi nunca es el camino: la pendiente decide por dónde vas.",
   steps: [
     {
       kind: "info",
       title: "Por qué la pendiente manda",
+      say: "Si es muy empinado, no se pasa. Lo que la leyenda marca “no transitable”, el planificador no lo pisa.",
       camera: { kind: "site" }, lockZoom: true,
       layers: ["relief-hillshade", "relief-slope"],
       focus: [EDU_TARGET.LAYERS],
@@ -297,6 +312,7 @@ const pendiente: Lesson = {
     {
       kind: "task",
       title: "Forzá un desvío",
+      say: "Elegí un destino detrás de una loma o del borde de un cráter, y mirá cómo la ruta lo esquiva.",
       lockZoom: false,
       goal: "Elegí un destino al que no se pueda ir en línea recta.",
       focus: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS],
@@ -322,6 +338,7 @@ const pendiente: Lesson = {
     {
       kind: "info",
       title: "Lo que te costó",
+      say: "Esto te costó el desvío. Lo más corto no siempre es lo más seguro.",
       camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT, EDU_TARGET.PROFILE],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
@@ -360,12 +377,14 @@ const pendiente: Lesson = {
 
 const reloj: Lesson = {
   id: "reloj",
+  icon: "🌗",
   title: "El mapa cambia con la hora",
   tagline: "La misma ruta puede ser segura a la mañana y peligrosa a la tarde.",
   steps: [
     {
       kind: "info",
       title: "Planificar en 4D",
+      say: "En Marte el sol también se mueve: las sombras cambian y de noche no se sale.",
       camera: { kind: "site" }, lockZoom: true, ui: [EDU_TARGET.CLOCK], layers: ["relief-hillshade", "survival-shadows"],
       focus: [EDU_TARGET.SUN],
       body: () => (
@@ -384,6 +403,7 @@ const reloj: Lesson = {
     {
       kind: "task",
       title: "Hacé que la hora cambie el veredicto",
+      say: "Dejá los mismos puntos y cambiá solo la hora de salida, hasta que cambie el veredicto.",
       lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS, EDU_TARGET.VERDICT],
       goal: "Con los mismos puntos, encontrá dos horas de salida con veredictos distintos.",
       focus: [EDU_TARGET.DEPART, EDU_TARGET.SUN],
@@ -422,6 +442,7 @@ const reloj: Lesson = {
     {
       kind: "info",
       title: "Lo que cambió",
+      say: "La misma ruta, a distintas horas, da resultados distintos.",
       camera: { kind: "route" }, lockZoom: true,
       focus: [EDU_TARGET.BREAKDOWN],
       body: (ctx) => {
@@ -459,12 +480,14 @@ const reloj: Lesson = {
 
 const consumibles: Lesson = {
   id: "consumibles",
+  icon: "🎒",
   title: "El aire y la batería se acaban",
   tagline: "Todo lo que hacés afuera se paga en O₂ y en batería, aunque estés quieto.",
   steps: [
     {
       kind: "info",
       title: "La mochila es tu vida",
+      say: "El traje lleva tu aire y tu batería. Cuando se acaban, se terminó la salida.",
       camera: { kind: "site" }, lockZoom: true,
       body: () => (
         <>
@@ -483,6 +506,7 @@ const consumibles: Lesson = {
     {
       kind: "task",
       title: "Gastá la mitad",
+      say: "Quedate un buen rato en una parada y mirá cómo baja tu reserva.",
       lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.VERDICT],
       goal: "Armá una ruta donde al O₂ o a la batería les quede menos de la mitad del margen.",
       focus: [EDU_TARGET.POINTS, EDU_TARGET.BREAKDOWN],
@@ -510,6 +534,7 @@ const consumibles: Lesson = {
     {
       kind: "info",
       title: "Qué se acabó primero",
+      say: "Esto es lo que gastaste y lo que te queda.",
       camera: { kind: "route" }, lockZoom: true,
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
@@ -545,12 +570,14 @@ const consumibles: Lesson = {
 
 const contacto: Lesson = {
   id: "contacto",
+  icon: "📡",
   title: "Perder de vista el hábitat",
   tagline: "Sin GPS ni repetidoras, la radio va en línea recta: una loma te deja incomunicado.",
   steps: [
     {
       kind: "info",
       title: "Por qué importa la línea de vista",
+      say: "La radio tiene que “ver” el hábitat. Si una loma se mete en el medio, te quedás sin señal.",
       camera: { kind: "site" }, lockZoom: true, layers: ["relief-hillshade", "relief-contours"],
       body: () => (
         <P>
@@ -563,6 +590,7 @@ const contacto: Lesson = {
     {
       kind: "task",
       title: "Escondete",
+      say: "Llevá el destino detrás de una loma o adentro de un cráter.",
       lockZoom: false, ui: [EDU_TARGET.POINTS, EDU_TARGET.VERDICT],
       goal: "Armá una ruta donde pases al menos un rato sin contacto con el hábitat.",
       layers: ["relief-hillshade", "relief-contours"],
@@ -582,6 +610,7 @@ const contacto: Lesson = {
     {
       kind: "info",
       title: "Cuánto estuviste solo",
+      say: "Este es el rato más largo que estuviste sin poder hablar con nadie.",
       camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.PROFILE],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
@@ -609,12 +638,14 @@ const contacto: Lesson = {
 
 const dosis: Lesson = {
   id: "dosis",
+  icon: "☢️",
   title: "La radiación se acumula",
   tagline: "No la sentís y no te frena hoy: se suma EVA tras EVA.",
   steps: [
     {
       kind: "info",
       title: "Un presupuesto, no una zona",
+      say: "Afuera hay radiación. No la sentís, pero se suma cada vez que salís.",
       camera: { kind: "site" }, lockZoom: true, ui: [EDU_TARGET.LAYERS], layers: ["relief-hillshade", "survival-dose"],
       body: () => (
         <>
@@ -632,6 +663,7 @@ const dosis: Lesson = {
     {
       kind: "task",
       title: "Medí tu dosis",
+      say: "Armá una ruta y mirá cuánta radiación juntás.",
       lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS],
       goal: "Armá una ruta con la dosis evaluada.",
       focus: [EDU_TARGET.BREAKDOWN],
@@ -646,6 +678,7 @@ const dosis: Lesson = {
     {
       kind: "info",
       title: "Cuántas EVAs te entran",
+      say: "Con esta dosis, estas son las salidas que te entran en el presupuesto.",
       camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
@@ -682,12 +715,14 @@ const dosis: Lesson = {
 
 const robustez: Lesson = {
   id: "robustez",
+  icon: "🛡️",
   title: "Los planes fallan",
   tagline: "Una ruta buena aguanta salir tarde, caminar lento o cargar de más.",
   steps: [
     {
       kind: "info",
       title: "El plan B ya tiene que estar en el plan A",
+      say: "Afuera siempre algo cambia: salís tarde, caminás más lento. Una buena ruta lo aguanta.",
       camera: { kind: "site" }, lockZoom: true,
       body: () => (
         <P>
@@ -699,7 +734,9 @@ const robustez: Lesson = {
     },
     {
       kind: "predict",
+      anchor: EDU_TARGET.VERDICT,
       title: "Antes de mirar",
+      say: "Adiviná qué es lo que más limita tu ruta, antes de ver la respuesta.",
       lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS],
       question: "Armá una ruta. Sin ver el veredicto: ¿qué es lo que más la limita?",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
@@ -709,6 +746,7 @@ const robustez: Lesson = {
     {
       kind: "task",
       title: "Hacela robusta",
+      say: "Ajustá la ruta hasta que aguante todos los imprevistos que se pueden calcular.",
       lockZoom: false, ui: [EDU_TARGET.VERDICT],
       goal: "Conseguí una ruta que no sea NO-GO y que aguante todos los escenarios que se pueden evaluar.",
       focus: [EDU_TARGET.BREAKDOWN, EDU_TARGET.DEPART],
@@ -719,7 +757,9 @@ const robustez: Lesson = {
         if (!rob || rob.evaluated === 0) {
           return { done: false, blocked: true, hint: "El planificador no pudo evaluar escenarios de estrés en esta ruta." };
         }
-        if (route.verdict.status === "NO_GO") return { done: false, hint: "La ruta ya es NO-GO en el caso base." };
+        if (route.verdict.status === "NO_GO") {
+          return { done: false, hint: "Así como está es NO-GO, aun sin imprevistos. Arreglá primero eso: el veredicto dice qué la limita." };
+        }
         const failing = rob.scenarios.filter((s) => s.status === "fail");
         if (failing.length === 0) return { done: true, hint: null };
         return {
@@ -731,6 +771,7 @@ const robustez: Lesson = {
     {
       kind: "info",
       title: "Cómo quedó",
+      say: "Así aguanta tu ruta los imprevistos.",
       camera: { kind: "route" }, lockZoom: true,
       focus: [EDU_TARGET.BREAKDOWN],
       body: (ctx) => {
@@ -765,12 +806,14 @@ const robustez: Lesson = {
 
 const incertezas: Lesson = {
   id: "incertezas",
+  icon: "❓",
   title: "Lo que no sabemos",
   tagline: "Saber qué no calcula el planificador es parte de usarlo bien.",
   steps: [
     {
       kind: "task",
       title: "Armá una ruta",
+      say: "Armá una ruta y vamos a mirar lo que el planificador no sabe.",
       camera: { kind: "site" }, lockZoom: false, ui: [EDU_TARGET.SEARCH],
       goal: "Cualquier ruta: vamos a leer lo que el planificador admite que no sabe.",
       focus: [EDU_TARGET.POINTS],
@@ -780,6 +823,7 @@ const incertezas: Lesson = {
     {
       kind: "info",
       title: "Lo que el planificador te dice que no sabe",
+      say: "Un buen explorador sabe lo que no sabe. Esto es lo que el planificador no puede calcular.",
       camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
@@ -827,12 +871,14 @@ const incertezas: Lesson = {
 
 const mision: Lesson = {
   id: "mision",
+  icon: "🚀",
   title: "Misión final",
   tagline: "Una EVA completa a un lugar real, con todo lo que aprendiste.",
   steps: [
     {
       kind: "task",
       title: "Elegí el objetivo",
+      say: "Tu misión: llegar a un lugar real del sitio. Marcá tu base y buscá el destino.",
       camera: { kind: "site" }, lockZoom: false, pins: true, layers: ["relief-hillshade", "relief-slope"],
       goal: "Elegí como destino un lugar con nombre: un depósito de muestras o un objetivo científico si el sitio los tiene.",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
@@ -866,7 +912,9 @@ const mision: Lesson = {
     },
     {
       kind: "predict",
+      anchor: EDU_TARGET.VERDICT,
       title: "Predecí",
+      say: "Antes de ver la respuesta: ¿qué va a limitar tu salida?",
       camera: { kind: "route" }, lockZoom: true,
       question: "¿Qué va a limitar esta EVA?",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
@@ -876,6 +924,7 @@ const mision: Lesson = {
     {
       kind: "task",
       title: "GO y robusta",
+      say: "Dejala en GO y que aguante todos los imprevistos. Podés cambiar la hora, sumar paradas o acortarla.",
       lockZoom: false, ui: [EDU_TARGET.SUN, EDU_TARGET.PROFILE, EDU_TARGET.LAYERS],
       goal: "Dejala en GO y que aguante todos los escenarios evaluables, sin cambiar el destino.",
       focus: [EDU_TARGET.VERDICT, EDU_TARGET.DEPART, EDU_TARGET.POINTS],
@@ -896,6 +945,7 @@ const mision: Lesson = {
     {
       kind: "info",
       title: "Lista para salir",
+      say: "¡Lista para salir! Imprimí la tira para la muñeca.",
       camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.SHARE],
       focus: [EDU_TARGET.VERDICT],
       body: ({ route }) => {
