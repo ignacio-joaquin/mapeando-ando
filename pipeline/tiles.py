@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -58,6 +59,25 @@ RAMPAS = {
         (2, 3, "224 122 74"),     # alto               #e07a4a
         (3, 4, "224 86 74"),      # no transitable     #e0564a
     ],
+    # Capas de refugio (pipeline/shelter.py). Un color con cuatro números lleva su alfa.
+    "cielo": [
+        (0, 0.75, "176 124 240"),     # refugio fuerte     #b07cf0
+        (0.75, 0.85, "86 200 232"),   # refugio            #56c8e8
+        (0.85, 0.92, "138 154 140"),  # algo cubierto      #8a9a8c
+        (0.92, 0.97, "120 108 96 120"),  # poco cubierto   #786c60, semitransparente
+        (0.97, 1.001, "0 0 0 0"),     # cielo abierto: transparente
+    ],
+    "refugio": [
+        (0, 1, "0 0 0 0"),            # no es refugio: transparente
+        (1, 2, "86 200 232"),         # refugio            #56c8e8 (no se confunde con "< 5 min")
+        (2, 3, "176 124 240"),        # refugio fuerte     #b07cf0
+    ],
+    "minutos": [
+        (0, 5, "47 125 79"),          # < 5 min            #2f7d4f
+        (5, 15, "224 162 74"),        # 5–15 min           #e0a24a
+        (15, 30, "224 122 74"),       # 15–30 min          #e07a4a
+        (30, 100000, "224 86 74"),    # > 30 min           #e0564a
+    ],
 }
 # Dosis (dose_rate.tif, µSv/h) con escala FIJA de 0 a la base de RAD (0,64 mSv/día = 26,7 µSv/h),
 # en cuartos, y un solo tono: no se estira al rango del sitio para no dramatizar diferencias que
@@ -68,6 +88,23 @@ RAMPAS["dosis"] = [
     (13.33, 20.0, "143 125 186"),   # 13,3–20            #8f7dba
     (20.0, 1000.0, "96 76 150"),    # ≥ 20 (base 26,7)   #604c96
 ]
+
+# Rampas cuyos tramos incluyen el extremo de arriba, (desde, hasta]: las que copian un "≤" del
+# pipeline. "cielo": shelter.py marca refugio con SVF ≤ 0,85 y fuerte con ≤ 0,75, así que un
+# 0,75 exacto se pinta fuerte. El resto incluye el de abajo, [desde, hasta): la convención "≥"
+# de la pendiente (25° exactos ya es no transitable).
+RAMPAS_CERRADAS_ARRIBA = {"cielo"}
+
+# Separación entre el borde de un tramo y la entrada del vecino en la tabla de gdaldem: más
+# chica que la distancia entre dos float32 vecinos en todas las rampas, así ningún valor cae
+# del lado equivocado del corte.
+BORDE = 1e-9
+
+
+def f32(x: float) -> float:
+    """`x` redondeado a float32: los rásteres son float32 y el pipeline compara en float32
+    (0,85 queda en 0,85000002, y un SVF de ese valor es refugio)."""
+    return struct.unpack("f", struct.pack("f", x))[0]
 
 # Rampas de un raster POR CLASES: al reproyectar se usa el vecino más cercano, porque un
 # bilineal entre la clase 0 y la 3 inventa un 1,5 que no existe.
@@ -118,16 +155,29 @@ def a_crs_web(src: Path, dest: Path, resampling: str = "bilinear", te=None) -> N
     run(["gdal_edit.py", "-a_srs", "EPSG:4326", dest])
 
 
+def tabla_de_colores(rampa: str) -> str:
+    """La tabla de gdaldem color-relief de una rampa: dos entradas por tramo, una en cada borde.
+
+    Va con -nearest_color_entry: cada valor toma el color de la entrada más cercana, sin
+    interpolar. Así el corte es neto y entre dos tramos no aparece un color mezclado que no
+    está en la leyenda. El borde que el tramo incluye va justo en el corte (en float32); el
+    otro, a BORDE del corte.
+    """
+    arriba = rampa in RAMPAS_CERRADAS_ARRIBA
+    lineas = ["nv 0 0 0 0"]
+    for desde, hasta, rgb in RAMPAS[rampa]:
+        rgba = rgb if len(rgb.split()) == 4 else f"{rgb} 255"
+        desde, hasta = f32(desde), f32(hasta)
+        lineas.append(f"{desde + BORDE if arriba else desde!r} {rgba}")
+        lineas.append(f"{hasta if arriba else hasta - BORDE!r} {rgba}")
+    return "\n".join(lineas) + "\n"
+
+
 def colorear(src: Path, dest: Path, rampa: str) -> None:
     """Aplica una rampa de color por rangos, con nodata transparente."""
     tabla = dest.parent / f"{rampa}_colores.txt"
-    lineas = ["nv 0 0 0 0"]
-    for desde, hasta, rgb in RAMPAS[rampa]:
-        # Dos entradas por rango: así el corte es neto y no un degradé.
-        lineas.append(f"{desde} {rgb} 255")
-        lineas.append(f"{hasta - 0.001} {rgb} 255")
-    tabla.write_text("\n".join(lineas) + "\n")
-    run(["gdaldem", "color-relief", src, tabla, dest, "-alpha", *GTIFF_OPTS])
+    tabla.write_text(tabla_de_colores(rampa))
+    run(["gdaldem", "color-relief", src, tabla, dest, "-alpha", "-nearest_color_entry", *GTIFF_OPTS])
 
 
 def teselar(src: Path, outdir: Path, resampling="average", max_zoom=None) -> int:
@@ -164,19 +214,24 @@ def publicar_carpeta(nueva: Path, destino: Path) -> None:
     shutil.rmtree(vieja, ignore_errors=True)
 
 
-def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoom=None, te=None) -> dict:
+def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoom=None, te=None,
+                   warp=None) -> dict:
     """Tesela `src` en `outdir` y devuelve lo que el mapa necesita para pedir los tiles.
 
     Los intermedios van a una carpeta oculta al lado de `outdir` y se borran al final.
     Una capa por clases (`color`) se remuestrea con el vecino más cercano: un promedio
-    mezcla las clases e inventa colores que no están en la leyenda.
+    mezcla las clases e inventa colores que no están en la leyenda. `warp` es el remuestreo
+    al reproyectar: "near" para máscaras (0/1), donde un bilineal inventaría 0,5. Sin `warp`,
+    "near" para las rampas de RAMPAS_POR_CLASES y bilineal para el resto.
     """
     work = outdir.parent / f".{outdir.name}.work"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
         web = work / "web.tif"
-        a_crs_web(src, web, resampling="near" if color in RAMPAS_POR_CLASES else "bilinear", te=te)
+        if warp is None:
+            warp = "near" if color in RAMPAS_POR_CLASES else "bilinear"
+        a_crs_web(src, web, resampling=warp, te=te)
         if color:
             coloreado = work / "color.tif"
             colorear(web, coloreado, color)

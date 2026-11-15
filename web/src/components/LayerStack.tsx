@@ -72,7 +72,7 @@ export function LayerStack() {
                   {disabled ? (
                     <p className="mt-1.5 text-xs text-warn" title={failed ?? undefined}>
                       {failed
-                        ? "⚠ El pipeline no pudo generarla. Hay que volver a correr precompute.py."
+                        ? `⚠ El pipeline no pudo generarla. Hay que volver a correr ${spec.script ?? "precompute.py"}.`
                         : "Esperando la salida del pipeline (MAP-9)."}
                     </p>
                   ) : (
