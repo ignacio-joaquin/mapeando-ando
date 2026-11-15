@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -88,6 +89,23 @@ RAMPAS["dosis"] = [
     (20.0, 1000.0, "96 76 150"),    # ≥ 20 (base 26,7)   #604c96
 ]
 
+# Rampas cuyos tramos incluyen el extremo de arriba, (desde, hasta]: las que copian un "≤" del
+# pipeline. "cielo": shelter.py marca refugio con SVF ≤ 0,85 y fuerte con ≤ 0,75, así que un
+# 0,75 exacto se pinta fuerte. El resto incluye el de abajo, [desde, hasta): la convención "≥"
+# de la pendiente (25° exactos ya es no transitable).
+RAMPAS_CERRADAS_ARRIBA = {"cielo"}
+
+# Separación entre el borde de un tramo y la entrada del vecino en la tabla de gdaldem: más
+# chica que la distancia entre dos float32 vecinos en todas las rampas, así ningún valor cae
+# del lado equivocado del corte.
+BORDE = 1e-9
+
+
+def f32(x: float) -> float:
+    """`x` redondeado a float32: los rásteres son float32 y el pipeline compara en float32
+    (0,85 queda en 0,85000002, y un SVF de ese valor es refugio)."""
+    return struct.unpack("f", struct.pack("f", x))[0]
+
 # Rampas de un raster POR CLASES: al reproyectar se usa el vecino más cercano, porque un
 # bilineal entre la clase 0 y la 3 inventa un 1,5 que no existe.
 RAMPAS_POR_CLASES = {"peligro"}
@@ -137,17 +155,29 @@ def a_crs_web(src: Path, dest: Path, resampling: str = "bilinear", te=None) -> N
     run(["gdal_edit.py", "-a_srs", "EPSG:4326", dest])
 
 
+def tabla_de_colores(rampa: str) -> str:
+    """La tabla de gdaldem color-relief de una rampa: dos entradas por tramo, una en cada borde.
+
+    Va con -nearest_color_entry: cada valor toma el color de la entrada más cercana, sin
+    interpolar. Así el corte es neto y entre dos tramos no aparece un color mezclado que no
+    está en la leyenda. El borde que el tramo incluye va justo en el corte (en float32); el
+    otro, a BORDE del corte.
+    """
+    arriba = rampa in RAMPAS_CERRADAS_ARRIBA
+    lineas = ["nv 0 0 0 0"]
+    for desde, hasta, rgb in RAMPAS[rampa]:
+        rgba = rgb if len(rgb.split()) == 4 else f"{rgb} 255"
+        desde, hasta = f32(desde), f32(hasta)
+        lineas.append(f"{desde + BORDE if arriba else desde!r} {rgba}")
+        lineas.append(f"{hasta if arriba else hasta - BORDE!r} {rgba}")
+    return "\n".join(lineas) + "\n"
+
+
 def colorear(src: Path, dest: Path, rampa: str) -> None:
     """Aplica una rampa de color por rangos, con nodata transparente."""
     tabla = dest.parent / f"{rampa}_colores.txt"
-    lineas = ["nv 0 0 0 0"]
-    for desde, hasta, rgb in RAMPAS[rampa]:
-        # Dos entradas por rango: así el corte es neto y no un degradé.
-        rgba = rgb if len(rgb.split()) == 4 else f"{rgb} 255"
-        lineas.append(f"{desde} {rgba}")
-        lineas.append(f"{hasta - 0.001} {rgba}")
-    tabla.write_text("\n".join(lineas) + "\n")
-    run(["gdaldem", "color-relief", src, tabla, dest, "-alpha", *GTIFF_OPTS])
+    tabla.write_text(tabla_de_colores(rampa))
+    run(["gdaldem", "color-relief", src, tabla, dest, "-alpha", "-nearest_color_entry", *GTIFF_OPTS])
 
 
 def teselar(src: Path, outdir: Path, resampling="average", max_zoom=None) -> int:

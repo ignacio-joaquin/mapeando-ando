@@ -264,7 +264,7 @@ def _slope_deg(dtm_path: Path, lat: float, lon: float) -> float:
 SHELTER_POINT_LAYERS = (
     ("survival-shelter-minutes", "Minutos al refugio", "min", 1),
     ("survival-shelter-strong-minutes", "Minutos al refugio fuerte", "min", 1),
-    ("survival-skyview", "Cielo visible", "fracción", 3),
+    ("survival-shelter-skyview", "Cielo visible", "fracción", 3),
 )
 
 

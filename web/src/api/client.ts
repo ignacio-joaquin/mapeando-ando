@@ -128,33 +128,31 @@ export async function fetchPoint(
  * shelter.json (refugios, pipeline/shelter.py). null = no corrió ninguno: las
  * capas quedan esperando.
  *
- * Si falla solo shelter.json, el relieve sigue andando y el problema va a
- * `warnings`: un índice roto no apaga las capas del otro.
+ * Si uno de los dos falla (500, JSON roto o no pasa el schema), las capas del
+ * otro siguen andando y el problema va a `warnings`: un índice roto no apaga
+ * las capas del otro. Solo si fallan los dos (o falla uno y el otro no existe)
+ * no hay nada que dibujar y se tira el error.
  */
 export async function fetchTerrain(siteId: string): Promise<TerrainIndex | null> {
   if (usingFixtures) return null;
-  const [relief, shelter] = await Promise.all([
-    fetchLayerIndex(siteId, "terrain.json"),
-    fetchLayerIndex(siteId, "shelter.json").catch((e: unknown) =>
-      e instanceof Error ? e.message : String(e),
-    ),
-  ]);
-  const extra = typeof shelter === "string" ? null : shelter;
-  const base = relief ?? extra;
+  const asError = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  const [relief, shelter] = await Promise.all(
+    ["terrain.json", "shelter.json"].map((file) => fetchLayerIndex(siteId, file).catch(asError)),
+  );
+  const errors = [relief, shelter].filter((r): r is string => typeof r === "string");
+  const indexes = [relief, shelter].filter((r): r is TerrainIndex => r !== null && typeof r !== "string");
+  const [base] = indexes;
   if (!base) {
-    if (typeof shelter === "string") throw new Error(shelter);
+    if (errors.length) throw new Error(errors.join(" · "));
     return null;
   }
   return {
     ...base,
     // MapView rearma las fuentes cuando cambia: tiene que cambiar si corre cualquiera de los dos.
-    generated_at: [relief?.generated_at, extra?.generated_at].filter(Boolean).join(" + "),
-    layers: { ...relief?.layers, ...extra?.layers },
-    warnings: [
-      ...(relief?.warnings ?? []),
-      ...(extra?.warnings ?? []),
-      ...(typeof shelter === "string" ? [shelter] : []),
-    ],
+    generated_at: indexes.map((i) => i.generated_at).join(" + "),
+    // Los ids no se repiten entre los dos archivos (shelter.py usa los suyos).
+    layers: indexes.reduce<TerrainIndex["layers"]>((all, i) => ({ ...all, ...i.layers }), {}),
+    warnings: [...indexes.flatMap((i) => i.warnings), ...errors],
   };
 }
 

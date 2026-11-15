@@ -3,11 +3,12 @@
 
 A partir del DTM del sitio genera, en <out>/<sitio>/:
 
-    skyview.tif           fracción de cielo visible (sky-view factor, 0–1), COG float32
+    shelter_skyview.tif   fracción de cielo visible (sky-view factor, 0–1), COG float32. No es el
+                          skyview.tif de radiation.py (100 m, hasta 60 km): ese es para la dosis
     shelter.tif           2 refugio fuerte, 1 refugio, 0 no, 255 sin dato; COG uint8
     shelter_minutes.tif   minutos caminando hasta el refugio más cercano, COG float32
     shelter_strong_minutes.tif   ídem, hasta el refugio fuerte más cercano
-    skyview/, shelter/, shelter-minutes/, shelter-strong-minutes/   tiles XYZ PNG (pipeline/tiles.py)
+    shelter-skyview/, shelter/, shelter-minutes/, shelter-strong-minutes/   tiles XYZ PNG (pipeline/tiles.py)
     shelter.json          procedencia, parámetros, estado y tiles de cada capa (mismo formato
                           que terrain.json, así el mapa lo lee igual)
 
@@ -47,6 +48,7 @@ from scipy import ndimage
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import illumination as il  # noqa: E402
 import precompute as pc  # noqa: E402
+import terrain_layers as tl  # noqa: E402
 import tiles  # noqa: E402
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
@@ -59,7 +61,9 @@ DIRECTIONS = 16            # azimuts para el sky-view factor
 DIST_RATIO = 1.15          # las distancias de muestreo crecen en progresión geométrica
 SVF_MAX = 0.85             # refugio si se ve como mucho el 85 % del cielo
 SVF_STRONG = 0.75          # refugio fuerte: 75 % o menos (en Gale, 0,85 marca casi todas las faldas)
-MAX_SLOPE_DEG = 25.0       # el corte único de "no transitable" (api/safety.py, leyenda de relief-slope)
+# El corte único de "no transitable" (api/safety.py, leyenda de relief-slope), con la misma
+# convención: desde este valor, inclusive, no se pisa.
+MAX_SLOPE_DEG = tl.SLOPE_CUTS_DEG[-1]
 MIN_AREA_M2 = 10.0         # dos o tres personas sentadas
 WALK_SPEED_M_S = 0.8       # en plano; el mismo default que /api/route/consumables
 STRIP_PX = 4_000_000       # píxeles por franja (sin contar el halo)
@@ -70,7 +74,7 @@ U8_NODATA = 255
 # id de capa (web/src/map/layers.ts) -> archivo COG, carpeta de tiles, rampa de tiles.py y
 # remuestreo al reproyectar. La carpeta es CONTRATO: el último segmento de la plantilla `tiles`.
 LAYER_FILES = {
-    "survival-skyview": ("skyview.tif", "skyview", "cielo", "bilinear"),
+    "survival-shelter-skyview": ("shelter_skyview.tif", "shelter-skyview", "cielo", "bilinear"),
     "survival-shelter": ("shelter.tif", "shelter", "refugio", "near"),
     "survival-shelter-minutes": ("shelter_minutes.tif", "shelter-minutes", "minutos", "bilinear"),
     "survival-shelter-strong-minutes": ("shelter_strong_minutes.tif", "shelter-strong-minutes", "minutos",
@@ -143,8 +147,10 @@ def sky_view(z: np.ndarray, halo: int, rays) -> np.ndarray:
 
 def shelter_mask(svf: np.ndarray, slope: np.ndarray, svf_max: float, max_slope_deg: float,
                  min_px: int) -> np.ndarray:
-    """True donde hay poco cielo, se puede estar parado y la mancha es de al menos `min_px`."""
-    cand = (svf <= svf_max) & (slope <= max_slope_deg)          # NaN da False en las dos
+    """True donde hay poco cielo, se puede estar parado (pendiente < `max_slope_deg`) y la mancha
+    es de al menos `min_px`."""
+    # En float32, como el COG: los tiles (tiles.f32) usan el mismo corte. NaN da False en las dos.
+    cand = (svf <= np.float32(svf_max)) & (slope < np.float32(max_slope_deg))
     labels, n = ndimage.label(cand, structure=np.ones((3, 3), bool))
     if n == 0:
         return cand
@@ -163,34 +169,49 @@ def tobler_speed(tan_slope, flat_speed_m_s: float = WALK_SPEED_M_S):
     return flat_speed_m_s * tobler(np.asarray(tan_slope, dtype=np.float64)) / tobler(0.0)
 
 
-def walk_cost(slope_deg: np.ndarray, max_slope_deg: float, flat_speed_m_s: float = WALK_SPEED_M_S):
+def walk_cost(slope_deg: np.ndarray, max_slope_deg: float, flat_speed_m_s: float = WALK_SPEED_M_S,
+              peak_deg: np.ndarray | None = None):
     """Segundos por metro horizontal de cada celda. inf donde no se puede pasar.
 
-    La pendiente de la celda es la máxima (no la del rumbo) y no se sabe si se sube o se
-    baja: se usa el promedio de subir y bajar, que es simétrico y conservador.
+    `slope_deg` (la media de la celda) da la velocidad; `peak_deg` (la pendiente que no se
+    puede esquivar, ver slope_blocks; default: la misma) decide si se pasa: desde
+    `max_slope_deg` inclusive, no, igual que api/planner.py. La pendiente no es la del rumbo
+    y no se sabe si se sube o se baja: se usa el promedio de subir y bajar, que es simétrico.
     """
+    peak = slope_deg if peak_deg is None else peak_deg
     rad = np.radians(np.where(np.isfinite(slope_deg), slope_deg, 0.0))
     s = np.tan(rad)
     pace = 0.5 * (1 / tobler_speed(s, flat_speed_m_s) + 1 / tobler_speed(-s, flat_speed_m_s))
     cost = pace / np.cos(rad)                     # distancia sobre el terreno, no la horizontal
-    cost[~np.isfinite(slope_deg) | (slope_deg > max_slope_deg)] = np.inf
+    with np.errstate(invalid="ignore"):
+        cost[~np.isfinite(slope_deg) | ~np.isfinite(peak) | (peak >= max_slope_deg)] = np.inf
     return cost
 
 
-def minutes_to_shelter(cost: np.ndarray, shelter: np.ndarray, pixel_m: tuple[float, float]) -> np.ndarray:
-    """Minutos desde cada celda hasta la celda de refugio más cercana en tiempo. NaN si no se
-    llega (celda bloqueada o rodeada de celdas bloqueadas). pixel_m = (este, norte)."""
+def minutes_to_shelter(cost: np.ndarray, targets, pixel_m: tuple[float, float]) -> list[np.ndarray]:
+    """Por cada máscara de `targets`, minutos desde cada celda hasta la celda de esa máscara más
+    cercana en tiempo. NaN si no se llega (celda bloqueada o rodeada de celdas bloqueadas).
+    pixel_m = (este, norte).
+
+    El grafo se arma una sola vez para todas las máscaras: en Gale son ~19 M de celdas.
+    """
     from skimage.graph import MCP_Geometric
 
-    out = np.full(cost.shape, np.nan, dtype=np.float32)
-    starts = np.argwhere(shelter & np.isfinite(cost))
-    if len(starts) == 0:
-        return out
-    mcp = MCP_Geometric(cost, sampling=(pixel_m[1], pixel_m[0]))
-    seconds, _ = mcp.find_costs([tuple(p) for p in starts])
-    ok = np.isfinite(seconds)
-    out[ok] = seconds[ok] / 60.0
-    return out
+    mcp = None
+    outs = []
+    for target in targets:
+        out = np.full(cost.shape, np.nan, dtype=np.float32)
+        outs.append(out)
+        starts = np.argwhere(target & np.isfinite(cost))
+        if len(starts) == 0:
+            continue
+        if mcp is None:
+            mcp = MCP_Geometric(cost, sampling=(pixel_m[1], pixel_m[0]))
+        # find_costs devuelve su arreglo interno, que la próxima llamada pisa: se copia a `out` ya.
+        seconds, _ = mcp.find_costs([tuple(p) for p in starts])
+        ok = np.isfinite(seconds)
+        out[ok] = seconds[ok] / 60.0
+    return outs
 
 
 def shelter_mask_strips(svf, slope, out, svf_max: float, max_slope_deg: float, min_px: int,
@@ -224,19 +245,36 @@ def block_reduce(a, k: int, fn) -> np.ndarray:
     return out
 
 
+def slope_blocks(slope, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Media y pendiente "que no se esquiva" de cada bloque k × k de `slope` (°, NaN = sin dato),
+    con el criterio de api/planner.py (Grid.peak): la k-ésima más alta del bloque, porque
+    cruzarlo pisa al menos k píxeles. Una franja empinada que lo atraviesa no se diluye en el
+    promedio y un píxel ruidoso suelto no lo bloquea. Bloques incompletos: el máximo
+    (conservador). Sin ningún dato: NaN en los dos.
+    """
+    rows, cols, n = slope.shape[0] // k, slope.shape[1] // k, k * k
+    mean = np.full((rows, cols), np.nan, dtype=np.float32)
+    peak = np.full((rows, cols), np.nan, dtype=np.float32)
+    step = max(1, STRIP_PX // max(1, slope.shape[1]) // k)
+    for r0 in range(0, rows, step):
+        r1 = min(rows, r0 + step)
+        b = np.asarray(slope[r0 * k:r1 * k, :cols * k], dtype=np.float32)
+        cells = b.reshape(r1 - r0, k, cols, k).transpose(0, 2, 1, 3).reshape(r1 - r0, cols, n)
+        valid = np.isfinite(cells)
+        count = valid.sum(axis=2)
+        tops = np.where(valid, cells, -np.inf)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mean[r0:r1] = np.where(count > 0, np.where(valid, cells, 0).sum(axis=2) / count, np.nan)
+        unavoid = np.partition(tops, n - k, axis=2)[..., n - k]
+        peak[r0:r1] = np.where(count >= n, unavoid, np.where(count > 0, tops.max(axis=2), np.nan))
+    return mean, peak
+
+
 def coarse_grid(grid, k: int):
     """La grilla de trabajo agrandada k veces: lo que necesitan new_gtiff y el costo."""
     return SimpleNamespace(rows=grid.rows // k, cols=grid.cols // k, crs=grid.crs,
                            transform=grid.transform @ Affine.scale(k), jac=grid.jac * k,
                            pixel_m=(grid.pixel_m[0] * k, grid.pixel_m[1] * k))
-
-
-def slope_of(z: np.ndarray, jac: np.ndarray) -> np.ndarray:
-    """Pendiente (°) de toda una grilla chica, con NaN en el borde y en los huecos."""
-    pad = np.full((z.shape[0] + 2, z.shape[1]), -np.inf, dtype=np.float32)
-    pad[1:-1] = z
-    jinv = np.broadcast_to(np.linalg.inv(jac), (z.shape[0], 2, 2))
-    return pc.slope_strip(pad, np.isfinite(pad), jinv)
 
 
 # ------------------------------------------------------------------ entradas y salidas
@@ -319,7 +357,9 @@ def main(argv=None) -> int:
         px_e, px_n = grid.pixel_m
         log(f"grilla {grid.rows}×{grid.cols}, píxel {px_e:.2f}×{px_n:.2f} m")
 
-        # 1. Sky-view y pendiente por franjas, a disco.
+        # 1. Sky-view y pendiente por franjas, a disco. Con las alturas del DTM y no las del plano
+        # tangente del centro: ese plano inclina el terreno ~r/R lejos del centro (0,56° en las
+        # esquinas de Gale), y en 500 m la curvatura baja el horizonte apenas 4 cm.
         rays = ray_offsets(grid.jac, args.directions, args.radius_m)
         halo = max(1, max(abs(dr) for ray in rays for dr, _, _ in ray))
         jinv = np.broadcast_to(np.linalg.inv(grid.jac), (grid.rows, 2, 2))
@@ -330,8 +370,8 @@ def main(argv=None) -> int:
         for r0 in range(0, grid.rows, strip_rows):
             r1 = min(grid.rows, r0 + strip_rows)
             q0, q1 = r0 - halo, r1 + halo
-            z = np.full((q1 - q0, grid.cols), -np.inf, dtype=np.float32)
-            z[max(0, q0) - q0:min(grid.rows, q1) - q0] = grid.tangent(max(0, q0), min(grid.rows, q1), 0, grid.cols)
+            z = np.full((q1 - q0, grid.cols), np.nan, dtype=np.float32)
+            z[max(0, q0) - q0:min(grid.rows, q1) - q0] = grid.raw(max(0, q0), min(grid.rows, q1), 0, grid.cols)
             svf[r0:r1] = sky_view(z, halo, rays)
             ctx = z[halo - 1:halo + (r1 - r0) + 1]
             slope[r0:r1] = pc.slope_strip(ctx, np.isfinite(ctx), jinv[r0:r1])
@@ -356,19 +396,21 @@ def main(argv=None) -> int:
         log(f"refugio: {n_shelter} celdas de {px_e * px_n:.1f} m² ({fraction:.2%} de las celdas con dato), "
             f"fuerte: {n_strong} ({fraction_strong:.2%})")
 
-        # 3. Minutos en la grilla gruesa: refugio si alguna celda fina del bloque lo es.
+        # 3. Minutos en la grilla gruesa: refugio si alguna celda fina del bloque lo es. La
+        # pendiente sale de la fina (no de un DTM promediado, que aplana una franja empinada de
+        # pocos metros): la media da la velocidad y la k-ésima más alta decide si se pasa.
         k = args.walk_res // args.res
         walk = coarse_grid(grid, k)
-        zc = block_reduce(grid.z, k, np.mean)                  # −inf si falta algún píxel
-        cost = walk_cost(slope_of(zc, walk.jac), args.max_slope)
-        del zc
-        minutes = minutes_to_shelter(cost, block_reduce(shelter, k, np.any), walk.pixel_m)
-        minutes_strong = minutes_to_shelter(cost, block_reduce(strong, k, np.any), walk.pixel_m)
+        mean_slope, peak_slope = slope_blocks(slope, k)
+        cost = walk_cost(mean_slope, args.max_slope, peak_deg=peak_slope)
+        del mean_slope, peak_slope
+        minutes, minutes_strong = minutes_to_shelter(
+            cost, [block_reduce(shelter, k, np.any), block_reduce(strong, k, np.any)], walk.pixel_m)
         del cost
         log(f"minutos al refugio listos (grilla {walk.rows}×{walk.cols})")
 
         # 4. COG.
-        write_cog(out / "skyview.tif", grid, work, "float32", F32_NODATA, by_strips(*shape, lambda a, b: (
+        write_cog(out / "shelter_skyview.tif", grid, work, "float32", F32_NODATA, by_strips(*shape, lambda a, b: (
             np.where(np.isfinite(svf[a:b]), svf[a:b], F32_NODATA))))
         write_cog(out / "shelter.tif", grid, work, "uint8", U8_NODATA, by_strips(*shape, lambda a, b: (
             np.where(np.isfinite(svf[a:b]) & np.isfinite(slope[a:b]),
@@ -391,8 +433,9 @@ def main(argv=None) -> int:
                            "walk_res": args.walk_res},
                 "assumptions": [
                     f"Velocidad de Tobler (1993) escalada a {WALK_SPEED_M_S} m/s en plano.",
-                    "Pendiente máxima de la celda, promediando subir y bajar (conservador).",
-                    f"Celdas con más de {args.max_slope:.0f}° no se pisan.",
+                    "Velocidad con la pendiente media de la celda, promediando subir y bajar.",
+                    f"Una celda no se pisa si cruzarla obliga a pisar {args.max_slope:.0f}° o más "
+                    f"(la {k}.ª pendiente más alta de sus {k * k} celdas de {args.res} m, como el planificador).",
                     f"Camino calculado a {walk.pixel_m[0]:.0f} m: un refugio de pocos metros cuenta "
                     "desde el borde de su celda."],
                 "median_min": round(float(np.median(reach)), 1) if reach.size else None,
@@ -400,8 +443,8 @@ def main(argv=None) -> int:
             }
 
         layers = {
-            "survival-skyview": {
-                **common, "file": "skyview.tif", "unit": "fracción", "provenance": "DERIVED",
+            "survival-shelter-skyview": {
+                **common, "file": "shelter_skyview.tif", "unit": "fracción", "provenance": "DERIVED",
                 "resolution": fine_res, "nodata": F32_NODATA,
                 "method": f"SVF = 1 − Σ sin γ / n (Zakšek et al. 2011), {args.directions} azimuts, "
                           f"horizonte hasta {args.radius_m:.0f} m.",
@@ -417,7 +460,7 @@ def main(argv=None) -> int:
                            "min_area_m2": args.min_area_m2, "min_px": min_px},
                 "values": {"0": "no", "1": "refugio", "2": "refugio fuerte"},
                 "assumptions": [f"Refugio = cielo visible ≤ {args.svf_max:.0%}; fuerte = ≤ {args.svf_strong:.0%}.",
-                                f"Pendiente ≤ {args.max_slope:.0f}° y mancha de al menos "
+                                f"Pendiente < {args.max_slope:.0f}° y mancha de al menos "
                                 f"{min_px * px_e * px_n:.0f} m² (dos o tres personas).",
                                 "Poco cielo es reparo geométrico, no una dosis calculada."],
                 "fraction": round(fraction, 5),   # sobre las celdas con dato

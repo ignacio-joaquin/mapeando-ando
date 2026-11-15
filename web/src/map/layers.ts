@@ -200,7 +200,7 @@ export const LAYERS: readonly LayerSpec[] = [
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y la capa de refugios",
       assumptions: [
         "Caminata de Tobler (1993) escalada a 0,8 m/s en plano",
-        "Más de 25° no se pisa (el corte único del mapa)",
+        "Desde 25° no se pisa (el corte único del mapa)",
         "Provisorio hasta que exista el costo del planificador",
       ],
     },
@@ -230,7 +230,7 @@ export const LAYERS: readonly LayerSpec[] = [
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y la capa de refugios",
       assumptions: [
         "Caminata de Tobler (1993) escalada a 0,8 m/s en plano",
-        "Más de 25° no se pisa (el corte único del mapa)",
+        "Desde 25° no se pisa (el corte único del mapa)",
         "Refugio fuerte = cielo visible ≤ 75 %",
         "Provisorio hasta que exista el costo del planificador",
       ],
@@ -248,7 +248,7 @@ export const LAYERS: readonly LayerSpec[] = [
     defaultVisible: false,
   },
   {
-    id: "survival-skyview",
+    id: "survival-shelter-skyview",
     label: "Cielo visible",
     group: "supervivencia",
     unit: "fracción",
@@ -272,7 +272,7 @@ export const LAYERS: readonly LayerSpec[] = [
       { color: "#786c60", label: "92–97 %" },
       { color: "transparent", label: "> 97 % cielo abierto" },
     ],
-    tiles: "/tiles/{site}/skyview/{z}/{x}/{y}.png",
+    tiles: "/tiles/{site}/shelter-skyview/{z}/{x}/{y}.png",
     kind: "raster",
     categorical: true,
     defaultVisible: false,
@@ -291,7 +291,7 @@ export const LAYERS: readonly LayerSpec[] = [
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
       assumptions: [
         "Refugio = cielo visible ≤ 85 %; fuerte = ≤ 75 %",
-        "Pendiente ≤ 25° y al menos ~10 m² (dos o tres personas)",
+        "Pendiente < 25° y al menos ~10 m² (dos o tres personas)",
         "Reparo geométrico, no una dosis calculada",
       ],
     },

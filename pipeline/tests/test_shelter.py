@@ -74,9 +74,47 @@ class TestShelterMask:
         shelter.shelter_mask_strips(svf, slope, out, 0.85, 30.0, 5, strip_rows=7)
         assert whole.any() and (out == whole).all()
 
+    def test_max_slope_itself_is_not_standable(self):
+        # "≥ 25° no se pisa", igual que el planificador y la capa de peligro
+        svf = np.full((3, 3), 0.7, np.float32)
+        assert not shelter.shelter_mask(svf, np.full((3, 3), 25.0), 0.85, 25.0, 1).any()
+        assert shelter.shelter_mask(svf, np.full((3, 3), 24.9), 0.85, 25.0, 1).all()
+
+    def test_threshold_itself_is_shelter(self):
+        svf = np.full((3, 3), 0.85, np.float32)
+        assert shelter.shelter_mask(svf, np.zeros((3, 3)), 0.85, 25.0, 1).all()
+
     def test_nan_is_never_shelter(self):
         svf = np.full((5, 5), np.nan, np.float32)
         assert not shelter.shelter_mask(svf, np.zeros((5, 5)), 0.85, 30.0, 1).any()
+
+
+def test_max_slope_is_the_single_cut():
+    import terrain_layers
+    assert shelter.MAX_SLOPE_DEG == terrain_layers.SLOPE_CUTS_DEG[-1]
+
+
+class TestSlopeBlocks:
+    def test_steep_strip_across_the_block_is_not_diluted(self):
+        s = np.zeros((10, 10), np.float32)
+        s[:, 2] = 30.0                    # franja de una celda que cruza el bloque de arriba a abajo
+        mean, peak = shelter.slope_blocks(s, 5)
+        assert peak[0, 0] == 30.0 and peak[1, 0] == 30.0
+        assert mean[0, 0] == pytest.approx(6.0)       # el promedio la esconde
+        assert peak[0, 1] == 0.0
+
+    def test_single_noisy_pixel_does_not_block(self):
+        s = np.zeros((5, 5), np.float32)
+        s[2, 2] = 60.0
+        _, peak = shelter.slope_blocks(s, 5)
+        assert peak[0, 0] == 0.0
+
+    def test_incomplete_block_uses_the_max_and_empty_is_nan(self):
+        s = np.full((5, 10), np.nan, np.float32)
+        s[0, 0], s[1, 1] = 3.0, 12.0
+        mean, peak = shelter.slope_blocks(s, 5)
+        assert peak[0, 0] == 12.0 and mean[0, 0] == pytest.approx(7.5)
+        assert np.isnan(peak[0, 1]) and np.isnan(mean[0, 1])
 
 
 def test_block_reduce():
@@ -92,9 +130,15 @@ class TestWalkCost:
         assert shelter.walk_cost(np.array([0.0]), 30.0)[0] == pytest.approx(1 / shelter.WALK_SPEED_M_S, rel=0.01)
 
     def test_steeper_is_slower_and_too_steep_blocks(self):
-        c = shelter.walk_cost(np.array([0.0, 10.0, 25.0, 31.0, np.nan]), 30.0)
+        c = shelter.walk_cost(np.array([0.0, 10.0, 25.0, 30.0, 31.0, np.nan]), 30.0)
         assert c[0] < c[1] < c[2]
-        assert np.isinf(c[3]) and np.isinf(c[4])
+        assert np.isinf(c[3]) and np.isinf(c[4]) and np.isinf(c[5])   # 30° exactos ya no se pisa
+
+    def test_peak_decides_passability_and_mean_the_pace(self):
+        mean = np.array([5.0, 5.0])
+        c = shelter.walk_cost(mean, 25.0, peak_deg=np.array([10.0, 25.0]))
+        assert c[0] == shelter.walk_cost(mean[:1], 25.0)[0]
+        assert np.isinf(c[1])
 
     def test_tobler_peaks_slightly_downhill(self):
         v = shelter.tobler_speed(np.array([-0.05, 0.0, 0.05]))
@@ -107,7 +151,7 @@ class TestMinutes:
         cost = np.full((5, 101), 1 / 0.8)           # 0,8 m/s en plano
         refuge = np.zeros_like(cost, bool)
         refuge[:, 0] = True
-        mins = shelter.minutes_to_shelter(cost, refuge, (10.0, 10.0))
+        [mins] = shelter.minutes_to_shelter(cost, [refuge], (10.0, 10.0))
         assert mins[2, 0] == 0
         assert mins[2, 100] == pytest.approx(1000 / 0.8 / 60, rel=1e-6)   # 1 km a 0,8 m/s
 
@@ -117,15 +161,24 @@ class TestMinutes:
         cost[10, 5] = 1.0                             # único paso, abajo
         refuge = np.zeros_like(cost, bool)
         refuge[0, 0] = True
-        mins = shelter.minutes_to_shelter(cost, refuge, (1.0, 1.0))
+        [mins] = shelter.minutes_to_shelter(cost, [refuge], (1.0, 1.0))
         assert mins[0, 6] > mins[0, 4] + 10 / 60     # tiene que bajar y volver a subir
         cost[10, 5] = np.inf
-        mins = shelter.minutes_to_shelter(cost, refuge, (1.0, 1.0))
+        [mins] = shelter.minutes_to_shelter(cost, [refuge], (1.0, 1.0))
         assert np.isnan(mins[0, 6])
 
     def test_no_shelter_means_no_minutes(self):
-        mins = shelter.minutes_to_shelter(np.ones((3, 3)), np.zeros((3, 3), bool), (1.0, 1.0))
+        [mins] = shelter.minutes_to_shelter(np.ones((3, 3)), [np.zeros((3, 3), bool)], (1.0, 1.0))
         assert np.isnan(mins).all()
+
+    def test_several_targets_on_one_graph(self):
+        # El mismo MCP para las dos máscaras: la segunda corrida no pisa el resultado de la primera.
+        cost = np.ones((1, 11))
+        west, east = np.zeros_like(cost, bool), np.zeros_like(cost, bool)
+        west[0, 0], east[0, 10] = True, True
+        a, b = shelter.minutes_to_shelter(cost, [west, east], (60.0, 60.0))
+        assert a[0, 0] == 0 and a[0, 10] == pytest.approx(10)
+        assert b[0, 10] == 0 and b[0, 0] == pytest.approx(10)
 
 
 class TestDataNotReady:
@@ -165,13 +218,14 @@ def test_full_run_on_synthetic_crater(tmp_path):
     d = out
     index = json.loads((d / "shelter.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
-        "survival-skyview": "ok", "survival-shelter": "ok", "survival-shelter-minutes": "ok",
+        "survival-shelter-skyview": "ok", "survival-shelter": "ok", "survival-shelter-minutes": "ok",
         "survival-shelter-strong-minutes": "ok"}
-    assert index["layers"]["survival-skyview"]["provenance"] == "DERIVED"
+    assert index["layers"]["survival-shelter-skyview"]["provenance"] == "DERIVED"
+    assert not (d / "skyview.tif").exists()          # ese es el de radiation.py (dosis, 100 m)
     assert index["mode"] == "completo" and index["warnings"] == []      # forma de terrain.json
     assert not (out / ".shelter-run.work").exists()
 
-    with rasterio.open(d / "skyview.tif") as s, rasterio.open(d / "shelter.tif") as r, \
+    with rasterio.open(d / "shelter_skyview.tif") as s, rasterio.open(d / "shelter.tif") as r, \
             rasterio.open(d / "shelter_minutes.tif") as m:
         svf = s.read(1, masked=True)
         refuge = r.read(1, masked=True)
@@ -219,3 +273,22 @@ def test_strong_tier_marks_2_and_has_its_own_minutes(tmp_path):
 def test_strong_threshold_cannot_exceed_refuge_threshold(tmp_path):
     with pytest.raises(SystemExit):
         shelter.main(["--dtm", str(tmp_path / "x.tif"), "--svf-max", "0.8", "--svf-strong", "0.9"])
+
+
+def test_flat_far_from_the_center_sees_the_whole_sky(tmp_path):
+    """Con las alturas del plano tangente del centro, un plano a 1,5 km del centro se inclina
+    ~r/R y pierde cielo; con las del DTM, no."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    r_m, n, px = 3396190.0, 600, 5.0
+    dtm = tmp_path / "flat.tif"
+    with rasterio.open(dtm, "w", driver="GTiff", width=n, height=n, count=1, dtype="float32",
+                       crs="+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +R=3396190 +units=m +no_defs",
+                       transform=from_origin(math.radians(77.45) * r_m, math.radians(18.45) * r_m, px, px)) as ds:
+        ds.write(np.full((n, n), -2500.0, np.float32), 1)
+    assert shelter.main(["--dtm", str(dtm), "--out", str(tmp_path / "o"), "--res", "2", "--walk-res", "4",
+                         "--radius-m", "100", "--no-tiles"]) == 0
+    with rasterio.open(tmp_path / "o" / "shelter_skyview.tif") as s:
+        svf = s.read(1, masked=True)
+    assert svf.count() > 0 and svf.min() > 1 - 1e-5

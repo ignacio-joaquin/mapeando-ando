@@ -158,7 +158,7 @@ class TestRefugio:
                 "file": "shelter_minutes.tif", "status": "ok", "provenance": "MODELED",
                 "mission": "MRO HiRISE", "instrument": "HiRISE DTM",
                 "resolution": "modelada, 10 × 10 m/px", "assumptions": ["Tobler"]},
-            "survival-skyview": {"file": "skyview.tif", "status": "error"},
+            "survival-shelter-skyview": {"file": "shelter_skyview.tif", "status": "error"},
         }}))
 
     def test_minutos_con_procedencia(self, client, manifest_con_dtm, shelter_json):
