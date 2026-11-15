@@ -206,6 +206,7 @@ export const LAYERS: readonly LayerSpec[] = [
     defaultVisible: false,
   },
   {
+    // Se entrega en PR aparte junto con el paso del pipeline que genera la capa.
     id: "survival-contact",
     label: "Sin línea de vista",
     group: "supervivencia",

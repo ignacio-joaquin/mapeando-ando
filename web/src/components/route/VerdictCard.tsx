@@ -37,7 +37,11 @@ export function VerdictCard({ verdict, dataQuality }: Props) {
   const dataNotes: string[] = [];
   if (dataQuality) {
     const lightStatus = dataQuality.light_status ?? (dataQuality.light_evaluated ? "complete" : "missing");
-    if (lightStatus !== "complete") dataNotes.push("luz sin evaluar");
+    if (lightStatus === "complete") {
+      if (dataQuality.light_source === "reused") dataNotes.push("estimado");
+    } else {
+      dataNotes.push("luz sin evaluar");
+    }
     if (!dataQuality.contact_evaluated) dataNotes.push("contacto sin evaluar");
     const terrainStatus = dataQuality.terrain_status ?? (dataQuality.terrain_evaluated ? "complete" : "missing");
     if (terrainStatus !== "complete") dataNotes.push("terreno sin evaluar");

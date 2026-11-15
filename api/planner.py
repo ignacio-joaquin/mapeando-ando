@@ -865,9 +865,6 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         "limits": [_limit_out(r, used_src, limit_src) for r in base.limits],
         "robustness": _robustness_out(assessment),
     }
-    light_source = "missing"
-    if stack is not None and slope_path is not None:
-        light_source = "reused" if stack.reuse is not None else "exact"
     terrain_source = "processed" if slope_path is not None else "missing"
     terrain_planned = [plan.planned for plan in legs_plan]
     if slope_path is None or not terrain_planned or not any(terrain_planned):
@@ -876,12 +873,18 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         terrain_status = "complete"
     else:
         terrain_status = "partial"
-    if slope_path is None or stack is None or not terrain_planned or not any(terrain_planned):
+    if stack is None:
         light_status = "missing"
+        light_source = "missing"
+    elif slope_path is None or not terrain_planned or not any(terrain_planned):
+        light_status = "missing"
+        light_source = "missing"
     elif all(terrain_planned):
         light_status = "complete"
+        light_source = "reused" if stack.reuse is not None else "exact"
     else:
         light_status = "partial"
+        light_source = "reused" if stack.reuse is not None else "exact"
     out = {
         "site": site_id,
         "depart_utc": depart_utc,
