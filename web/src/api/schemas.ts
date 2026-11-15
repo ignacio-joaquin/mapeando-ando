@@ -121,8 +121,11 @@ export const LegClassSchema = z.enum(["ok", "caution", "limit", "blocked", "unkn
  * Indicaciones por landmarks de un tramo (`legs[].directions[]`), PROPUESTA
  * del ticket de navegación por landmarks. Documentado en docs/context.md §4.
  *
- * - `toward` / `keep_left` / `keep_right` / `turn` nombran un landmark que se
- *   ve desde el tramo: `landmark` es obligatorio.
+ * - Una indicación por trecho (el tramo se parte donde el rumbo gira más de
+ *   30°), en orden. Las calcula api/directions.py.
+ * - `toward` / `keep_left` / `keep_right` / `away` / `turn` nombran un landmark
+ *   que se ve desde el trecho: `landmark` es obligatorio. `turn` = el trecho
+ *   empieza con un giro.
  * - `fallback_sun` / `fallback_bearing` = no hay nada visible: `landmark` va
  *   en null. Nunca se inventa un landmark para no caer en el respaldo.
  */
@@ -130,6 +133,7 @@ export const DirectionKindSchema = z.enum([
   "toward",
   "keep_left",
   "keep_right",
+  "away",
   "turn",
   "fallback_sun",
   "fallback_bearing",
@@ -144,6 +148,8 @@ export const LandmarkSchema = z.object({
   source: LandmarkCatalogSchema,
   lat: z.number(),
   lon: z.number(),
+  /** El punto que se mira, si no es el centro (ej. el borde de un cráter visto desde adentro). */
+  target: LatLonSchema.optional(),
 });
 
 const FALLBACK_KINDS: readonly string[] = ["fallback_sun", "fallback_bearing"];
@@ -286,6 +292,19 @@ export const ProfileSchema = z.object({
   leg_starts: z.array(z.number()),
 });
 
+export const TerrainStatusSchema = z.enum(["complete", "partial", "missing"]);
+export const LightStatusSchema = z.enum(["complete", "partial", "missing"]);
+
+export const DataQualitySchema = z.object({
+  terrain_status: TerrainStatusSchema.optional(),
+  terrain_evaluated: z.boolean(),
+  terrain_source: z.enum(["processed", "missing"]).optional(),
+  light_status: LightStatusSchema.optional(),
+  light_evaluated: z.boolean(),
+  light_source: z.enum(["exact", "reused", "missing"]).optional(),
+  contact_evaluated: z.boolean().optional(),
+});
+
 export const RouteResponseSchema = z.object({
   site: z.string(),
   depart_utc: z.string(),
@@ -294,6 +313,7 @@ export const RouteResponseSchema = z.object({
   verdict: VerdictSchema,
   cost: RouteCostSchema.optional(),
   profile: ProfileSchema.optional(),
+  data_quality: DataQualitySchema.optional(),
 });
 
 /** Un elemento u óxido medido por el rover, ej. "SiO₂" en % en peso. */
@@ -428,7 +448,7 @@ export const TerrainIndexSchema = z.object({
  * Sin este archivo (404) el buscador dice que espera al pipeline.
  * Documentado en docs/context.md §4.
  */
-export const PlaceKindSchema = z.enum(["iau", "sample", "target", "heli", "rover", "crater"]);
+export const PlaceKindSchema = z.enum(["iau", "sample", "target", "heli", "rover", "crater", "landmark", "depression", "orbital"]);
 
 export const PlaceSchema = z.object({
   id: z.string(),
@@ -567,6 +587,7 @@ export type Direction = z.infer<typeof DirectionSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type SafetyLimit = z.infer<typeof SafetyLimitSchema>;
 export type Robustness = z.infer<typeof RobustnessSchema>;
+export type DataQuality = z.infer<typeof DataQualitySchema>;
 export type RouteCost = z.infer<typeof RouteCostSchema>;
 export type RouteResponse = z.infer<typeof RouteResponseSchema>;
 export type Profile = z.infer<typeof ProfileSchema>;

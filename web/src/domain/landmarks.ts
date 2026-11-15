@@ -2,40 +2,41 @@
  * Landmarks de las indicaciones de ruta: de qué catálogo sale cada uno y cómo
  * se dibuja cada tipo de indicación.
  *
- * La posición del landmark es OBSERVED si viene de un catálogo (IAU, Robbins)
- * y DERIVED si es un pico que el pipeline extrajo del relieve. Así lo pide el
- * ticket; la API manda solo el catálogo y acá se arma el badge.
+ * La procedencia es la misma que le da pipeline/places.py a esos lugares en
+ * places.json (DERIVED: las posiciones de los catálogos salen de mapear
+ * imágenes), para que un cráter no tenga dos badges distintos en la app. La
+ * API manda solo el catálogo y acá se arma el badge.
  */
 import type { DirectionKind, LandmarkCatalog } from "../api/schemas";
 import type { SourceInfo } from "./provenance";
 
 export const LANDMARK_SOURCE: Record<LandmarkCatalog, SourceInfo> = {
   IAU: {
-    provenance: "OBSERVED",
+    provenance: "DERIVED",
     mission: null,
-    instrument: "IAU Gazetteer",
-    source: "Gazetteer of Planetary Nomenclature (IAU / USGS), nombres oficiales",
+    instrument: "Nomenclátor IAU",
+    source: "Gazetteer of Planetary Nomenclature (IAU/USGS), centro del rasgo",
   },
   Robbins: {
-    provenance: "OBSERVED",
-    mission: null,
-    instrument: "Robbins & Hynek 2012",
-    source: "Base de datos global de cráteres de Marte ≥ 1 km (Robbins & Hynek 2012)",
+    provenance: "DERIVED",
+    mission: "Mars Odyssey",
+    instrument: "THEMIS",
+    resolution: "catálogo completo para cráteres de 1 km o más",
+    source: "Robbins & Hynek 2012, mosaico diurno THEMIS IR (API OGC de USGS)",
   },
   DEM: {
     provenance: "DERIVED",
-    mission: null,
-    instrument: "relieve (DTM / DEM)",
-    source:
-      "Pico o borde extraído por el pipeline del DTM HiRISE 1 m y del DEM MOLA-HRSC 200 m",
-    assumptions: ["Elegido por su prominencia en el relieve: no tiene nombre oficial"],
+    mission: "MRO",
+    instrument: "HiRISE (DTM)",
+    source: "Máximos locales del DTM del sitio (pipeline/places.py, kind landmark)",
+    assumptions: ["Sin nombre oficial: el número solo lo ordena por relieve"],
   },
 };
 
 export const LANDMARK_CATALOG_LABEL: Record<LandmarkCatalog, string> = {
   IAU: "nombre IAU",
   Robbins: "cráter Robbins",
-  DEM: "extraído del relieve",
+  DEM: "cerro del DTM, sin nombre",
 };
 
 export function isFallback(kind: DirectionKind): boolean {
@@ -50,6 +51,7 @@ export const DIRECTION_ICON: Record<DirectionKind, string> = {
   toward: "↑",
   keep_left: "←",
   keep_right: "→",
+  away: "↓",
   turn: "↱",
   fallback_sun: "☀",
   fallback_bearing: "∠",

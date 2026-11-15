@@ -91,7 +91,7 @@ const MISSING_LANDMARKS: SourceInfo = {
 function bearingFallback(distanceM: number, bearingDeg: number): Direction {
   return {
     kind: "fallback_bearing",
-    text: `Sin referencia visible: mantené el rumbo ${formatBearing(bearingDeg)} durante ${formatDistanceM(distanceM)}.`,
+    text: `Ejemplo sin landmarks evaluados: mantené el rumbo ${formatBearing(bearingDeg)} durante ${formatDistanceM(distanceM)}.`,
     landmark: null,
     distance: mv(distanceM, "m", STRAIGHT_LINE),
     relative_bearing_deg: null,

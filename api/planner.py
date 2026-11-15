@@ -42,7 +42,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import safety
+from . import directions, safety
 from .consumables import SOURCE as SUIT_SOURCE
 from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg, pandolf_watts,
                           segment_consumption)
@@ -815,6 +815,16 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
                 stack.provenance(), ["Fracción de celdas de la ruta en sombra a la hora estimada de paso"])
         legs.append(leg)
 
+    # ---- indicaciones por landmarks (api/directions.py). Opcionales: si el cálculo falla, la
+    # ruta sale igual, sin `directions`, y el frontend dice que faltan.
+    try:
+        per_leg = directions.route_directions(data_dir, site_id, dtm_path, [plan.latlon for plan in legs_plan])
+    except Exception:  # noqa: BLE001 — degradar, no romper
+        per_leg = None
+    if per_leg is not None:
+        for leg, dirs in zip(legs, per_leg):
+            leg["directions"] = dirs
+
     # ---- estaciones
     stops = []
     for i, w in enumerate(waypoints):
@@ -868,8 +878,40 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         "limits": [_limit_out(r, used_src, limit_src) for r in base.limits],
         "robustness": _robustness_out(assessment),
     }
-    out = {"site": site_id, "depart_utc": depart_utc, "legs": legs, "stops": stops, "verdict": verdict,
-           "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None)}
+    terrain_source = "processed" if slope_path is not None else "missing"
+    terrain_planned = [plan.planned for plan in legs_plan]
+    if slope_path is None or not terrain_planned or not any(terrain_planned):
+        terrain_status = "missing"
+    elif all(terrain_planned):
+        terrain_status = "complete"
+    else:
+        terrain_status = "partial"
+    if stack is None:
+        light_status = "missing"
+        light_source = "missing"
+    else:
+        # Con pila, el atardecer siempre se evalúa; la sombra de la ruta, solo en los tramos
+        # que la midieron. Un tramo en línea recta (sin A*) o sin dato deja la luz a medias.
+        partial_shadow = any(plan.shadow_fraction is None for plan in legs_plan)
+        light_status = "partial" if partial_shadow else "complete"
+        light_source = "reused" if stack.reuse is not None else "exact"
+    out = {
+        "site": site_id,
+        "depart_utc": depart_utc,
+        "legs": legs,
+        "stops": stops,
+        "verdict": verdict,
+        "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None),
+        "data_quality": {
+            "terrain_status": terrain_status,
+            "terrain_evaluated": terrain_status == "complete",
+            "terrain_source": terrain_source,
+            "light_status": light_status,
+            "light_evaluated": light_status == "complete",
+            "light_source": light_source,
+            "contact_evaluated": contact is not None,
+        },
+    }
     if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
         # Las pendientes por paso son las del veredicto (máxima de la celda): el perfil
         # se colorea con ellas para que muestre el tramo que bloquea, no lo contradiga.
