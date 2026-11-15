@@ -68,6 +68,8 @@ interface PlanState {
    * Saca los puntos sin terreno de 1 m. Corre cuando llega la cobertura: un
    * enlace compartido (o un punto marcado antes de que llegara) pasa por el
    * mismo chequeo que un clic, en vez de calcular una ruta y dar GO afuera.
+   * Si el que cae afuera es el hábitat, borra la travesía entera; si no, saca
+   * esos puntos y el aviso dice cuáles.
    */
   dropOutside: (inside: (p: LatLon) => boolean) => void;
 }
@@ -174,16 +176,36 @@ export const usePlan = create<PlanState>((set) => ({
   setNotice: (notice) => set({ notice }),
   dropOutside: (inside) =>
     set((s) => {
-      const kept = s.waypoints.filter((w) => inside(w));
-      const dropped = s.waypoints.length - kept.length;
-      if (dropped === 0) return s;
+      const wps = s.waypoints;
+      const out = wps.flatMap((w, i) => (inside(w) ? [] : [i]));
+      if (out.length === 0) return s;
+      // Sin hábitat la travesía no tiene de dónde salir: se borra entera y se pide marcarlo
+      // de nuevo, en vez de que la parada siguiente pase a ser el hábitat sin avisar.
+      if (out.includes(0)) {
+        return {
+          waypoints: [],
+          result: null,
+          resultKey: null,
+          status: { kind: "idle" },
+          openStop: null,
+          notice:
+            "El hábitat cae fuera del terreno de 1 m real (DTM HiRISE): borré la travesía. " +
+            "Marcá el hábitat de nuevo, adentro del contorno.",
+        };
+      }
+      const last = wps.length - 1;
+      const names = out.map((i) => (i === last ? "el destino" : `la parada ${i}`));
+      const kept = wps.filter((_, i) => !out.includes(i));
+      const lostDestination = out.includes(last);
+      const after = !lostDestination
+        ? ""
+        : kept.length >= 2
+          ? " Ahora el destino es la última parada que quedaba."
+          : " Elegí otro destino.";
       return {
         waypoints: kept,
         openStop: null,
-        notice:
-          dropped === 1
-            ? "Saqué un punto de la travesía: ahí no hay terreno de 1 m real (DTM HiRISE)."
-            : `Saqué ${dropped} puntos de la travesía: ahí no hay terreno de 1 m real (DTM HiRISE).`,
+        notice: `Saqué ${names.join(", ").replace(/, ([^,]*)$/, " y $1")} de la travesía: ahí no hay terreno de 1 m real (DTM HiRISE).${after}`,
       };
     }),
   switchSite: (siteId) =>

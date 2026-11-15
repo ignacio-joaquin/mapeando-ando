@@ -57,7 +57,9 @@ export function App() {
         if (first && !s.sites.some((x) => x.id === wanted)) {
           useStore.getState().setActiveSite(first.id);
           const plan = usePlan.getState();
-          plan.clear();
+          // switchSite (no clear) deja el plan ya en el sitio nuevo: si no, el efecto de
+          // RoutePlanner lo ve distinto, resetea la travesía y borra este aviso.
+          plan.switchSite(first.id);
           plan.setNotice(`El enlace pedía el sitio "${wanted}", que no existe: abrí ${first.name}.`);
         }
       } catch (e) {
