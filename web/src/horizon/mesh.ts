@@ -22,6 +22,8 @@ const RINGS = 700;
 const R_MIN_M = 0.5;
 /** Hasta dónde se dibuja: el recorte de 200 m llega ~60 km más allá del sitio. */
 export const R_MAX_M = 150_000;
+/** Separación entre anillos como fracción de la distancia (~1,8 %): el detalle cae con la distancia. */
+export const RADIAL_STEP = (R_MAX_M / R_MIN_M) ** (1 / (RINGS - 1)) - 1;
 
 /** Altura de los ojos de un astronauta parado (m). */
 export const EYE_HEIGHT_M = 1.7;

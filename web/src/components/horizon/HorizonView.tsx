@@ -3,7 +3,14 @@ import { createPortal } from "react-dom";
 import type { RoverPhoto, TerrainLayer } from "../../api/schemas";
 import type { DataValue, SourceInfo } from "../../domain/provenance";
 import { DemSampler, demTileSet } from "../../horizon/demTiles";
-import { buildHorizonMesh, EYE_HEIGHT_M, horizonAt, type BuildProgress, type HorizonMesh } from "../../horizon/mesh";
+import {
+  buildHorizonMesh,
+  EYE_HEIGHT_M,
+  horizonAt,
+  RADIAL_STEP,
+  type BuildProgress,
+  type HorizonMesh,
+} from "../../horizon/mesh";
 import { HorizonScene, SHADOW_RADIUS_M } from "../../horizon/scene";
 import { formatLatLon } from "../../mars/geo";
 import { formatMarsTime } from "../../mars/mars24";
@@ -12,6 +19,7 @@ import { useStore } from "../../state/store";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { creditFor } from "../route/StationPhoto";
+import { useStackLight, type StackLight } from "./useStackLight";
 
 /**
  * Horizonte en primera persona (MAP-43): el terreno real visto desde los ojos
@@ -47,20 +55,28 @@ const wrap = (a: number) => ((a % 360) + 360) % 360;
 /** Diferencia de ángulos de `b` a `a`, entre −180 y 180. */
 const diff = (a: number, b: number) => wrap(a - b + 180) - 180;
 
+/**
+ * Procedencia del horizonte que mide esta vista. Es una estimación: sale de
+ * los tiles de relieve, que están remuestreados para dibujar (docs/context.md
+ * §4). Para saber si hay luz manda la pila de sombras (useStackLight).
+ */
 function reliefSource(near: TerrainLayer | null, far: TerrainLayer | null, mesh: HorizonMesh): SourceInfo {
   const used = [mesh.counts.dtm > 0 ? near : null, mesh.counts.far > 0 ? far : null].filter(
     (l): l is TerrainLayer => l !== null,
   );
+  const step = (RADIAL_STEP * 100).toLocaleString("es-AR", { maximumFractionDigits: 1 });
   return {
-    provenance: "DERIVED",
+    provenance: "MODELED",
     mission: used.map((l) => l.mission).filter(Boolean).join(" + ") || null,
     instrument: null,
     resolution: used.map((l) => l.resolution).filter(Boolean).join("; ") || undefined,
-    source: "Tiles de relieve del pipeline (relief-dem y relief-far), desde los ojos del observador",
+    source: "Estimado en el navegador con los tiles de relieve (relief-dem y relief-far), desde los ojos del observador",
     assumptions: [
+      "Los tiles de relieve están remuestreados para dibujar: es una estimación, no la pila de sombras del planificador",
+      `Muestras cada 0,5° de azimut y cada ~${step} % de la distancia, con el relieve promediado al zoom de esa distancia: un pico angosto o lejano puede quedar más bajo`,
+      "Huecos chicos del DTM rellenados por interpolación para dibujar",
       `Ojos a ${EYE_HEIGHT_M.toLocaleString("es-AR")} m del suelo`,
       "Esfera de Marte: incluye la caída por curvatura con la distancia",
-      "Muestreado cada 0,5° de azimut: un pico más angosto puede quedar bajo",
     ],
   };
 }
@@ -85,6 +101,8 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
   const [fov, setFov] = useState(50);
   const [showPhoto, setShowPhoto] = useState(Boolean(photo));
   const [load, setLoad] = useState<Load>({ kind: "loading", progress: null });
+  // Aparte de `load`: si no hay WebGL, ningún estado del terreno lo tiene que tapar.
+  const [glError, setGlError] = useState<string | null>(null);
   const [size, setSize] = useState({ w: 1, h: 1 });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -101,7 +119,7 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
     try {
       scene = new HorizonScene(canvas);
     } catch (e) {
-      setLoad({ kind: "error", message: `Este navegador no puede dibujar en 3D (WebGL). ${String(e)}` });
+      setGlError(`Este navegador no puede dibujar en 3D (WebGL). ${String(e)}`);
       return;
     }
     sceneRef.current = scene;
@@ -123,6 +141,9 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
   const nearKey = nearSet?.template ?? null;
   const farKey = farSet?.template ?? null;
   useEffect(() => {
+    // Sin escena (no hay WebGL) no tiene sentido bajar tiles: el aviso ya está puesto.
+    // Este efecto corre después del que crea la escena, en el mismo commit.
+    if (!sceneRef.current) return;
     if (!nearKey && !farKey) {
       setLoad({
         kind: "error",
@@ -150,8 +171,15 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
   }, [siteId, lat, lon, nearKey, farKey]);
 
   const mesh = load.kind === "ready" ? load.mesh : null;
+  const shown: Load = glError ? { kind: "error", message: glError } : load;
+  // Estimación de esta vista: el Sol contra el horizonte de los tiles de relieve (MODELED).
   const horizonToSun = mesh ? horizonAt(mesh, sun.azimuthDeg) : null;
-  const lit = horizonToSun === null ? sun.elevationDeg > 0 : sun.elevationDeg > horizonToSun;
+  const viewLit = horizonToSun === null ? sun.elevationDeg > 0 : sun.elevationDeg > horizonToSun;
+  // Lo que manda es la pila de sombras, el mismo dato que el veredicto y el
+  // deslizador. Sin pila para esa hora, la estimación de la vista, y se dice.
+  const stack = useStackLight(siteId, lat, lon, when);
+  const night = sun.elevationDeg <= 0;
+  const lit = night ? false : stack.kind === "ok" ? stack.lit : viewLit;
 
   useEffect(() => {
     sceneRef.current?.setSun(sun, lit);
@@ -163,7 +191,11 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Con el foco en un deslizador (hora, campo de visión) las flechas son suyas.
+      const t = e.target;
+      const typing = t instanceof HTMLElement && (t.isContentEditable || t.closest("input, select, textarea") !== null);
       if (e.key === "Escape") onClose();
+      else if (typing) return;
       else if (e.key === "ArrowLeft") setHeading((h) => wrap(h - 5));
       else if (e.key === "ArrowRight") setHeading((h) => wrap(h + 5));
       else if (e.key === "ArrowUp") setPitch((p) => Math.min(p + 2, 60));
@@ -277,21 +309,21 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
             <span className="absolute top-1.5 right-2 text-muted">rumbo {Math.round(heading)}°</span>
           </div>
 
-          {load.kind !== "ready" ? (
+          {shown.kind !== "ready" ? (
             <div className="absolute inset-0 grid place-items-center bg-bg/80 p-4 text-center text-sm">
-              {load.kind === "loading" ? (
+              {shown.kind === "loading" ? (
                 <p>
                   Armando el terreno…
-                  {load.progress ? (
+                  {shown.progress ? (
                     <span className="block font-mono text-xs text-muted">
-                      {load.progress.stage === "dtm" ? "DTM" : "DEM 200 m"}: {load.progress.done}/
-                      {load.progress.total} tiles
+                      {shown.progress.stage === "dtm" ? "DTM" : "DEM 200 m"}: {shown.progress.done}/
+                      {shown.progress.total} tiles
                     </span>
                   ) : null}
                 </p>
               ) : (
                 <p role="alert" className="max-w-md rounded border border-alert bg-alert/15 p-3">
-                  <strong className="text-alert">No se puede dibujar el horizonte.</strong> {load.message}
+                  <strong className="text-alert">No se puede dibujar el horizonte.</strong> {shown.message}
                 </p>
               )}
             </div>
@@ -389,7 +421,7 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
             </div>
             {mesh && horizonToSun !== null ? (
               <div className="flex items-center justify-between">
-                <span>Relieve hacia el Sol</span>
+                <span>Relieve hacia el Sol (estimado)</span>
                 <Measure
                   data={{ ...reliefSource(nearLayer, farLayer, mesh), value: horizonToSun, unit: null }}
                   format={deg}
@@ -400,21 +432,29 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
               className={`rounded border p-1.5 ${lit ? "border-ok/60 bg-ok/10" : "border-warn/60 bg-warn/10"}`}
               role="status"
             >
-              {sun.elevationDeg <= 0 ? (
+              {night ? (
                 <>
                   <strong className="text-warn">☾ De noche.</strong> El Sol está bajo el horizonte.
                 </>
               ) : lit ? (
                 <>
-                  <strong className="text-ok">☀ Sol a la vista.</strong> Le da luz directa a este punto.
+                  <strong className="text-ok">☀ Sol a la vista{stack.kind === "ok" ? "" : " (estimado)"}.</strong> Le
+                  da luz directa a este punto.
                 </>
               ) : (
                 <>
-                  <strong className="text-warn">⚠ En sombra.</strong> El Sol está detrás del relieve: este
-                  punto no tiene luz directa.
+                  <strong className="text-warn">⚠ En sombra{stack.kind === "ok" ? "" : " (estimado)"}.</strong> El Sol
+                  está detrás del relieve: este punto no tiene luz directa.
                 </>
               )}
             </p>
+            {night ? null : (
+              <LightSource
+                stack={stack}
+                viewLit={viewLit}
+                estimate={mesh ? reliefSource(nearLayer, farLayer, mesh) : null}
+              />
+            )}
           </section>
 
           <section className="flex flex-col gap-1.5">
@@ -473,6 +513,52 @@ export function HorizonView({ siteId, title, lat: stationLat, lon: stationLon, a
       </div>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * De dónde sale el "Sol a la vista / En sombra": la pila de sombras (lo mismo
+ * que el veredicto) o, si no hay, la estimación de esta vista, dicho con texto.
+ */
+function LightSource({
+  stack,
+  viewLit,
+  estimate,
+}: {
+  readonly stack: StackLight;
+  readonly viewLit: boolean;
+  readonly estimate: SourceInfo | null;
+}) {
+  if (stack.kind === "ok") {
+    const n = Math.abs(stack.offsetMin);
+    const off = n === 0 ? "" : `, ${n} min ${stack.offsetMin > 0 ? "antes" : "después"} de esta hora`;
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center justify-between gap-2">
+          <span>
+            Según la pila de sombras del planificador: máscara de las {stack.ltst} LTST{off}.
+          </span>
+          <ProvenanceBadge source={stack.source} />
+        </div>
+        {viewLit !== stack.lit ? (
+          <p className="text-[10px] text-muted">
+            En esta vista el Sol {viewLit ? "asoma sobre" : "queda detrás de"} el relieve, pero la pila de sombras
+            dice lo contrario. Manda la pila: sale del DTM de 1 m sin remuestrear; esta vista está remuestreada
+            para dibujar.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span>
+        {stack.kind === "pending"
+          ? "Consultando la pila de sombras del planificador; mientras tanto, estimado con el relieve de esta vista."
+          : `Estimado con el relieve de esta vista, no con la pila de sombras del planificador: ${stack.reason}.`}
+      </span>
+      {estimate ? <ProvenanceBadge source={estimate} /> : null}
+    </div>
   );
 }
 

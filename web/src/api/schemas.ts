@@ -685,6 +685,33 @@ export const SolTilesSchema = z.object({
   bands: z.array(ShadowBandSchema),
 });
 
+/**
+ * POST /api/illumination/window (api/illumination.py, read_window): sol o
+ * sombra precomputados en el rectángulo entre dos puntos, para una banda de la
+ * pila. El horizonte en primera persona lo pide con p1 = p2 (un solo punto)
+ * para decir si hay luz directa con el mismo dato que el veredicto.
+ *
+ * `values[fila][col]`: true al sol, false en sombra, null sin dato (nunca se
+ * rellena). La procedencia es la de la pila pedida por `sol_tag`: si el cliente
+ * la reutiliza para otra fecha, la pasa a MODELED él.
+ */
+export const IlluminationWindowSchema = z.object({
+  sol_tag: z.string(),
+  band: z.number().int(),
+  ltst: z.string(),
+  utc: z.string(),
+  sun_el_deg: z.number().optional(),
+  values: z.array(z.array(z.boolean().nullable())),
+  cell_ground_m: z.tuple([z.number(), z.number()]).nullable().optional(),
+  provenance: ProvenanceSchema,
+  mission: z.string().nullable(),
+  instrument: z.string().nullable(),
+  resolution: z.string().nullable().optional(),
+  source: z.string().optional(),
+  assumptions: z.array(z.string()).readonly().optional(),
+});
+
+export type IlluminationWindow = z.infer<typeof IlluminationWindowSchema>;
 export type Sites = z.infer<typeof SitesSchema>;
 export type Place = z.infer<typeof PlaceSchema>;
 export type PlaceKind = z.infer<typeof PlaceKindSchema>;
