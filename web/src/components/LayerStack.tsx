@@ -1,5 +1,5 @@
 import { LAYERS, type LayerGroup } from "../map/layers";
-import { pipelineError, terrainLayer } from "../map/terrain";
+import { pipelineError, readyTiles, terrainLayer } from "../map/terrain";
 import { useStore } from "../state/store";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 import { PLACE_KIND_STYLE, PLACE_KINDS } from "../map/places";
@@ -22,6 +22,7 @@ export function LayerStack() {
   const setOpacity = useStore((s) => s.setOpacity);
   const terrain = useStore((s) => s.terrain);
   const terrainError = useStore((s) => s.terrainError);
+  const zoom = useStore((s) => s.view?.zoom ?? null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -43,6 +44,13 @@ export function LayerStack() {
               const failed = pipelineError(terrain, spec.id);
               // La resolución medida por el pipeline le gana a la nominal.
               const resolution = terrainLayer(terrain, spec.id)?.resolution ?? spec.source.resolution;
+              // Por debajo del zoom mínimo de sus tiles la capa no dibuja nada: sin este
+              // aviso, prenderla de lejos (Gale abre en zoom ~9) parece no hacer nada.
+              // Solo vectoriales: las raster van con tileSize 256 y MapLibre ya las dibuja
+              // desde un zoom antes de su minzoom, así que el aviso mentiría por uno.
+              const minzoom = spec.kind === "vector" ? readyTiles(terrain, spec.id)?.minzoom : undefined;
+              const tooFar =
+                !disabled && state.visible && minzoom !== undefined && zoom !== null && zoom < minzoom;
               return (
                 <li
                   key={spec.id}
@@ -93,6 +101,13 @@ export function LayerStack() {
                       </span>
                     </div>
                   )}
+
+                  {tooFar ? (
+                    <p role="status" className="mt-1.5 text-xs text-warn">
+                      🔍 Acercá el mapa para verla: aparece desde el zoom {minzoom} (ahora{" "}
+                      {zoom.toFixed(1)}).
+                    </p>
+                  ) : null}
 
                   {resolution ? <p className="mt-1 text-[10px] text-muted">{resolution}</p> : null}
 

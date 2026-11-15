@@ -5,7 +5,9 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   dtm.tif           DTM como Cloud-Optimized GeoTIFF (copia del producto USGS, sin remuestrear)
   slope.tif         pendiente en grados, COG, misma grilla que el DTM
   hillshade.tif     sombreado del relieve, COG (solo visual)
-  contours.geojson  curvas de nivel en lon/lat planetocéntricas (este positivo)
+  contours.gpkg     curvas de nivel en lon/lat planetocéntricas (este positivo): maestras cada
+                    50 m en `contours_major`, el resto en `contours_minor`
+  contours/         tiles vectoriales MVT de las curvas: de lejos solo las maestras
   roughness.tif     rugosidad σ (m) y terrain_factor.tif, η de Pandolf (pipeline/terrain_layers.py)
   hazard.tif        peligro de terreno por clases: pendiente + rugosidad (pipeline/terrain_layers.py)
   dose_rate.tif     dosis equivalente por celda, µSv/h, y skyview.tif (pipeline/radiation.py)
@@ -27,6 +29,7 @@ la esfera de 3396190 m (terrain_shadows.ground_jacobian).
 Uso:
   python pipeline/precompute.py --site jezero --prueba   # recorte de 2x2 km en DATA_DIR/prueba/
   python pipeline/precompute.py --site jezero            # DTM completo en DATA_DIR/output/
+  python pipeline/precompute.py --site gale --solo-tiles-curvas  # solo los tiles de curvas ya hechas
 
 Sale con 0 si todo anduvo, 1 si falló alguna capa (las demás quedan) y 2 si faltan datos.
 """
@@ -65,7 +68,12 @@ MARS_LONGLAT = f"+proj=longlat +R={ts.MARS_RADIUS_M:.0f} +no_defs"
 
 # Parámetros de las capas (los mismos para todos los sitios)
 CONTOUR_INTERVAL_M = 10    # igual que la leyenda de relief-contours en web/src/map/layers.ts
-CONTOUR_SIMPLIFY_M = 0.5   # medio píxel de 1 m: no se nota en el mapa y achica el GeoJSON
+CONTOUR_MAJOR_M = 50       # curvas maestras: las únicas que se ven de lejos
+CONTOUR_SIMPLIFY_M = 0.5   # medio píxel de 1 m: no se nota en el mapa y achica los tiles
+# Desde qué zoom entra cada nivel de curvas. Más lejos, las de 10 m son una mancha que tapa
+# el relieve y llenan los tiles: en Gale (DTM de ~107 x 33 km) son cientos de MB.
+CONTOUR_MAJOR_MIN_ZOOM = 10
+CONTOUR_MINOR_MIN_ZOOM = 13
 CONTOUR_DECIMALS = 6       # 1e-6° ≈ 6 cm en Marte
 HILLSHADE_Z = 3            # exageración vertical del sombreado (solo visual)
 HILLSHADE_AZIMUTH_DEG = 315
@@ -331,13 +339,98 @@ def publish(tmp, dst):
     os.replace(tmp, dst)
 
 
+# ------------------------------------------------------------------ curvas de nivel
+
+CONTOUR_PARAMS = {"interval_m": CONTOUR_INTERVAL_M, "major_m": CONTOUR_MAJOR_M, "attribute": "elev",
+                  "simplify_m": CONTOUR_SIMPLIFY_M}
+CONTOUR_ASSUMPTIONS = [f"De lejos (zoom < {CONTOUR_MINOR_MIN_ZOOM}) solo se dibujan las curvas "
+                       f"cada {CONTOUR_MAJOR_M} m."]
+# Si los tiles no salen y queda el contours.geojson de una corrida anterior, el mapa usa ese.
+# No se verifica que ese GeoJSON salga del mismo DTM que esta corrida: el texto no lo afirma.
+CONTOUR_GEOJSON_ASSUMPTIONS = ["Curvas de una corrida anterior, en un GeoJSON entero: los tiles de esta "
+                               "corrida no salieron. Salen del DTM que había en esa corrida; todas las "
+                               "curvas a cualquier zoom."]
+
+
+def split_contours(src, dst, srs_flag="-t_srs"):
+    """Separa las curvas maestras del resto en dos capas de un GPKG en lon/lat de Marte.
+
+    `srs_flag` "-t_srs" reproyecta (curvas recién salidas del DTM); "-a_srs" solo etiqueta
+    (un contours.geojson viejo, que ya está en lon/lat de Marte pero GeoJSON lo lee como WGS84).
+    """
+    major = f"CAST(elev AS INTEGER) % {CONTOUR_MAJOR_M} = 0"
+    for name, where, update in (("contours_major", major, []), ("contours_minor", f"NOT ({major})", ["-update"])):
+        run(["ogr2ogr", "-f", "GPKG", *update, srs_flag, MARS_LONGLAT, "-where", where, "-nln", name,
+             str(dst), str(src)])
+
+
+def contour_tiles(out):
+    """Tiles MVT de out/contours.gpkg en out/contours/: de lejos solo las maestras."""
+    return {"status": "ok", **tiles.vector_a_tiles(
+        out / "contours.gpkg", out / "contours", "contours",
+        {"contours_major": CONTOUR_MAJOR_MIN_ZOOM, "contours_minor": CONTOUR_MINOR_MIN_ZOOM})}
+
+
+def retile_contours(out):
+    """Solo los tiles de las curvas, sobre una corrida que ya está hecha: minutos en vez de rehacer
+    pendiente y sombreado. Parte de contours.gpkg o, si es de antes de los tiles, de
+    contours.geojson. El GeoJSON se deja: si el teselado falla, `file` sigue apuntándolo y el
+    mapa lo dibuja como antes; la próxima corrida completa con tiles lo borra.
+
+    Devuelve 0 si anduvo, 1 si falló y 2 si no hay una corrida previa.
+    """
+    index_path = out / "terrain.json"
+    if not index_path.exists():
+        log(f"No hay {index_path}: primero hay que correr precompute.py completo.")
+        return 2
+    index = json.loads(index_path.read_text())
+    layer = index["layers"].get("relief-contours")
+    if not layer or layer.get("status") != "ok":
+        log("terrain.json no tiene curvas de nivel que hayan salido bien: hay que correr precompute.py completo.")
+        return 2
+    if (missing := tiles.faltan_herramientas()):
+        log("Faltan herramientas de GDAL: " + ", ".join(missing))
+        return 1
+    work = out / ".work-contours"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    try:
+        if not (out / "contours.gpkg").exists():
+            if not (out / "contours.geojson").exists():
+                log("No están ni contours.gpkg ni contours.geojson: hay que correr precompute.py completo.")
+                return 2
+            split_contours(out / "contours.geojson", work / "contours.gpkg", srs_flag="-a_srs")
+            publish(work / "contours.gpkg", out / "contours.gpkg")
+        try:
+            layer["tiles"] = contour_tiles(out)
+            ok = True
+        except Exception as e:
+            log(f"Falló el teselado de relief-contours: {e}")
+            layer["tiles"] = {"status": "error", "error": str(e)[:400]}
+            ok = False
+        if ok:
+            # Recién con los tiles listos el mapa deja el GeoJSON (si no, apagaría curvas que andaban).
+            layer.update(file="contours.gpkg", params=CONTOUR_PARAMS, assumptions=CONTOUR_ASSUMPTIONS)
+        # El mapa arma la clave de cada fuente con generated_at: si no cambia, una pestaña que vuelve
+        # a leer el índice sigue con la fuente GeoJSON aunque ya haya tiles.
+        index["generated_at"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
+        publish(work / "terrain.json", index_path)
+        if ok:
+            t = layer["tiles"]
+            log(f"tiles: {t['template']} zoom {t['minzoom']}-{t['maxzoom']}, {t['count']} tiles")
+        return 0 if ok else 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Precómputo de capas de terreno de un sitio")
     ap.add_argument("--site", required=True, help="id del sitio (nombre del JSON en sites/)")
     ap.add_argument("--out", help="carpeta base de salida (default: DATA_DIR/output, o DATA_DIR/prueba con --prueba)")
     ap.add_argument("--prueba", action="store_true",
                     help=f"procesar solo un recorte de {PRUEBA_PX}x{PRUEBA_PX} px del centro")
-    ap.add_argument("--no-tiles", action="store_true", help="no generar los tiles PNG del mapa")
+    ap.add_argument("--no-tiles", action="store_true", help="no generar los tiles del mapa")
     ap.add_argument("--ortho", action="store_true",
                     help="teselar también la ortoimagen del sitio. Va aparte porque es la capa "
                          "más cara: en Jezero son 7,4 GB a 25 cm/px y tarda horas")
@@ -350,11 +443,17 @@ def main(argv=None):
                          "ecuador marciano; 18 da ~0,32 m/px, cerca de los 25 cm nativos, pero "
                          "son ~4 veces más tiles). Va aparte de --max-zoom para no teselar el "
                          "relieve a un zoom que su píxel de 1 m no aprovecha")
+    ap.add_argument("--solo-tiles-curvas", action="store_true", dest="solo_tiles_curvas",
+                    help="solo generar los tiles de las curvas sobre una corrida ya hecha, sin rehacer "
+                         "las demás capas (minutos en vez de una hora en Gale)")
     args = ap.parse_args(argv)
 
     t0 = time.time()
     try:
         site = load_site(args.site)
+        if args.solo_tiles_curvas:
+            base = Path(args.out).expanduser() if args.out else DATA_DIR / ("prueba" if args.prueba else "output")
+            return retile_contours(base / site["id"])
         src = find_input(site, "dtm")
         width, height = raster_size(src)
     except DataNotReady as e:
@@ -457,15 +556,14 @@ def main(argv=None):
         run(["gdal_contour", "-a", "elev", "-i", str(CONTOUR_INTERVAL_M), str(dtm), str(work / "contours_raw.gpkg")])
         run(["ogr2ogr", "-f", "GPKG", "-simplify", str(CONTOUR_SIMPLIFY_M),
              str(work / "contours_simple.gpkg"), str(work / "contours_raw.gpkg")])
-        run(["ogr2ogr", "-f", "GeoJSON", "-t_srs", MARS_LONGLAT,
-             "-lco", f"COORDINATE_PRECISION={CONTOUR_DECIMALS}",
-             str(work / "contours.geojson"), str(work / "contours_simple.gpkg")])
-        publish(work / "contours.geojson", out / "contours.geojson")
+        split_contours(work / "contours_simple.gpkg", work / "contours.gpkg")
+        publish(work / "contours.gpkg", out / "contours.gpkg")
+        # El contours.geojson de una corrida anterior NO se borra acá: si después falla el
+        # teselado, es lo único que le queda al mapa. Se borra en el paso 8, con los tiles listos.
 
     layers["relief-contours"] = {
-        "file": "contours.geojson", "unit": "m", "provenance": "DERIVED", "mission": entry.get("mission"),
-        "params": {"interval_m": CONTOUR_INTERVAL_M, "attribute": "elev", "simplify_m": CONTOUR_SIMPLIFY_M},
-        "crs": MARS_LONGLAT,
+        "file": "contours.gpkg", "unit": "m", "provenance": "DERIVED", "mission": entry.get("mission"),
+        "params": CONTOUR_PARAMS, "crs": MARS_LONGLAT, "assumptions": CONTOUR_ASSUMPTIONS,
     }
 
     # 5. Cobertura: dónde hay DTM de 1 m de verdad. El planificador rechaza destinos afuera.
@@ -585,7 +683,7 @@ def main(argv=None):
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
-    # 8. Tiles PNG para el mapa, desde los COG que quedaron bien.
+    # 8. Tiles para el mapa: PNG desde los COG que quedaron bien, MVT para las curvas.
     missing_tools = tiles.faltan_herramientas()
     for layer_id, (folder, color) in TILED_LAYERS.items():
         layer = layers[layer_id]
@@ -602,6 +700,27 @@ def main(argv=None):
             failed = True
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
+
+    # Las curvas, en tiles vectoriales: el navegador baja solo lo que mira.
+    contours = layers["relief-contours"]
+    if not args.no_tiles and contours.get("status") == "ok":
+        try:
+            if missing_tools:
+                raise RuntimeError("Faltan herramientas de GDAL: " + ", ".join(missing_tools))
+            contours["tiles"] = contour_tiles(out)
+        except Exception as e:
+            failed = True
+            log(f"Falló el teselado de relief-contours: {e}")
+            contours["tiles"] = {"status": "error", "error": str(e)[:400]}
+    # `file` le dice al mapa qué dibujar (docs/context.md §4): con tiles, contours.gpkg; sin
+    # tiles (fallaron o --no-tiles), el GeoJSON de una corrida anterior si está. Degradar, no
+    # romper: el GeoJSON viejo se borra solo cuando ya hay tiles, y después de publicar el índice.
+    drop_old_geojson = False
+    if contours.get("status") == "ok":
+        if contours.get("tiles", {}).get("status") == "ok":
+            drop_old_geojson = (out / "contours.geojson").exists()
+        elif (out / "contours.geojson").exists():
+            contours.update(file="contours.geojson", assumptions=CONTOUR_GEOJSON_ASSUMPTIONS)
 
     # 8b. Relieve 3D: tiles raster-dem desde el DTM. Solo para levantar el mapa; los
     #     valores que ve el usuario siguen saliendo del COG. Sin dtm.tif no hay nada.
@@ -656,6 +775,9 @@ def main(argv=None):
 
     (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
     publish(work / "terrain.json", out / "terrain.json")
+    if drop_old_geojson:
+        # En Gale pesa cientos de MB y ya nadie lo pide: el índice publicado dice contours.gpkg.
+        (out / "contours.geojson").unlink(missing_ok=True)
     shutil.rmtree(work, ignore_errors=True)
 
     log("Listo. Archivos generados:")
@@ -669,7 +791,7 @@ def main(argv=None):
             log(f"  {layer['file']:17s} ERROR")
         t = layer.get("tiles")
         if t:
-            log(f"    tiles: {t['template']} zoom {t['minzoom']}-{t['maxzoom']}, {t['count']} PNG"
+            log(f"    tiles: {t['template']} zoom {t['minzoom']}-{t['maxzoom']}, {t['count']} tiles"
                 if t["status"] == "ok" else f"    tiles: ERROR {t['error']}")
     for w in index["warnings"]:
         log(f"Aviso: {w}")

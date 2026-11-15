@@ -73,7 +73,19 @@ export interface LayerSpec {
   readonly legend: readonly LegendStop[];
   /** Plantilla de tiles, relativa. `{site}` se reemplaza por el id del sitio. */
   readonly tiles: string;
+  /** "vector" = tiles MVT (.pbf); "raster" = tiles PNG. */
   readonly kind: "raster" | "vector";
+  /**
+   * Capa dentro de los tiles MVT (`source-layer`). Solo para las vectoriales. Manda
+   * `tiles.layer` de terrain.json; esto es el respaldo si el índice no lo trae.
+   */
+  readonly sourceLayer?: string;
+  /**
+   * GeoJSON entero de una vectorial, para corridas del pipeline de antes de los
+   * tiles MVT. Se baja recién cuando se prende la capa. Sacar cuando todos los
+   * sitios tengan tiles.
+   */
+  readonly geojson?: string;
   readonly defaultVisible: boolean;
   /**
    * Raster por clases (cada color es un rango de la leyenda): se dibuja sin
@@ -137,10 +149,13 @@ export const LAYERS: readonly LayerSpec[] = [
       instrument: "HiRISE DTM",
       resolution: "1 m/px",
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+      assumptions: ["De lejos solo se dibujan las curvas cada 50 m; las de 10 m aparecen al acercarse"],
     },
-    legend: [{ color: "#e0a24a", label: "equidistancia 10 m" }],
-    tiles: "/tiles/{site}/contours.geojson",
+    legend: [{ color: "#e0a24a", label: "equidistancia 10 m (de lejos, 50 m)" }],
+    tiles: "/tiles/{site}/contours/{z}/{x}/{y}.pbf",
     kind: "vector",
+    sourceLayer: "contours",
+    geojson: "/tiles/{site}/contours.geojson",
     defaultVisible: false,
   },
   {
@@ -387,6 +402,10 @@ export const RELIEF_DEM_SOURCE: SourceInfo = {
 
 export function tileUrl(spec: LayerSpec, siteId: string): string {
   return spec.tiles.replace("{site}", siteId);
+}
+
+export function geojsonUrl(spec: LayerSpec, siteId: string): string | null {
+  return spec.geojson?.replace("{site}", siteId) ?? null;
 }
 
 export function layersByGroup(group: LayerGroup): readonly LayerSpec[] {
