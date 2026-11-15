@@ -379,6 +379,8 @@ export const TileSetSchema = z.discriminatedUnion("status", [
     maxzoom: z.number().int(),
     /** [oeste, sur, este, norte] */
     bounds: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+    /** Solo tiles vectoriales: capa dentro del MVT (el `source-layer` del mapa). */
+    layer: z.string().optional(),
   }),
   z.object({ status: z.literal("error"), error: z.string() }),
 ]);
@@ -400,6 +402,9 @@ export const TerrainLayerSchema = z.object({
   status: z.enum(["ok", "error"]),
   /** Tamaño real del píxel sobre el suelo, cuando el pipeline lo mide. */
   resolution: z.string().optional(),
+  /** Misión e instrumento que de verdad usó la corrida (ej. peligro con o sin THEMIS). */
+  mission: z.string().nullable().optional(),
+  instrument: z.string().nullable().optional(),
   error: z.string().optional(),
   tiles: TileSetSchema.optional(),
   /** Solo `relief-dem`: altura (m) que corresponde al 0 de los tiles, el punto más bajo del DTM. */

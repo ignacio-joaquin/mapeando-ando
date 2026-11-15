@@ -79,7 +79,7 @@ El mapa de cobertura (`/data/output/<sitio>/coverage.geojson`, que escribe `prec
 | Topográfico | DTM HiRISE 1 m + recorte MOLA-HRSC 200 m (horizonte) | ✅ | ✅ | `raw/<sitio>/` |
 | Radiación | MSL RAD: 0.21 mGy/día, 0.64 mSv/día (Hassler 2014) | ✅ | ✅ | `reference/rad_surface_dose.json` |
 | Atmosférico | MEDA (Jezero) / REMS (Gale) | ✅ 17 GB | ✅ 7.4 GB | `raw/jezero/meda/`, `raw/gale/rems/` |
-| Térmico | THEMIS IR día/noche, 100 m, recortado (DN 8 bits, no calibrado → DERIVED) | ✅ | ✅ | `raw/<sitio>/themis/` |
+| Térmico | THEMIS IR día/noche, 100 m, recortado (DN 8 bits, cualitativo, no calibrado). El nocturno lo procesa `pipeline/thermal.py`: capa `survival-thermal` (OBSERVED) y suelo suelto probable (MODELED) | ✅ | ✅ | `raw/<sitio>/themis/` |
 | Espectral | CRISM MTRDR browse (resúmenes minerales) | ✅ 8 obs. | ✅ 29 obs. | `raw/<sitio>/crism/` + `index.json` |
 | Químico | SuperCam MOC + PIXL óxidos / ChemCam MOC + APXS | ✅ | ✅ (APXS: solo inventario) | `raw/jezero/{supercam,pixl}/`, `raw/gale/{chemcam,apxs}/` |
 | Geofísico | RIMFAX (Jezero) / campo magnético Langlais 2019 (Gale) | ✅ 1393 archivos, 1.1 GB | ✅ (coeficientes) | `raw/jezero/rimfax/`, `raw/common/magnetic_langlais2019/` |
@@ -94,7 +94,7 @@ El mapa de cobertura (`/data/output/<sitio>/coverage.geojson`, que escribe `prec
 | Waypoints MMGIS | Tracks del rover (e Ingenuity en Jezero) | ✅ |
 | Mars 2020 rover places | Posición del rover por sol, para cruzar con la química | ✅ `raw/jezero/rover_places/` |
 | NASA DONKI WSA-Enlil | Clima espacial, impactos en Marte | ✅ 1230 simulaciones de nov 2025 a hoy; 191 llegan a Marte. `raw/common/donki/` |
-| SWIM 2.0 | Capa de agua (Could). En Jezero y Gale la consistencia de hielo es ~0. | ✅ `raw/common/swim2/` |
+| SWIM 2.0 | Capa de agua `survival-water` (`pipeline/swim.py`): solo el composite de 0–1 m. Jezero −0,37 a −0,19, Gale −0,01 a +0,17; 1–5 m y > 5 m descartados (`docs/context.md` §5). | ✅ `raw/common/swim2/` |
 | Fotos del rover por estación | Foto real en cada estación | Se buscan por posición cuando el usuario arma la ruta (MAP-14). No se descargan de antemano. |
 | Mars Trek WMTS | Mapa base | Se consume en vivo; es geográfico (EPSG:104905), no Web Mercator. |
 
