@@ -147,7 +147,7 @@ export function NavigationView({ route, example }: Props) {
           </p>
         ) : null}
 
-        <dl className="mt-3 grid grid-cols-2 gap-2">
+        <dl className="mt-3 flex flex-col gap-1.5">
           <Stat label="Trecho">
             <Measure data={{ ...d.distance, unit: null }} format={formatDistanceM} size="lg" align="left" />
           </Stat>
@@ -341,9 +341,9 @@ function Dial({ step }: { readonly step: RouteStep }) {
 
 function Stat({ label, children }: { readonly label: string; readonly children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-lg bg-bg/50 p-2">
+    <div className="flex items-center justify-between gap-2 rounded-lg bg-bg/50 px-2.5 py-1.5">
       <dt className="text-[10px] font-semibold tracking-wider text-muted uppercase">{label}</dt>
-      <dd>{children}</dd>
+      <dd className="min-w-0">{children}</dd>
     </div>
   );
 }
