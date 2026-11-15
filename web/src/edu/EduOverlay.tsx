@@ -1,8 +1,23 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { FACTOR_LABEL } from "../components/route/VerdictCard";
+import { earthShort, ltstShort } from "../components/route/format";
+import { usePlan } from "../state/plan";
 import { useEdu, type Prediction, type PredictionRecord } from "../state/edu";
-import { lessonById, LESSONS, PREDICTABLE, setupAt, type Lesson, type LessonStep } from "./lessons";
+import { useStore } from "../state/store";
 import {
+  lessonById,
+  LESSONS,
+  PREDICTABLE,
+  setupAt,
+  type Lesson,
+  type LessonNeed,
+  type LessonStep,
+  type Preset,
+} from "./lessons";
+import {
+  applyPreset,
+  presetActive,
+  useDataReady,
   useLessonContext,
   useMissingLayers,
   useRecordAttempts,
@@ -61,8 +76,15 @@ export function EduToggle() {
 function LessonPicker() {
   const done = useEdu((s) => s.done);
   const { start, setOpen } = useEdu.getState();
+  const ready = useDataReady();
+  // Una misión que necesita datos que el server no tiene se puede abrir, pero
+  // se avisa antes: no se puede completar hoy.
+  const missingFor = (l: Lesson): readonly LessonNeed[] => (l.requires ?? []).filter((n) => ready[n] === false);
+  // La primera misión, si se puede, es la de cambiar solo la hora: es la más
+  // simple de las que muestran que el mapa depende del tiempo.
+  const ordered = ready.shadows ? [...LESSONS].sort((a, b) => Number(b.id === "reloj") - Number(a.id === "reloj")) : LESSONS;
   const count = LESSONS.filter((l) => done[l.id]).length;
-  const next = LESSONS.find((l) => !done[l.id]);
+  const next = ordered.find((l) => !done[l.id] && missingFor(l).length === 0);
   const firstRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -80,6 +102,7 @@ function LessonPicker() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="edu-picker-title"
+        onKeyDown={trapTab}
         className="edu-card-in flex max-h-[92vh] w-full max-w-4xl flex-col gap-4 overflow-y-auto rounded-2xl border-2 border-rust bg-panel p-5 shadow-2xl sm:p-7"
       >
         <header className="flex items-start gap-4">
@@ -94,7 +117,8 @@ function LessonPicker() {
               que supuso el equipo.
             </p>
             <p className="mt-1 text-xs text-muted">
-              Tu travesía queda guardada: cuando salgas del entrenamiento, vuelve.
+              El veredicto GO / NO-GO es de nuestro modelo, no una evaluación de la NASA. Tu travesía queda
+              guardada: cuando salgas del entrenamiento, vuelve.
             </p>
           </div>
           <button
@@ -124,8 +148,9 @@ function LessonPicker() {
         </div>
 
         <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {LESSONS.map((l, i) => {
+          {ordered.map((l, i) => {
             const isNext = l.id === next?.id;
+            const missing = missingFor(l);
             return (
               <li key={l.id}>
                 <button
@@ -149,10 +174,16 @@ function LessonPicker() {
                     ) : null}
                   </span>
                   <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">
-                    {i === LESSONS.length - 1 ? "Misión final" : `Misión ${i + 1}`} · {l.steps.length} pasos
+                    {l.id === "mision" ? "Misión final" : `Misión ${i + 1}`} · {l.steps.length} pasos
                   </span>
                   <span className="text-base leading-snug font-bold text-fg">{l.title}</span>
                   <span className="text-sm leading-snug text-muted">{l.tagline}</span>
+                  {missing.length > 0 ? (
+                    <span className="mt-1 rounded-lg border border-warn/60 bg-warn/10 px-2 py-1 text-xs text-fg">
+                      <span aria-hidden>⏳ </span>
+                      Espera datos que el server todavía no tiene: {missing.map((n) => NEED_LABEL[n]).join(", ")}.
+                    </span>
+                  ) : null}
                 </button>
               </li>
             );
@@ -164,6 +195,29 @@ function LessonPicker() {
     </div>
   );
 }
+
+/** Tab y Shift+Tab dan la vuelta adentro del diálogo, sin escaparse a lo de atrás. */
+function trapTab(e: ReactKeyboardEvent<HTMLElement>) {
+  if (e.key !== "Tab") return;
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button, a[href], input, [tabindex]:not([tabindex='-1'])")].filter(
+    (el) => !el.hasAttribute("disabled"),
+  );
+  const first = items[0];
+  const last = items.at(-1);
+  if (!first || !last) return;
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+const NEED_LABEL: Record<LessonNeed, string> = {
+  shadows: "las sombras de este sitio",
+  places: "los lugares de este sitio",
+};
 
 // ------------------------------------------------------------------ lección
 
@@ -331,6 +385,9 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
           </div>
         ) : null}
 
+        {step.kind === "task" && step.preset ? <PresetBlock preset={step.preset} ctx={ctx} /> : null}
+        {step.kind === "task" && step.timeSlider ? <DepartSlider /> : null}
+
         {example ? (
           <Banner tone="warn">
             Esta ruta la calculó el planificador de ejemplo, no el real. Con esos números la lección no te
@@ -436,6 +493,86 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
         <p className="w-full text-[10px] text-muted">Prototipo educativo, no software de vuelo.</p>
       </footer>
     </section>
+  );
+}
+
+/**
+ * Escenario armado: un botón para cargarlo y, si está cargado sin cambios, la
+ * verificación en vivo de que muestra lo que promete con los datos de hoy.
+ */
+function PresetBlock({ preset, ctx }: { readonly preset: Preset; readonly ctx: CardProps["ctx"] }) {
+  const siteId = useStore((s) => s.activeSiteId);
+  const [error, setError] = useState<string | null>(null);
+  if (siteId !== preset.site) return null;
+  const active = presetActive(ctx.waypoints, preset);
+  const real = active ? ctx.route?.verdict.limiting_factor : undefined;
+  return (
+    <div className="flex flex-col gap-1.5">
+      {!active ? (
+        <button
+          type="button"
+          onClick={() => setError(applyPreset(preset))}
+          className="flex min-h-11 items-center gap-2 rounded-xl border-2 border-dashed border-line px-3 py-2 text-left text-sm hover:border-rust"
+        >
+          <span aria-hidden className="text-xl leading-none">🧭</span>
+          <span>
+            <span className="block text-xs font-semibold text-muted">¿No encontrás uno? Probá este escenario:</span>
+            <span className="block font-semibold">{preset.label}</span>
+          </span>
+        </button>
+      ) : real === undefined ? null : real === preset.expect ? (
+        <p className="text-xs text-muted">
+          <span aria-hidden>🧭 </span>Escenario armado con lugares reales del sitio. El planificador confirma que limita{" "}
+          <strong className="text-fg">{FACTOR_LABEL[preset.expect].toLowerCase()}</strong>.
+        </p>
+      ) : (
+        <p className="text-xs text-warn">
+          ⚠ Con los datos de hoy, este escenario no muestra lo que esperábamos: limita{" "}
+          {real ? FACTOR_LABEL[real].toLowerCase() : "nada que se pueda nombrar"}, no{" "}
+          {FACTOR_LABEL[preset.expect].toLowerCase()}.
+        </p>
+      )}
+      {error ? <p className="text-xs text-warn">⚠ {error}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Deslizador de la hora de salida: ±12 h desde la hora con la que se abrió el
+ * paso, de a 15 min. Solo mueve la hora; los puntos no se tocan.
+ */
+function DepartSlider() {
+  const departAt = usePlan((s) => s.departAt);
+  const origin = usePlan((s) => s.waypoints[0]);
+  const [base] = useState(() => usePlan.getState().departAt.getTime());
+  const offset = Math.round((departAt.getTime() - base) / 60_000);
+  const inRange = Math.abs(offset) <= 12 * 60;
+  return (
+    <label className="flex flex-col gap-1 rounded-xl border border-line bg-bg/50 p-3 text-sm">
+      <span className="flex items-baseline justify-between gap-2">
+        <span className="font-semibold">
+          <span aria-hidden>🕑 </span>Hora de salida
+        </span>
+        <span className="font-mono text-base text-rust">
+          {origin ? `${ltstShort(departAt, origin.lon)} LTST` : earthShort(departAt)}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={-12 * 60}
+        max={12 * 60}
+        step={15}
+        value={inRange ? offset : 0}
+        onChange={(e) => usePlan.getState().setDepartAt(new Date(base + Number(e.target.value) * 60_000))}
+        className="w-full accent-rust"
+        aria-valuetext={origin ? `${ltstShort(departAt, origin.lon)} hora solar local` : earthShort(departAt)}
+      />
+      <span className="flex justify-between text-[11px] text-muted">
+        <span>12 h antes</span>
+        <span>{origin ? "hora solar en el hábitat" : "marcá el hábitat para ver la hora solar"}</span>
+        <span>12 h después</span>
+      </span>
+    </label>
   );
 }
 

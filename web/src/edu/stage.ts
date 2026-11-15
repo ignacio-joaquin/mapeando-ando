@@ -7,7 +7,9 @@ import { LAYERS } from "../map/layers";
 import { useEdu, type Attempt } from "../state/edu";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { useStore } from "../state/store";
-import type { Lesson, LessonContext, LessonStep, StepSetup } from "./lessons";
+import { useSun } from "../state/sun";
+import type { Waypoint } from "../state/plan";
+import type { Lesson, LessonContext, LessonNeed, LessonStep, Preset, StepSetup } from "./lessons";
 
 export function useLessonContext(): { ctx: LessonContext; example: boolean; loading: boolean } {
   const fresh = useFreshRoute();
@@ -181,4 +183,52 @@ export function usePlanSandbox(keepRoute: boolean) {
       });
     };
   }, [keepRoute]);
+}
+
+/**
+ * Carga un escenario armado con las acciones normales del planificador: los
+ * puntos son lugares reales de places.json, buscados por id. Devuelve por qué
+ * no se pudo, o null si se cargó.
+ */
+export function applyPreset(preset: Preset): string | null {
+  const { places, activeSiteId } = useStore.getState();
+  if (activeSiteId !== preset.site) return `Este escenario es del sitio "${preset.site}".`;
+  const find = (id: string) => places?.places.find((p) => p.id === id);
+  const habitat = find(preset.habitat);
+  const destination = find(preset.destination);
+  if (!habitat || !destination) return "Los lugares de este escenario ya no están en el sitio.";
+  const plan = usePlan.getState();
+  plan.clear();
+  plan.setRoundTrip(true);
+  plan.addPoint({ lat: habitat.lat, lon: habitat.lon }, habitat.id);
+  plan.addPoint({ lat: destination.lat, lon: destination.lon }, destination.id);
+  const dest = usePlan.getState().waypoints[1];
+  if (dest) plan.updatePoint(dest.id, { dwellMin: preset.dwellMin });
+  useEdu.getState().requestCamera({ kind: "route" });
+  return null;
+}
+
+/** ¿La travesía de ahora es exactamente el escenario, sin cambios del alumno? */
+export function presetActive(waypoints: readonly Waypoint[], preset: Preset): boolean {
+  const [h, d] = waypoints;
+  return (
+    waypoints.length === 2 &&
+    h?.placeId === preset.habitat &&
+    d?.placeId === preset.destination &&
+    d.dwellMin === preset.dwellMin
+  );
+}
+
+/**
+ * ¿El server tiene lo que necesita cada misión, para el sitio activo?
+ * null = todavía se está consultando.
+ */
+export function useDataReady(): Readonly<Record<LessonNeed, boolean | null>> {
+  const catalog = useSun((s) => s.catalog);
+  const sunLoading = useSun((s) => s.load.kind === "loading");
+  const places = useStore((s) => s.places);
+  return {
+    shadows: catalog ? catalog.sols.length > 0 : sunLoading ? null : false,
+    places: places ? places.places.length > 0 : false,
+  };
 }

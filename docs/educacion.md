@@ -57,3 +57,28 @@ Los ids de límite (`terrain`, `o2`, `battery`, `daylight`, `contact`, `dose`), 
 - `reloj` no se puede completar en ningún sitio hasta que el server tenga pilas de sombras (`illumination.py` + `shadow_tiles.py`): sin atardecer, la hora no cambia el veredicto.
 - Jezero todavía no tiene muestras ni objetivos en `places.json`: la misión final acepta cualquier lugar con nombre y lo avisa.
 - Gale no tiene `places.json`: la misión final queda bloqueada ahí.
+
+## Apoyo paso a paso (2026-11-15)
+
+Basado en un informe sobre juegos educativos: las mejoras vienen del apoyo paso a paso y de jugar más de una vez, no de la historia ni del realismo visual. Por eso el esfuerzo va a la guía y no al juego.
+
+- **Escenarios armados.** Una consigna puede traer `preset`: hábitat → destino con ida y vuelta, armado con dos lugares reales de `places.json` (por id, nunca coordenadas escritas a mano). Se eligieron consultando `/api/route` el 2026-11-15, con salida 14:00 UTC y 15 min en el destino:
+
+  | Lección | Escenario | Lo que mostró |
+  |---|---|---|
+  | `contacto` | Hozho → pal | NO-GO, limita el contacto (pendiente 47 %, O₂ 71 % de margen) |
+  | `pendiente` | vindholet → bubenka 1695 | CAUTION, limita la pendiente (4 % de margen), contacto bien |
+  | `consumibles` | pile bay → Airfield S | con 15 min limita la pendiente; con 150 min en el destino, NO-GO por O₂ |
+
+  `expect` es lo que mostraba ese día. Mientras el escenario está cargado sin cambios, la tarjeta lo verifica en vivo y, si los datos cambiaron, dice qué limita ahora.
+- **Deslizador de hora** (`timeSlider`): ±12 h de a 15 min. Mueve solo la hora de salida, nunca los puntos.
+- **Qué misiones se pueden hacer hoy.** Cada lección declara `requires` (`shadows`, `places`). La elección de misiones avisa cuál espera datos que el server no tiene. Cuando el sitio tenga sombras, "El mapa cambia con la hora" pasa a ser la primera misión: cambia una sola cosa, la hora.
+- **¿Cómo lo sabemos?** El tooltip de cada badge de procedencia explica en lenguaje llano qué es un dato observado, derivado, modelado o supuesto. Para HiRISE, RAD y Mars24 suma una línea sobre el instrumento, y enlaza a ciencia.nasa.gov.
+- **El veredicto es nuestro.** La elección de misiones dice que el GO / NO-GO es de nuestro modelo, no una evaluación de la NASA. Sin logos de la NASA.
+- **Sin rankings.** No hay tabla de velocidad ni de distancia: en un planificador de seguridad, eso premia los planes arriesgados.
+
+### Pendiente de decidir (toca contratos o el modelo)
+
+- **Deslizadores de carga y de reserva de O₂, y el escenario "mochila pesada".** `POST /api/route` no recibe parámetros del traje. Sumarlos cambia el contrato de API y web.
+- **Reglas de las simulaciones análogas** (MDRS, BASALT): nunca salir solo, no salir cerca del amanecer ni del atardecer, volver con reserva y replanear ante una tormenta a mitad de camino. La reserva y el atardecer ya son límites. Las otras cambiarían el veredicto (`api/safety.py`) y necesitan una fuente citable antes de entrar.
+- **"Mediodía vs. atardecer".** Espera a que el server tenga pilas de sombras.

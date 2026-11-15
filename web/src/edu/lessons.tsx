@@ -98,8 +98,27 @@ export interface InfoStep extends StepBase {
   readonly kind: "info";
 }
 
+/**
+ * Escenario armado con dos lugares reales de places.json (por id, nunca con
+ * coordenadas escritas a mano): hábitat → destino, con ida y vuelta. Se eligió
+ * consultando /api/route; `expect` es lo que mostraba ese día. La tarjeta lo
+ * vuelve a verificar en vivo y, si los datos cambiaron, lo dice.
+ */
+export interface Preset {
+  readonly site: string;
+  readonly label: string;
+  readonly expect: LimitingFactor;
+  readonly habitat: string;
+  readonly destination: string;
+  readonly dwellMin: number;
+}
+
 export interface TaskStep extends StepBase {
   readonly kind: "task";
+  /** Escenario para quien no encuentra uno solo: apoyo paso a paso. */
+  readonly preset?: Preset;
+  /** Deslizador de hora de salida en la tarjeta. */
+  readonly timeSlider?: boolean;
   /** La consigna, en una línea. */
   readonly goal: string;
   readonly check: (ctx: LessonContext) => CheckResult;
@@ -114,8 +133,12 @@ export interface PredictStep extends StepBase {
 
 export type LessonStep = InfoStep | TaskStep | PredictStep;
 
+/** Datos del server sin los que la misión no se puede completar. */
+export type LessonNeed = "shadows" | "places";
+
 export interface Lesson {
   readonly id: string;
+  readonly requires?: readonly LessonNeed[];
   /** Al salir, se queda la ruta que armó el alumno en vez de volver la de antes. */
   readonly keepsRoute?: boolean;
   /** Emoji decorativo de la tarjeta (va con aria-hidden). */
@@ -314,6 +337,14 @@ const pendiente: Lesson = {
     {
       kind: "task",
       title: "Forzá un desvío",
+      preset: {
+        site: "jezero",
+        label: "Un atajo empinado: de vindholet a bubenka 1695",
+        expect: "terrain",
+        habitat: "target-vindholet",
+        destination: "target-bubenka-1695",
+        dwellMin: 15,
+      },
       say: "Elegí un destino detrás de una loma o del borde de un cráter, y mirá cómo la ruta lo esquiva.",
       lockZoom: false,
       goal: "Elegí un destino al que no se pueda ir en línea recta.",
@@ -380,6 +411,7 @@ const pendiente: Lesson = {
 
 const reloj: Lesson = {
   id: "reloj",
+  requires: ["shadows"],
   icon: "🌗",
   title: "El mapa cambia con la hora",
   tagline: "La misma ruta puede ser segura a la mañana y peligrosa a la tarde.",
@@ -406,6 +438,7 @@ const reloj: Lesson = {
     {
       kind: "task",
       title: "Hacé que la hora cambie el veredicto",
+      timeSlider: true,
       say: "Dejá los mismos puntos y cambiá solo la hora de salida, hasta que cambie el veredicto.",
       lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.POINTS, EDU_TARGET.VERDICT],
       goal: "Con los mismos puntos, encontrá dos horas de salida con veredictos distintos.",
@@ -518,6 +551,14 @@ const consumibles: Lesson = {
     {
       kind: "task",
       title: "Gastá la mitad",
+      preset: {
+        site: "jezero",
+        label: "Visita al aeródromo: de pile bay a Airfield S (después subí la permanencia)",
+        expect: "terrain",
+        habitat: "target-pile-bay",
+        destination: "heli-airfield-s",
+        dwellMin: 15,
+      },
       say: "Quedate un buen rato en una parada y mirá cómo baja tu reserva.",
       lockZoom: false, ui: [EDU_TARGET.SEARCH, EDU_TARGET.VERDICT],
       goal: "Armá una ruta donde al O₂ o a la batería les quede menos de la mitad del margen.",
@@ -602,6 +643,14 @@ const contacto: Lesson = {
     {
       kind: "task",
       title: "Escondete",
+      preset: {
+        site: "jezero",
+        label: "Detrás de una loma: de Hozho a pal",
+        expect: "contact",
+        habitat: "target-hozho",
+        destination: "target-pal",
+        dwellMin: 15,
+      },
       say: "Llevá el destino detrás de una loma o adentro de un cráter.",
       lockZoom: false, ui: [EDU_TARGET.POINTS, EDU_TARGET.VERDICT],
       goal: "Armá una ruta donde pases al menos un rato sin contacto con el hábitat.",
@@ -762,6 +811,7 @@ const robustez: Lesson = {
     {
       kind: "task",
       title: "Hacela robusta",
+      timeSlider: true,
       say: "Ajustá la ruta hasta que aguante todos los imprevistos que se pueden calcular.",
       lockZoom: false, ui: [EDU_TARGET.VERDICT],
       goal: "Conseguí una ruta que no sea NO-GO y que aguante todos los escenarios que se pueden evaluar.",
@@ -887,6 +937,7 @@ const incertezas: Lesson = {
 
 const mision: Lesson = {
   id: "mision",
+  requires: ["places"],
   keepsRoute: true,
   icon: "🚀",
   title: "Misión final",
@@ -947,6 +998,7 @@ const mision: Lesson = {
     {
       kind: "task",
       title: "GO y robusta",
+      timeSlider: true,
       say: "Dejala en GO y que aguante todos los imprevistos. Podés cambiar la hora, sumar paradas o acortarla.",
       lockZoom: false, ui: [EDU_TARGET.SUN, EDU_TARGET.PROFILE, EDU_TARGET.LAYERS],
       goal: "Dejala en GO y que aguante todos los escenarios evaluables, sin cambiar el destino.",
