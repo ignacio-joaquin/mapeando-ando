@@ -25,13 +25,13 @@ cd /opt/mapeando-ando
 | `--directions` | 16 | Azimuts para el sky-view |
 | `--svf-max` | 0.85 | Refugio si se ve como mucho esta fracción del cielo |
 | `--svf-strong` | 0.75 | Refugio fuerte: el mismo criterio con menos cielo |
-| `--max-slope` | 30 | Pendiente máxima (°) para estar parado y para caminar |
+| `--max-slope` | 25 | Pendiente máxima (°) para estar parado y para caminar |
 | `--min-area-m2` | 10 | Manchas de refugio más chicas no cuentan (a 2 m son 3 celdas) |
 | `--no-tiles` | | No genera los tiles PNG del mapa |
 
 Sale con 0 si anduvo, 1 si falló (si falla el cálculo no escribe `shelter.json`; si falla solo el teselado, lo anota en la capa) y 2 si faltan datos.
 
-Corrida en el server (2 vCPU, 7 GB), 2026-11-14, con los defaults (2 m y minutos a 10 m):
+Corrida en el server (2 vCPU, 7 GB), 2026-11-14, a 2 m y minutos a 10 m, **con el corte de pendiente anterior (30°)**. Con 25° los porcentajes y los minutos cambian un poco: hay que volver a correrlo.
 
 | Sitio | Grilla fina | Tiempo | RAM pico | Refugio / fuerte | Al refugio (mediana / p90) | Al fuerte (mediana / p90) |
 |---|---|---|---|---|---|---|
@@ -82,8 +82,8 @@ Los minutos llevan **MODELED** y no DERIVED: dependen de un modelo de caminata c
 1. **Grillas.** El DTM HiRISE de 1 m promediado 2 × 2, en el plano tangente del centro (la misma `WorkGrid` que `illumination.py`), en disco y por franjas: Gale a 2 m son 474 millones de celdas y no entran en memoria. Los minutos van en una grilla de 10 m armada promediando la de 2 m: el costo acumulado necesita toda la grilla junta.
 2. **Sky-view factor** (Zakšek et al. 2011). Desde cada celda se recorren 16 azimuts hasta 500 m, en distancias que crecen en progresión geométrica. En cada azimut se toma el ángulo de horizonte γ más alto (con piso en 0°) y `SVF = 1 − Σ sin γ / 16`. Plano abierto da 1; el pie de una pared vertical da ~0,5.
 3. **Pendiente.** Horn 3 × 3 sobre la misma grilla, con el tamaño de píxel real sobre la esfera (`precompute.slope_strip`).
-4. **Refugio.** Dos niveles: refugio `SVF ≤ 0,85` y refugio fuerte `SVF ≤ 0,75`, los dos con `pendiente ≤ 30°` (el límite de "no transitable" de la leyenda de pendiente), en manchas de al menos 10 m² (vecindad de 8). Por franjas, mirando `min_px` filas de más a cada lado: da lo mismo que de una vez.
-5. **Minutos.** En la grilla de 10 m, una celda es refugio si alguna de sus celdas de 2 m lo es. Costo acumulado desde todos los refugios a la vez (scikit-image `MCP_Geometric`, 8 vecinos, píxel anisótropo). Cada celda cuesta los segundos por metro de la función de Tobler (1993), `6·e^(−3,5·|s + 0,05|)` km/h, escalada para dar **0,8 m/s en plano** (el mismo default que `/api/route/consumables`). Como la pendiente de la celda es la máxima y no se sabe si se sube o se baja, se usa el promedio de subir y bajar. La distancia es sobre el terreno (÷ cos θ). Más de 30° no se pisa.
+4. **Refugio.** Dos niveles: refugio `SVF ≤ 0,85` y refugio fuerte `SVF ≤ 0,75`, los dos con `pendiente ≤ 25°` (el corte único de "no transitable": A\*, leyenda y tiles de pendiente), en manchas de al menos 10 m² (vecindad de 8). Por franjas, mirando `min_px` filas de más a cada lado: da lo mismo que de una vez.
+5. **Minutos.** En la grilla de 10 m, una celda es refugio si alguna de sus celdas de 2 m lo es. Costo acumulado desde todos los refugios a la vez (scikit-image `MCP_Geometric`, 8 vecinos, píxel anisótropo). Cada celda cuesta los segundos por metro de la función de Tobler (1993), `6·e^(−3,5·|s + 0,05|)` km/h, escalada para dar **0,8 m/s en plano** (el mismo default que `/api/route/consumables`). Como la pendiente de la celda es la máxima y no se sabe si se sube o se baja, se usa el promedio de subir y bajar. La distancia es sobre el terreno (÷ cos θ). Más de 25° no se pisa.
 
 ## Límites
 

@@ -200,7 +200,7 @@ export const LAYERS: readonly LayerSpec[] = [
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y la capa de refugios",
       assumptions: [
         "Caminata de Tobler (1993) escalada a 0,8 m/s en plano",
-        "Más de 30° no se pisa",
+        "Más de 25° no se pisa (el corte único del mapa)",
         "Provisorio hasta que exista el costo del planificador",
       ],
     },
@@ -230,7 +230,7 @@ export const LAYERS: readonly LayerSpec[] = [
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y la capa de refugios",
       assumptions: [
         "Caminata de Tobler (1993) escalada a 0,8 m/s en plano",
-        "Más de 30° no se pisa",
+        "Más de 25° no se pisa (el corte único del mapa)",
         "Refugio fuerte = cielo visible ≤ 75 %",
         "Provisorio hasta que exista el costo del planificador",
       ],
@@ -291,7 +291,7 @@ export const LAYERS: readonly LayerSpec[] = [
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
       assumptions: [
         "Refugio = cielo visible ≤ 85 %; fuerte = ≤ 75 %",
-        "Pendiente ≤ 30° y al menos ~10 m² (dos o tres personas)",
+        "Pendiente ≤ 25° y al menos ~10 m² (dos o tres personas)",
         "Reparo geométrico, no una dosis calculada",
       ],
     },
