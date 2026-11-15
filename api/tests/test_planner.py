@@ -58,23 +58,24 @@ class TestSinDatos:
         assert "terreno no se evaluó" in body["verdict"]["summary"]
         assert "no se evaluó la luz" in body["verdict"]["summary"]
         assert body["data_quality"] == {
+            "terrain_status": "missing",
             "terrain_evaluated": False,
             "terrain_source": "missing",
+            "light_status": "missing",
             "light_evaluated": False,
             "light_source": "missing",
+            "contact_evaluated": False,
         }
-        assert body["path_model"] == {
-            "algorithm": "A*",
-            "cost_function": "Δt · (1 + w_slope·r_slope + w_shadow·r_shadow + w_contact·r_contact)",
-            "variables": {
-                "step_duration_s": "distancia real / velocidad",
-                "slope_term": "pendiente media de la celda / máximo permitido",
-                "shadow_term": "1 en sombra, 0 en sol o sin dato",
-                "contact_term": "1 sin línea de vista, 0 con línea de vista",
-                "weights": {"slope": 2.0, "shadow": 1.0, "contact": 1.0},
-            },
-        }
+        assert "path_model" not in body
         assert "profile" not in body
+
+    def test_sin_dtm_contacto_no_se_evalua(self, client, site):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["data_quality"]["contact_evaluated"] is False
+        assert body["data_quality"]["light_status"] == "complete"
+        assert "no se evaluó el contacto con el hábitat" in body["verdict"]["summary"]
 
     def test_fecha_invalida_responde_422(self, client, site):
         body = request(band_time(13)) | {"depart_utc": "mañana a la tarde"}
@@ -130,11 +131,26 @@ class TestTerreno:
 
     def test_punto_fuera_del_dtm_degrada_a_linea_recta(self, client, site):
         write_terrain(site, flat())
+        mid = latlon(ROW, 120)
         far = latlon(ROW, N + 50)
-        body = client.post("/api/route", json=request(band_time(13), [A, far])).json()
-        leg = body["legs"][0]
-        assert leg["class"] == "unknown"
-        assert any("fuera del DTM" in a for a in leg["distance"]["assumptions"])
+        body = client.post("/api/route", json=request(band_time(13), [A, mid, far])).json()
+        assert len(body["legs"]) == 2
+        assert body["legs"][0]["class"] == "ok"
+        assert body["legs"][1]["class"] == "unknown"
+        assert any("fuera del DTM" in a for a in body["legs"][1]["distance"]["assumptions"])
+        assert body["data_quality"]["terrain_status"] == "partial"
+        assert body["data_quality"]["terrain_evaluated"] is False
+        assert body["data_quality"]["terrain_source"] == "processed"
+
+    def test_terreno_procesado_y_luz_exacta(self, client, site):
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["data_quality"]["terrain_status"] == "complete"
+        assert body["data_quality"]["terrain_source"] == "processed"
+        assert body["data_quality"]["light_status"] == "complete"
+        assert body["data_quality"]["light_source"] == "exact"
+        assert body["data_quality"]["contact_evaluated"] is True
 
 
 class TestCuatroD:
@@ -160,9 +176,20 @@ class TestCuatroD:
     def test_sombra_sin_dato_no_se_cuenta_como_sombra(self, client, site):
         write_terrain(site, flat())
         write_shadow_stack(site, {13: np.full((N, N), 255, dtype=np.uint8)})
-        leg = client.post("/api/route", json=request(band_time(13))).json()["legs"][0]
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        leg = body["legs"][0]
         assert set(path_rows(leg)) == {ROW}
         assert leg["shadow_fraction"]["value"] is None
+        assert body["data_quality"]["light_status"] == "complete"
+        assert body["data_quality"]["light_source"] == "exact"
+
+    def test_luz_reutilizada_por_estacion(self, client, site):
+        write_terrain(site, flat())
+        write_shadow_stack(site, tag="20261116T0000Z", start=band_time(13) + 24 * 3600,
+                           ls_deg=22.2, center_lon=77.45)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["data_quality"]["light_status"] == "complete"
+        assert body["data_quality"]["light_source"] == "reused"
 
     def test_salir_antes_del_amanecer_es_no_go(self, client, site):
         write_terrain(site, flat())

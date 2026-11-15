@@ -206,6 +206,32 @@ export const LAYERS: readonly LayerSpec[] = [
     defaultVisible: false,
   },
   {
+    id: "survival-contact",
+    label: "Sin línea de vista",
+    group: "supervivencia",
+    unit: "vista",
+    source: {
+      provenance: "DERIVED",
+      mission: "MRO",
+      instrument: "HiRISE DTM",
+      resolution: "1 m/px",
+      source: "Línea de vista desde la antena del hábitat sobre el DTM (api/contact.py)",
+      assumptions: [
+        "Radio en línea de vista directa, sin repetidores ni difracción",
+        "Se descuenta la curvatura de Marte y la altura de la antena del hábitat",
+        "El mapa muestra las zonas que quedan sin contacto a la hora de salida y durante la ruta",
+      ],
+    },
+    legend: [
+      { color: "#1b2d3d", label: "sin línea de vista" },
+      { color: "#d8ebff", label: "con línea de vista" },
+    ],
+    tiles: "/tiles/{site}/contact/{z}/{x}/{y}.png",
+    kind: "raster",
+    categorical: true,
+    defaultVisible: true,
+  },
+  {
     id: "survival-dose",
     label: "Dosis (capa secundaria)",
     group: "supervivencia",

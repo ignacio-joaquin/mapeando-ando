@@ -87,7 +87,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 
 ### Nombres y contratos compartidos
 
-`files[].key` en `sites/*.json`, los ids de capa del mapa (`survival-slope`, `landmarks-points`, `route-line`) y las rutas `/api/*` son **contratos**: los consume más de una pieza. Renombrarlos es breaking change y se hace en un PR que toca todas las puntas.
+`files[].key` en `sites/*.json`, los ids de capa del mapa (`survival-slope`, `survival-contact`, `landmarks-points`, `route-line`) y las rutas `/api/*` son **contratos**: los consume más de una pieza. Renombrarlos es breaking change y se hace en un PR que toca todas las puntas.
 
 **Valor con procedencia.** Todo número que la API le manda al frontend (point query, `/api/route`, veredicto, fichas) viaja en este formato, y la UI lo dibuja con `<Measure>` y su badge:
 

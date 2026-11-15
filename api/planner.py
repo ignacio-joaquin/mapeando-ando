@@ -866,20 +866,22 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         "robustness": _robustness_out(assessment),
     }
     light_source = "missing"
-    if stack is not None:
+    if stack is not None and slope_path is not None:
         light_source = "reused" if stack.reuse is not None else "exact"
     terrain_source = "processed" if slope_path is not None else "missing"
-    path_model = {
-        "algorithm": "A*",
-        "cost_function": "Δt · (1 + w_slope·r_slope + w_shadow·r_shadow + w_contact·r_contact)",
-        "variables": {
-            "step_duration_s": "distancia real / velocidad",
-            "slope_term": "pendiente media de la celda / máximo permitido",
-            "shadow_term": "1 en sombra, 0 en sol o sin dato",
-            "contact_term": "1 sin línea de vista, 0 con línea de vista",
-            "weights": {"slope": float(weights.slope), "shadow": float(weights.shadow), "contact": float(weights.contact)},
-        },
-    }
+    terrain_planned = [plan.planned for plan in legs_plan]
+    if slope_path is None or not terrain_planned or not any(terrain_planned):
+        terrain_status = "missing"
+    elif all(terrain_planned):
+        terrain_status = "complete"
+    else:
+        terrain_status = "partial"
+    if slope_path is None or stack is None or not terrain_planned or not any(terrain_planned):
+        light_status = "missing"
+    elif all(terrain_planned):
+        light_status = "complete"
+    else:
+        light_status = "partial"
     out = {
         "site": site_id,
         "depart_utc": depart_utc,
@@ -888,12 +890,14 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         "verdict": verdict,
         "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None),
         "data_quality": {
-            "terrain_evaluated": slope_path is not None,
+            "terrain_status": terrain_status,
+            "terrain_evaluated": terrain_status == "complete",
             "terrain_source": terrain_source,
-            "light_evaluated": stack is not None,
+            "light_status": light_status,
+            "light_evaluated": light_status == "complete",
             "light_source": light_source,
+            "contact_evaluated": contact is not None,
         },
-        "path_model": path_model,
     }
     if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
         out["_profile_inputs"] = ([plan.steps for plan in legs_plan], [legs_plan[0].elev[0]]

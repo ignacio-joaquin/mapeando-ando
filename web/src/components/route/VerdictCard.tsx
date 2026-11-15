@@ -35,8 +35,13 @@ export function VerdictCard({ verdict, dataQuality }: Props) {
   const rob = verdict.robustness;
   const skipped = rob ? rob.scenarios.length - rob.evaluated : 0;
   const dataNotes: string[] = [];
-  if (dataQuality && !dataQuality.light_evaluated) dataNotes.push("luz sin evaluar");
-  if (dataQuality && !dataQuality.terrain_evaluated) dataNotes.push("terreno sin evaluar");
+  if (dataQuality) {
+    const lightStatus = dataQuality.light_status ?? (dataQuality.light_evaluated ? "complete" : "missing");
+    if (lightStatus !== "complete") dataNotes.push("luz sin evaluar");
+    if (!dataQuality.contact_evaluated) dataNotes.push("contacto sin evaluar");
+    const terrainStatus = dataQuality.terrain_status ?? (dataQuality.terrain_evaluated ? "complete" : "missing");
+    if (terrainStatus !== "complete") dataNotes.push("terreno sin evaluar");
+  }
   return (
     <section aria-live="polite" className={`rounded border-2 p-3 ${look.box}`}>
       <div className="flex items-baseline gap-3">
