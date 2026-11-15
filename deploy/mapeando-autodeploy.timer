@@ -1,10 +1,10 @@
 [Unit]
-Description=Revisa main cada minuto y despliega si hay cambios
+Description=Ejecuta el auto-deploy cada minuto
 
 [Timer]
-OnBootSec=60
-OnUnitActiveSec=60
-AccuracySec=5
+OnCalendar=*:0/1
+Persistent=true
+Unit=mapeando-autodeploy.service
 
 [Install]
 WantedBy=timers.target

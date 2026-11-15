@@ -107,7 +107,14 @@ El mapa de cobertura (`/data/output/<sitio>/coverage.geojson`, que escribe `prec
 | `pipeline/fetch_pds.py` | Descarga dirigida desde PDS Geosciences: PIXL, ChemCam, RIMFAX y rover places. Respeta el `Crawl-delay` de 10 s del servidor, así que es lenta. |
 | `pipeline/fetch_extras.py` | Cráteres de Robbins, DONKI, Langlais 2019 y SWIM. |
 
-En el server se corren como unidades de systemd en segundo plano, por ejemplo:
+En el server se corren como unidades de systemd en segundo plano, y la generación de tiles del mapa se dispara con `mapeando-download.service`, que hace en una sola pasada: descarga, precompute, illumination y teselado de sombras por sol. Por ejemplo:
+
+```
+sudo systemctl start mapeando-download
+journalctl -u mapeando-download -f
+```
+
+También se puede lanzar a mano con `systemd-run`:
 
 ```
 sudo systemd-run --unit=mapeando-x --property=EnvironmentFile=/etc/mapeando.env \

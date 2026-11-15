@@ -1,6 +1,8 @@
 """POST /api/route: planificador 4D (api/planner.py) con rasters sintéticos."""
 import heapq
+import json
 import math
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -76,6 +78,26 @@ class TestSinDatos:
         assert body["data_quality"]["contact_evaluated"] is False
         assert body["data_quality"]["light_status"] == "complete"
         assert "no se evaluó el contacto con el hábitat" in body["verdict"]["summary"]
+
+    def test_si_falta_luz_se_generan_las_capas_antes_de_planear(self, client, site, monkeypatch):
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if any(str(arg).endswith("pipeline/illumination.py") for arg in cmd):
+                write_shadow_stack(site)
+            elif any(str(arg).endswith("pipeline/shadow_tiles.py") for arg in cmd):
+                base = site / "output" / "jezero" / "illumination"
+                catalog = {"generated_at": "2026-11-15T00:00:00Z", "sols": [{"tag": "20261115T0000Z"}]}
+                (base / "catalog.json").write_text(json.dumps(catalog))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("api.illumination.subprocess.run", fake_run)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["data_quality"]["light_status"] == "complete"
+        assert any(str(cmd[1]).endswith("pipeline/illumination.py") for cmd in calls)
+        assert any(str(cmd[1]).endswith("pipeline/shadow_tiles.py") for cmd in calls)
 
     def test_fecha_invalida_responde_422(self, client, site):
         body = request(band_time(13)) | {"depart_utc": "mañana a la tarde"}
