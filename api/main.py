@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .consumables import Step, SuitParams, route_consumption
 from .illumination import IlluminationNotReady, parse_utc, read_window, stack_for_tag
 from .planner import _terrain_inputs as terrain_inputs
-from .planner import plan_route
+from .planner import CostWeights, plan_route
+from .safety import Limits
 from .terrain import MARS_RADIUS_M, TerrainError, densify, haversine_m, sample_dtm
 from .viewshed import HabitatOutsideDtm
 from .viewshed import viewshed as compute_viewshed
@@ -419,11 +420,94 @@ class PlannerWaypoint(BaseModel):
     dwell_min: float = Field(0, ge=0, le=600)
 
 
+# ---------------------------------------------------- ajustes del planificador
+# Lo que el usuario puede tocar del algoritmo de /api/route: límites duros del
+# veredicto, pesos del costo del A* y supuestos del traje. Los defaults salen de
+# las dataclasses (safety.Limits, planner.CostWeights, SuitParams): acá solo van
+# los rangos permitidos, la unidad y el texto para la UI. GET /api/route/params
+# los publica para que web/ arme el formulario sin copiar ningún número.
+
+_LIMITS = Limits()
+_WEIGHTS = CostWeights()
+
+
+def _knob(default: float, title: str, unit: str | None, step: float, help: str, **bounds):
+    return Field(default, title=title, description=help,
+                 json_schema_extra={"unit": unit, "step": step}, **bounds)
+
+
+class LimitsSettings(BaseModel):
+    """Límites duros: si uno se rompe, la ruta es NO-GO."""
+    model_config = ConfigDict(extra="forbid", title="Límites del veredicto")
+    max_slope_deg: float = _knob(_LIMITS.max_slope_deg, "Pendiente máxima", "°", 1,
+                                 "Más empinado que esto, el tramo queda bloqueado.", gt=0, le=45)
+    reserve_fraction: float = _knob(_LIMITS.reserve_fraction, "Reserva al volver", "fracción", 0.05,
+                                    "O2 y batería que tienen que sobrar al terminar (0,2 = 20 %).", ge=0, le=0.9)
+    sunset_margin_min: float = _knob(_LIMITS.sunset_margin_min, "Margen antes del atardecer", "min", 5,
+                                     "Volver al menos esto antes de que se ponga el Sol.", ge=0, le=240)
+    max_no_contact_min: float = _knob(_LIMITS.max_no_contact_min, "Máximo sin contacto", "min", 1,
+                                      "Minutos seguidos sin línea de vista al hábitat.", ge=0, le=600)
+    dose_budget_msv: float = _knob(_LIMITS.dose_budget_msv, "Presupuesto de dosis", "mSv", 0.05,
+                                   "Dosis de radiación máxima por EVA.", gt=0, le=50)
+
+
+class WeightsSettings(BaseModel):
+    """Pesos del costo del A*: cuánto evita la ruta cada cosa. 0 = no le importa."""
+    model_config = ConfigDict(extra="forbid", title="Pesos de la ruta")
+    slope: float = _knob(_WEIGHTS.slope, "Evitar pendiente", None, 0.5,
+                         "Cuánto prefiere la ruta el terreno plano.", ge=0, le=20)
+    shadow: float = _knob(_WEIGHTS.shadow, "Evitar sombra", None, 0.5,
+                          "Cuánto evita la sombra (frío) a la hora de paso.", ge=0, le=20)
+    contact: float = _knob(_WEIGHTS.contact, "Mantener contacto", None, 0.5,
+                           "Cuánto prefiere quedar a la vista del hábitat.", ge=0, le=20)
+
+
+class SuitSettings(BaseModel):
+    """Supuestos del traje y de la carga (EMU de la ISS por defecto)."""
+    model_config = ConfigDict(extra="forbid", title="Traje y carga")
+    astronaut_kg: float = _knob(_DEFAULTS.astronaut_kg, "Astronauta", "kg", 1, "Masa sin traje.", gt=0, le=300)
+    suit_kg: float = _knob(_DEFAULTS.suit_kg, "Traje", "kg", 1, "EMU completo con mochila (PLSS).", ge=0, le=500)
+    cargo_kg: float = _knob(_DEFAULTS.cargo_kg, "Carga", "kg", 1, "Herramientas y muestras.", ge=0, le=500)
+    terrain_factor: float = _knob(_DEFAULTS.terrain_factor, "Factor de terreno", None, 0.1,
+                                  "η de Pandolf: 1 = pavimento, 1,1 = regolito compacto, más = suelto.",
+                                  ge=1.0, le=3.0)
+    o2_capacity_kg: float = _knob(_DEFAULTS.o2_capacity_kg, "Capacidad de O2", "kg", 0.01,
+                                  "O2 primario de la mochila.", gt=0, le=5)
+    o2_leak_kg_per_h: float = _knob(_DEFAULTS.o2_leak_kg_per_h, "Fuga de O2", "kg/h", 0.001,
+                                    "Pérdida del traje.", ge=0, le=1)
+    battery_capacity_wh: float = _knob(_DEFAULTS.battery_capacity_wh, "Batería", "Wh", 10,
+                                       "Energía nominal.", gt=0, le=5000)
+    battery_efficiency: float = _knob(_DEFAULTS.battery_efficiency, "Eficiencia de batería", "fracción", 0.05,
+                                      "Parte de la energía nominal que llega a la carga.", gt=0, le=1)
+    base_power_w: float = _knob(_DEFAULTS.base_power_w, "Consumo base", "W", 5,
+                                "Ventilador, bomba, radio y electrónica.", ge=0, le=500)
+
+
+class PlannerParams(BaseModel):
+    """Ajustes opcionales de POST /api/route. Lo que no se manda queda en su default."""
+    model_config = ConfigDict(extra="forbid")
+    limits: LimitsSettings = Field(default_factory=LimitsSettings)
+    weights: WeightsSettings = Field(default_factory=WeightsSettings)
+    suit: SuitSettings = Field(default_factory=SuitSettings)
+
+    def changed(self) -> list[str]:
+        """Qué se apartó del default, en palabras: va en el resumen del veredicto."""
+        out = []
+        for group in (self.limits, self.weights, self.suit):
+            for name, f in type(group).model_fields.items():
+                v = getattr(group, name)
+                if v != f.default:
+                    unit = (f.json_schema_extra or {}).get("unit")
+                    out.append(f"{f.title} {v:g}{' ' + unit if unit and unit != 'fracción' else ''}")
+        return out
+
+
 class PlannerRequest(BaseModel):
     """Contrato de docs/context.md §4 (RouteRequest en web/src/api/schemas.ts)."""
     site: str = Field(min_length=1, max_length=64)
     depart_utc: str = Field(description="ISO 8601 en UTC, por ejemplo 2026-11-15T12:00:00.000Z")
     waypoints: list[PlannerWaypoint] = Field(min_length=2, max_length=20)
+    params: Optional[PlannerParams] = Field(None, description="Ajustes del algoritmo; sin esto, los defaults")
 
     @model_validator(mode="before")
     @classmethod
@@ -431,6 +515,33 @@ class PlannerRequest(BaseModel):
         if isinstance(data, dict) and "points" in data and "waypoints" not in data:
             raise ValueError("Ese es el contrato de consumibles: usá POST /api/route/consumables")
         return data
+
+
+def _settings_group(model: type[BaseModel], gid: str) -> dict:
+    fields = []
+    for name, f in model.model_fields.items():
+        bounds = {}
+        for m in f.metadata:
+            for k in ("ge", "gt", "le", "lt"):
+                if getattr(m, k, None) is not None:
+                    bounds[k] = getattr(m, k)
+        extra = f.json_schema_extra or {}
+        fields.append({"id": name, "label": f.title, "help": f.description, "unit": extra.get("unit"),
+                       "step": extra.get("step"), "default": f.default,
+                       "min": bounds.get("ge", bounds.get("gt")), "max": bounds.get("le", bounds.get("lt"))})
+    return {"id": gid, "label": model.model_config.get("title"), "fields": fields}
+
+
+@app.get("/api/route/params")
+def route_params():
+    """Qué se puede ajustar del planificador, con default, rango y unidad.
+
+    No lee datos: responde aunque la descarga no haya terminado. Los valores
+    son del equipo y del EMU de la ISS; ver docs/seguridad.md.
+    """
+    return {"groups": [_settings_group(LimitsSettings, "limits"),
+                       _settings_group(WeightsSettings, "weights"),
+                       _settings_group(SuitSettings, "suit")]}
 
 
 @app.post("/api/route")
@@ -450,7 +561,16 @@ def route(req: PlannerRequest):
     except ValueError:
         raise HTTPException(422, "depart_utc tiene que ser una fecha ISO 8601, por ejemplo 2026-11-15T12:00:00Z")
     try:
-        out = plan_route(req.site, req.depart_utc, [w.model_dump() for w in req.waypoints], DATA_DIR, REPO_DIR)
+        kw = {}
+        if req.params is not None:
+            kw = {
+                "params": SuitParams(**req.params.suit.model_dump()),
+                "weights": CostWeights(**req.params.weights.model_dump()),
+                "limits": Limits(**req.params.limits.model_dump()),
+                "custom": req.params.changed(),
+            }
+        out = plan_route(req.site, req.depart_utc, [w.model_dump() for w in req.waypoints], DATA_DIR, REPO_DIR,
+                         **kw)
     except OSError as e:
         raise HTTPException(503, f"No se pudo leer un raster del sitio: {e}")
     inputs = out.pop("_profile_inputs", None)
