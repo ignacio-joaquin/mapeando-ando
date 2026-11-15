@@ -1,6 +1,8 @@
 """POST /api/route: planificador 4D (api/planner.py) con rasters sintéticos."""
 import heapq
 import math
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -161,6 +163,37 @@ class TestCuatroD:
 
 
 class TestEstaciones:
+    def test_habitat_tres_estaciones_y_vuelta_al_habitat(self, client, site):
+        """El "Listo cuando" de MAP-27: la travesía se calcula completa con permanencias."""
+        # Con DTM llano: sin DTM el contacto no se evalúa y el veredicto es CAUTION, no GO.
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        write_shadow_stack(site)
+        stations = [latlon(ROW, 80), latlon(ROW + 30, 120), latlon(ROW, 160)]
+        dwells = [20, 30, 40]
+        req = request(band_time(10), [A, *stations, A])
+        for wp, (d, task) in zip(req["waypoints"][1:4], zip(dwells, ["muestra", "foto", "perfil"])):
+            wp["dwell_min"], wp["task"] = d, task
+        res = client.post("/api/route", json=req)
+        assert res.status_code == 200
+        body = res.json()
+        stops = body["stops"]
+        assert len(body["legs"]) == 4 and len(stops) == 5
+        assert all(leg["class"] == "ok" for leg in body["legs"])
+        assert stops[0]["arrive_utc"] is None and stops[-1]["depart_utc"] is None
+        utc = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00"))  # noqa: E731
+        # La salida del tramo siguiente es llegada + permanencia, y el reloj nunca vuelve atrás.
+        for stop, d in zip(stops[1:4], dwells):
+            assert (utc(stop["depart_utc"]) - utc(stop["arrive_utc"])).total_seconds() == pytest.approx(d * 60, abs=1)
+        for prev, nxt in zip(stops[:-1], stops[1:]):
+            assert utc(nxt["arrive_utc"]) > utc(prev["depart_utc"])
+        # O2 y dosis por estación: el O2 baja y la dosis sube en cada parada.
+        o2 = [s["o2_remaining"]["value"] for s in stops]
+        assert all(a > b for a, b in zip(o2, o2[1:]))
+        assert [s["task"] for s in stops[1:4]] == ["muestra", "foto", "perfil"]
+        assert all(s["margin"]["unit"] == "min" for s in stops)
+        assert body["verdict"]["status"] == "GO"
+
+
     def test_la_espera_consume_y_corre_el_reloj(self, client, site):
         write_terrain(site, flat())
         mid = latlon(ROW, 100)
@@ -173,11 +206,56 @@ class TestEstaciones:
         assert con["stops"][2]["o2_remaining"]["value"] < sin["stops"][2]["o2_remaining"]["value"]
 
 
-def _dijkstra_cost(grid: Grid, start, goal, speed=planner.SPEED_M_S) -> float:
+class TestVeredictoPorReserva:
+    """Si un recurso no alcanza, el veredicto culpa al que se agota primero."""
+
+    def plan(self, site, **suit):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        wps = [{"lat": la, "lon": lo, "task": None, "dwell_min": 0} for la, lo in (A, B)]
+        return planner.plan_route("jezero", iso(band_time(13)), wps, site,
+                                  Path(__file__).resolve().parents[2], params=planner.SuitParams(**suit))
+
+    def test_se_agota_el_o2(self, site):
+        v = self.plan(site, o2_capacity_kg=1e-6, battery_capacity_wh=1e9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "o2")
+        assert "se agota antes de terminar" in v["summary"]
+
+    def test_se_agotan_los_dos_y_la_bateria_primero(self, site):
+        # Las dos capacidades no alcanzan; la batería dura mucho menos al ritmo de la travesía.
+        v = self.plan(site, o2_capacity_kg=1e-6, battery_capacity_wh=1e-9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "battery")
+        assert "se agota antes de terminar" in v["summary"]
+
+    def test_alcanza_pero_sin_reserva(self, site):
+        # Batería para la travesía + un 10 %: llega, pero se come la reserva del 20 %.
+        full = planner.SuitParams().battery_capacity_wh
+        left_pct = self.plan(site)["stops"][-1]["battery_remaining"]["value"]
+        used = full * (1 - left_pct / 100)
+        v = self.plan(site, o2_capacity_kg=1e9, battery_capacity_wh=used / 0.9)["verdict"]
+        assert (v["status"], v["limiting_factor"]) == ("NO_GO", "battery")
+        assert "reserva mínima" in v["summary"]
+        assert "se agota" not in v["summary"]
+
+    def test_el_veredicto_trae_los_campos_del_contrato(self, site):
+        v = self.plan(site)["verdict"]
+        assert {"status", "limiting_factor", "summary", "margin"} <= set(v)
+        assert {"score", "limits", "robustness"} <= set(v)
+        assert {r["id"] for r in v["limits"]} == {"terrain", "o2", "battery", "daylight", "contact",
+                                                  "dose", "calories"}
+
+
+def _costs(grid: Grid, weights: planner.CostWeights, max_slope: float):
+    r_slope, r_contact, passable = planner.cell_terms(grid, max_slope)
+    fac = 1.0 + weights.slope * r_slope + weights.contact * r_contact
+    stretch = 1 / np.cos(np.radians(np.nan_to_num(grid.slope)))
+    return fac, stretch, passable
+
+
+def _dijkstra_cost(grid: Grid, start, goal, weights, max_slope, speed=planner.SPEED_M_S) -> float:
     """Referencia sin heurística, con el mismo costo que astar() sin sombra."""
     rows, cols = grid.cls.shape
-    fac = np.array(planner.SLOPE_FACTOR + (planner.UNKNOWN_SLOPE_FACTOR,))[grid.cls]
-    stretch = 1 / np.cos(np.radians(np.nan_to_num(grid.slope)))
+    fac, stretch, passable = _costs(grid, weights, max_slope)
     dd = math.hypot(grid.dx_m, grid.dy_m)
     moves = [(0, 1, grid.dx_m), (0, -1, grid.dx_m), (1, 0, grid.dy_m), (-1, 0, grid.dy_m),
              (1, 1, dd), (1, -1, dd), (-1, 1, dd), (-1, -1, dd)]
@@ -193,26 +271,21 @@ def _dijkstra_cost(grid: Grid, start, goal, speed=planner.SPEED_M_S) -> float:
             v = (r + dr, c + dc)
             if not (0 <= v[0] < rows and 0 <= v[1] < cols):
                 continue
-            f = fac[v]
-            if f == math.inf:
-                if v != goal:
-                    continue
-                f = planner.SLOPE_FACTOR[2]
-            ng = g + L * stretch[v] / speed * f
+            if not passable[v] and v != goal:
+                continue
+            ng = g + L * stretch[v] / speed * fac[v]
             if ng < best.get(v, math.inf):
                 best[v] = ng
                 heapq.heappush(heap, (ng, v))
     return math.inf
 
 
-def _path_cost(grid: Grid, path, speed=planner.SPEED_M_S) -> float:
-    fac = np.array(planner.SLOPE_FACTOR + (planner.UNKNOWN_SLOPE_FACTOR,))[grid.cls]
-    stretch = 1 / np.cos(np.radians(np.nan_to_num(grid.slope)))
+def _path_cost(grid: Grid, path, weights, max_slope, speed=planner.SPEED_M_S) -> float:
+    fac, stretch, _ = _costs(grid, weights, max_slope)
     total = 0.0
     for (r0, c0), (r1, c1) in zip(path, path[1:]):
         L = math.hypot((r1 - r0) * grid.dy_m, (c1 - c0) * grid.dx_m)
-        f = fac[r1, c1] if fac[r1, c1] != math.inf else planner.SLOPE_FACTOR[2]
-        total += L * stretch[r1, c1] / speed * f
+        total += L * stretch[r1, c1] / speed * fac[r1, c1]
     return total
 
 
@@ -224,11 +297,181 @@ def test_astar_da_el_costo_optimo(seed):
     cls = np.full(slope.shape, -1, dtype=np.int8)
     known = np.isfinite(slope)
     cls[known] = np.searchsorted(planner.SLOPE_CUTS, slope[known], side="right")
-    grid = Grid(slope, cls, None, None, 4.7, 5.0)
+    contact = rng.choice(np.array([1, 0, -1], dtype=np.int8), size=(40, 40), p=[0.6, 0.3, 0.1])
+    grid = Grid(slope, cls, None, None, 4.7, 5.0, contact)
+    weights, max_slope = planner.CostWeights(slope=2.0, contact=1.5), 25.0
     start, goal = (0, 0), (39, 39)
-    found = astar(grid, start, goal, 0.0)
-    ref = _dijkstra_cost(grid, start, goal)
+    found = astar(grid, start, goal, 0.0, weights=weights, max_slope=max_slope)
+    ref = _dijkstra_cost(grid, start, goal, weights, max_slope)
     if ref == math.inf:
         assert found is None
     else:
-        assert _path_cost(grid, found[0]) == pytest.approx(ref)
+        assert _path_cost(grid, found[0], weights, max_slope) == pytest.approx(ref)
+
+
+def loma(height=8.0):
+    """DTM con una loma suave de norte a sur en la columna 100: tapa la vista al hábitat."""
+    cols = np.arange(N)
+    return np.tile(np.clip(height - np.abs(cols - 100) * 0.4, 0, None), (N, 1)).astype(np.float32)
+
+
+class TestSeguridad:
+    """Límites duros, puntaje, robustez y costo (api/safety.py, docs/seguridad.md)."""
+
+    @pytest.fixture
+    def con_loma(self, site):
+        write_terrain(site, flat(), dtm=loma())
+        write_shadow_stack(site)
+        return site
+
+    def test_trae_limites_con_su_procedencia(self, client, con_loma):
+        v = client.post("/api/route", json=request(band_time(11))).json()["verdict"]
+        ids = [lim["id"] for lim in v["limits"]]
+        assert ids == ["terrain", "o2", "battery", "daylight", "contact", "dose", "calories"]
+        prov = {lim["id"]: lim["limit"] for lim in v["limits"]}
+        # ASSUMED solo si el número entero lo eligió el equipo.
+        assert all(prov[k]["provenance"] == "ASSUMED" for k in ("terrain", "contact", "dose", "calories"))
+        # O2, batería y luz salen de la capacidad del traje o del atardecer; la parte del equipo va declarada.
+        for k, team_part in (("o2", "Reserva del 20 %"), ("battery", "Reserva del 20 %"),
+                             ("daylight", "Margen de 30 min")):
+            assert prov[k]["provenance"] == "MODELED"
+            assert any(a.startswith(team_part) for a in prov[k]["assumptions"])
+        assert prov["daylight"]["mission"] == "MRO"
+        assert v["score"]["unit"] == "pts" and 0 <= v["score"]["value"] <= 100
+
+    def test_la_loma_corta_el_contacto_y_limita(self, client, con_loma):
+        v = client.post("/api/route", json=request(band_time(11))).json()["verdict"]
+        contact = next(lim for lim in v["limits"] if lim["id"] == "contact")
+        assert contact["used"]["value"] > 0
+        assert v["limiting_factor"] == "contact"
+        assert v["score"]["value"] == round(100 * contact["margin"])
+
+    def test_en_llano_hay_contacto_todo_el_camino(self, client, site):
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        write_shadow_stack(site)
+        v = client.post("/api/route", json=request(band_time(11))).json()["verdict"]
+        contact = next(lim for lim in v["limits"] if lim["id"] == "contact")
+        assert contact["used"]["value"] == 0
+
+    def test_cambiar_la_hora_de_salida_cambia_el_veredicto(self, client, con_loma):
+        """MAP-25 de punta a punta: atardecer plano en la banda 19 de la pila de prueba."""
+        def status(t):
+            return client.post("/api/route", json=request(t)).json()["verdict"]["status"]
+        sunset = band_time(19)
+        assert status(band_time(11)) == "GO"
+        assert status(sunset - 30 * 60 - 40 * 60) == "CAUTION"   # saliendo 30 min tarde ya no llega
+        assert status(sunset - 30 * 60 - 5 * 60) == "NO_GO"
+
+    def test_robustez_cuenta_solo_escenarios_evaluables(self, client, con_loma):
+        rob = client.post("/api/route", json=request(band_time(11))).json()["verdict"]["robustness"]
+        assert rob["evaluated"] == 3
+        st = {s["id"]: s["status"] for s in rob["scenarios"]}
+        assert st["dust_storm"] == st["no_shelter"] == "not_evaluated"
+
+    def test_desglose_del_costo_suma_el_total(self, client, con_loma):
+        cost = client.post("/api/route", json=request(band_time(11))).json()["cost"]
+        active = [f for f in cost["factors"] if f["active"]]
+        assert {f["id"] for f in active} == {"slope", "shadow", "contact"}
+        assert all(f["minutes"] is None and f["note"] for f in cost["factors"] if not f["active"])
+        assert cost["total_minutes"] == pytest.approx(cost["base_minutes"] + sum(f["minutes"] for f in active),
+                                                      abs=0.2)
+        assert next(f for f in active if f["id"] == "contact")["minutes"] > 0
+
+    def test_sin_dtm_el_contacto_no_se_evalua_y_es_caution(self, client, site):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        v = body["verdict"]
+        assert v["status"] == "CAUTION"
+        assert next(lim for lim in v["limits"] if lim["id"] == "contact")["status"] == "not_evaluated"
+        assert not next(f for f in body["cost"]["factors"] if f["id"] == "contact")["active"]
+
+    def test_pendiente_entre_el_limite_y_30_tampoco_se_pisa(self, client, site):
+        slope = flat()
+        slope[:, 100] = 27.0          # bajo el corte viejo de 30°, sobre el límite duro de 25°
+        write_terrain(site, slope)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        assert body["legs"][0]["class"] == "blocked"
+        assert body["verdict"]["status"] == "NO_GO"
+        assert body["verdict"]["limiting_factor"] == "terrain"
+
+
+class TestPendienteMaxima:
+    """El límite duro usa el máximo de cada celda de trabajo, no la media (review del PR #14)."""
+
+    @pytest.fixture
+    def celdas_gruesas(self, site, monkeypatch):
+        # Con celdas de 1 px no hay promedio que probar: se fuerza f > 1.
+        monkeypatch.setattr(planner, "MAX_CELLS_SIDE", 50)
+        return site
+
+    def test_franja_angosta_empinada_no_se_diluye(self, client, celdas_gruesas):
+        slope = flat()
+        slope[:, 100] = 40.0          # 1 px de ancho: promediada en la celda quedaría bajo 25°
+        write_terrain(celdas_gruesas, slope)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        assert body["legs"][0]["class"] == "blocked"
+        assert body["verdict"]["status"] == "NO_GO"
+        assert body["verdict"]["limiting_factor"] == "terrain"
+
+    def test_reporta_el_maximo_de_la_celda(self, client, celdas_gruesas):
+        slope = flat()
+        slope[:, 100] = 20.0          # se puede pisar, pero el número tiene que ser 20, no la media
+        write_terrain(celdas_gruesas, slope)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        leg = body["legs"][0]
+        assert leg["max_slope"]["value"] == pytest.approx(20.0)
+        terrain = next(lim for lim in body["verdict"]["limits"] if lim["id"] == "terrain")
+        assert terrain["used"]["value"] == pytest.approx(20.0)
+        assert terrain["margin"] == pytest.approx(1 - 20 / 25, abs=1e-3)
+
+    @staticmethod
+    def _grid(site, slope):
+        import rasterio
+        out = write_terrain(site, slope)
+        with rasterio.open(out / "slope.tif") as ds:
+            from .rasters import LAT0, LON0, R
+            xa, ya = R * math.radians(LON0) - 300, R * math.radians(LAT0)
+            return planner.build_grid(ds, (xa, ya), (xa + 600, ya), 600)
+
+    def test_build_grid_guarda_media_y_maximo(self, celdas_gruesas):
+        slope = flat()
+        slope[:, 100] = 40.0
+        grid = self._grid(celdas_gruesas, slope)
+        assert np.nanmax(grid.peak) == pytest.approx(40.0)
+        assert np.nanmax(grid.slope) < 25.0
+
+    def test_un_pixel_suelto_no_es_la_pendiente_de_la_celda(self, celdas_gruesas):
+        slope = flat()
+        slope[101, 101] = 40.0        # una roca: se esquiva dentro de la celda
+        grid = self._grid(celdas_gruesas, slope)
+        assert np.nanmax(grid.peak) == pytest.approx(2.0)
+        assert np.nanmax(grid.slope) > 2.0          # el costo sí la ve
+
+    def test_rocas_sueltas_no_bloquean_celdas_gruesas(self, client, celdas_gruesas):
+        """Review del PR #14: con el máximo, un píxel empinado en cada celda bloqueaba todo el tramo,
+        y el mismo terreno partido en tramos más cortos (celdas más finas) daba GO."""
+        slope = flat()
+        slope[1::4, 1::4] = 40.0      # un píxel de 40° en cada celda de 4 × 4
+        write_terrain(celdas_gruesas, slope)
+        body = client.post("/api/route", json=request(band_time(11))).json()
+        assert body["legs"][0]["class"] != "blocked"
+        terrain = next(lim for lim in body["verdict"]["limits"] if lim["id"] == "terrain")
+        assert terrain["status"] == "ok"
+
+
+def test_la_vista_cubre_la_ventana_del_astar(data_dir, monkeypatch):
+    """Review del PR #14: la ventana de visibilidad tiene que llegar al margen que usa el A*,
+    medido sobre el suelo (en Jezero un metro de la proyección mide 0,95 m hacia el este)."""
+    import rasterio
+
+    from api import contact as contact_mod
+    from .rasters import R
+    monkeypatch.setattr(contact_mod, "MARGIN_M", 10.0)   # el raster de prueba mide 1 km
+    out = write_terrain(data_dir, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+    mid = latlon(100, 100)
+    with rasterio.open(out / "dtm.tif") as ds:
+        field = contact_mod.ContactField.from_dtm(ds, mid, [mid], margin_m=300.0)
+    x_mid = R * math.radians(mid[1])
+    west_ground_m = (x_mid - field.transform.c) * math.cos(math.radians(mid[0]))
+    assert west_ground_m >= 300.0

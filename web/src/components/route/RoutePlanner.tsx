@@ -13,6 +13,7 @@ import { DestinationSearch } from "./DestinationSearch";
 import { PlaceCard } from "./PlaceCard";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
+import { SafetyBreakdown } from "./SafetyBreakdown";
 import { VerdictCard } from "./VerdictCard";
 import { StationPhoto } from "./StationPhoto";
 import {
@@ -197,6 +198,7 @@ export function RoutePlanner() {
         <>
           <VerdictCard verdict={route.verdict} />
           {result?.example ? <ExampleNotice /> : null}
+          <SafetyBreakdown verdict={route.verdict} cost={route.cost} />
           <div className="flex gap-2">
             <button
               type="button"

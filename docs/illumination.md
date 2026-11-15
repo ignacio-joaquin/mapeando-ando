@@ -41,6 +41,27 @@ Escribe una carpeta por sol en `/data/output/<sitio>/illumination/<medianoche lo
 
 El amanecer de un píxel es la primera muestra con sol y el atardecer, la última. El instante real cae dentro del paso `--rise-step-min`: hasta 5 min antes del valor de amanecer, o después del de atardecer. Si un píxel no recibe sol a la mañana, su amanecer es el primer sol de la tarde, y lo mismo al revés con el atardecer.
 
+## Tiles para el mapa · `pipeline/shadow_tiles.py`
+
+El mapa no abre un COG. Después de `illumination.py`, este script tesela cada hora con el Sol sobre el horizonte y escribe los índices que lee el deslizador de tiempo del sol:
+
+```bash
+.venv-pipeline/bin/python pipeline/shadow_tiles.py --site jezero                       # todos los soles
+.venv-pipeline/bin/python pipeline/shadow_tiles.py --site jezero --sol 20261115T0649Z  # uno
+.venv-pipeline/bin/python pipeline/shadow_tiles.py --out /data/output/otro --max-zoom 14
+```
+
+| Archivo | Contenido |
+|---|---|
+| `<sol>/tiles/<HHMM>/{z}/{x}/{y}.png` | Máscara de esa hora: sombra oscura semitransparente, sol transparente, sin dato gris azulado |
+| `<sol>/tiles.json` | Por hora: LTST, UTC, azimut y elevación del Sol, fracción al sol, zoom y límites de los tiles, y si falló. Además, el `--max-zoom` con que se corrió |
+| `catalog.json` | Qué soles hay en `illumination/` y cuáles están teselados (lo regenera cada corrida) |
+
+- Las horas de noche no se teselan: el mapa pone un velo sobre el sitio. Con `--max-zoom 15` (default), un píxel de tile mide ~2,5 m en Marte (2,4 m en Jezero; los ~4,8 m de z15 son de la Tierra, y acá un grado del esquema XYZ es un grado de Marte). Alcanza para ver moverse las sombras, y si el mapa se acerca más, agranda el último nivel.
+- Si un sol ya está teselado para el mismo `index.json` y el mismo `--max-zoom`, no se rehace (`--force` para forzarlo). Un fallo en una hora queda en `tiles.json` y no corta las demás.
+- Se reproyecta con vecino más cercano: es una máscara por clases y un promedio inventaría "media sombra". El hueco del DTM (sin dato) y lo que queda fuera del DTM se separan para que el primero se vea y el segundo no.
+- Necesita `gdal-bin` (lo instala `deploy/bootstrap.sh`).
+
 ## Método
 
 1. **Sol (SPICE).** Se calcula la posición del Sol vista desde el centro del DTM, con corrección de tiempo de luz y aberración (`spkcpo`, `LT+S`), en el marco IAU_MARS. La hora local es la hora solar local verdadera de SPICE (`et2lst`). Las horas de la pila se buscan iterando hasta ±1 s local.
@@ -55,6 +76,7 @@ El amanecer de un píxel es la primera muestra con sol y el atardecer, la últim
 - **Borde del DTM.** Cerca del borde, el terreno de afuera se ve con la resolución de la grilla lejana (250 m) y del DEM de 200 m.
 - **Huecos del DTM.** Los píxeles sin dato no proyectan sombra dentro del DTM, pero se completan con el DEM de 200 m en la escala lejana.
 - **Sol, no luz.** La máscara dice si hay sol directo. No calcula la luz difusa del cielo ni la que rebota en el terreno.
+- **Un sol sirve para su estación.** Si la salida cae en un sol que no se corrió, la API y el mapa usan la pila de otro sol con |ΔLs| ≤ 2°, de cualquier año marciano, a la misma hora solar local (ver `docs/context.md` §4). A la misma hora solar local, el Sol cambia solo con su declinación: ±2° de Ls son, como mucho, 0,9° de declinación, y la diferencia se nota más en las sombras con el Sol bajo. Ese resultado va `MODELED`. Por eso el `index.json` guarda `sol.ls_deg` y `site_center`.
 
 ## Costo medido (server de 2 vCPU y 7 GB)
 
@@ -68,6 +90,6 @@ Una pasada del Sol a 1 m en Jezero tarda de 1 a 7 s, según el azimut. El horizo
 ## Tests
 
 ```bash
-cd pipeline && python -m pytest tests                                  # sin kernels: geometría y datos faltantes
+cd pipeline && python -m pytest tests                                  # sin kernels: geometría, datos faltantes y teselado (si hay GDAL)
 MAPEANDO_KERNELS=/data/raw/common python -m pytest tests               # en el server: corrida completa con SPICE
 ```

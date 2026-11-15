@@ -7,6 +7,10 @@ import {
   CoverageSchema,
   type Coverage,
   HealthSchema,
+  IlluminationCatalogSchema,
+  SolTilesSchema,
+  type IlluminationCatalog,
+  type SolTiles,
   PlacesIndexSchema,
   type PlacesIndex,
   PointSchema,
@@ -246,5 +250,31 @@ export async function fetchRoverPhotos(
   if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}${await errorDetail(res)}`);
   const parsed = RoverPhotosSchema.safeParse(await res.json());
   if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
+  return parsed.data;
+}
+
+/**
+ * Catálogo de soles con sombras precomputadas (pipeline/shadow_tiles.py).
+ * null = el pipeline todavía no lo generó para este sitio. `no-cache` por lo
+ * mismo que terrain.json: nginx cachea /tiles/ una hora.
+ */
+export async function fetchIlluminationCatalog(siteId: string): Promise<IlluminationCatalog | null> {
+  if (usingFixtures) return null;
+  const path = `/tiles/${siteId}/illumination/catalog.json`;
+  const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  const parsed = IlluminationCatalogSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+  return parsed.data;
+}
+
+/** tiles.json de un sol: qué horas están teseladas y con qué zoom. */
+export async function fetchSolTiles(siteId: string, relPath: string): Promise<SolTiles> {
+  const path = `/tiles/${siteId}/illumination/${relPath}`;
+  const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
+  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  const parsed = SolTilesSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
   return parsed.data;
 }

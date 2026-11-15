@@ -53,7 +53,7 @@ La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangul
 
 ## Sol y sombra con terreno
 
-`pipeline/illumination.py` precomputa, por sol, una pila de máscaras de sol/sombra por hora LTST y el amanecer/atardecer de cada píxel con el terreno (DTM 1 m + DEM 200 m para el borde del cráter + efemérides SPICE). Funciona con cualquier DTM. Uso, formato de salida, método y límites: [docs/illumination.md](docs/illumination.md).
+`pipeline/illumination.py` precomputa, por sol, una pila de máscaras de sol/sombra por hora LTST y el amanecer/atardecer de cada píxel con el terreno (DTM 1 m + DEM 200 m para el borde del cráter + efemérides SPICE). Funciona con cualquier DTM. Uso, formato de salida, método y límites: [docs/illumination.md](docs/illumination.md). `pipeline/shadow_tiles.py` tesela esas máscaras por hora para el deslizador de tiempo del sol del mapa.
 
 ## Consumibles del traje (`/api/route`) · MODELED
 
@@ -64,6 +64,8 @@ La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangul
 {
   "site_id": "jezero",                       // obligatorio si los puntos no traen elev_m
   "points": [{"lat": 18.444, "lon": 77.450}, {"lat": 18.460, "lon": 77.420}],
+                                              // un punto intermedio puede traer "dwell_min" (0–600):
+                                              // minutos de trabajo parado en esa estación
   "speed_m_s": 0.8,                           // default 0.8 (~2.9 km/h)
   "cargo_kg": 0,                              // carga extra transportada (feature de carga del equipo, M2)
   "sample_step_m": 10,                        // paso de muestreo del DTM
@@ -75,12 +77,15 @@ La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangul
   "elevation_source": "dtm:jezero",           // o "request" si los puntos traían elev_m
   "segments": [{"index": 0, "distance_m": 1935, "elev_gain_m": 60, "duration_s": 2425,
                 "metabolic_w": 674, "o2_kg": 0.116, "o2_cum_kg": 0.116, "o2_remaining_pct": 78.9,
-                "battery_wh": 41.2, "battery_cum_wh": 41.2, "battery_remaining_pct": 90.8, ...}],
+                "battery_wh": 41.2, "battery_cum_wh": 41.2, "battery_remaining_pct": 90.8,
+                "dwell_s": 0, "dwell_o2_kg": 0, "dwell_battery_wh": 0, "dwell_energy_kj": 0, ...}],
   "totals": {..., "o2_exhausted_at_segment": null, "battery_exhausted_at_segment": null},
   "assumptions": {...},                       // los valores efectivamente usados
   "warnings": [...], "model_notes": [...]
 }
 ```
+
+**Permanencia.** La permanencia en un punto intermedio se suma al tramo que llega a ese punto: los `dwell_*` de ese tramo dicen cuánto se gastó parado (gasto de reposo de Pandolf más el consumo fijo del PLSS), y sus acumulados (`elapsed_s`, `*_cum_*`, `*_remaining_pct`) ya la incluyen. Si un recurso se agota durante la permanencia, `*_exhausted_at_segment` y `warnings` marcan ese tramo. En la salida y en la llegada final no cuenta, igual que en `POST /api/route`, que usa la misma función (`dwell_consumption`).
 
 **Elevación.** Si todos los puntos traen `elev_m`, se usan esas cotas y cada tramo es una recta. Si no trae ninguno, la API densifica cada tramo cada `sample_step_m` y lee el DTM de 1 m del sitio (el que figura como `dtm` en el manifest). Mezclar puntos con y sin `elev_m` da 422, igual que un punto fuera del DTM o sobre nodata.
 
@@ -114,6 +119,54 @@ Todo el equipo trabaja con el mismo contexto y las mismas skills, versionados en
 | `.claude/update-skills.sh` | Vuelve a traer las skills externas desde upstream. Se revisa el diff y va por PR. |
 
 Si usás otro asistente (Cursor, Copilot, Gemini CLI), apuntalo a `docs/context.md`: es el mismo contenido.
+
+## Peligro de terreno: pendiente + rugosidad (`pipeline/terrain_layers.py`)
+
+Responde "¿piso caminable, pendiente fuerte o bloques?". Es un paso más de `precompute.py`: queda registrado en `terrain.json` como `survival-hazard` y se tesela en `hazard/`. También se puede correr suelto sobre una carpeta que ya tenga `dtm.tif` y `slope.tif`: `python pipeline/terrain_layers.py --dir /data/prueba/jezero`.
+
+| Archivo | Unidad | Qué es |
+|---|---|---|
+| `hazard.tif` (+ tiles `hazard/`) | clase | 0 bajo · 1 medio · 2 alto · 3 no transitable · 255 sin dato |
+| `roughness.tif` | m | Rugosidad σ: desvío estándar, en 5 m, del residuo del DTM tras restar el promedio en 15 m |
+| `terrain_factor.tif` | η | Factor de terreno de Pandolf, **solo por rugosidad** (para el modelo de consumibles) |
+
+**Clase = la peor entre la de pendiente y la de rugosidad.** Los cortes usan "≥", como `api/planner.py`: una celda de 25° justos es no transitable en el mapa y en el planificador.
+
+| Clase | Pendiente | Rugosidad σ | ≈ escalones de |
+|---|---|---|---|
+| 0 bajo | < 10° | < 0,15 m | < 0,3 m |
+| 1 medio | 10–20° | 0,15–0,25 m | 0,3–0,5 m |
+| 2 alto | 20–25° | 0,25–0,40 m | 0,5–0,8 m |
+| 3 no transitable | ≥ 25° | ≥ 0,40 m | ~1 m o más |
+
+Los cortes de pendiente son los mismos que `SLOPE_CLASSES` (`web/src/map/layers.ts`), `RAMPAS["pendiente"]` (`pipeline/tiles.py`) y `SLOPE_CUTS` (`api/planner.py`); el último es el límite duro `max_slope_deg` de `api/safety.py`.
+
+**Solo geometría:** no incluye gravedad, traje ni carga (se aplican en otra etapa).
+
+### Por qué rugosidad "sin la tendencia"
+La diferencia entre vecinos (`gdaldem roughness`) crece en cualquier ladera, aunque sea lisa, y repite la pendiente. Si primero se resta el promedio local en 15 m, en una ladera lisa el residuo da ~0 y solo quedan bloques y escalones. Es el mismo criterio de "detrended terrain ruggedness" usado para analizar las travesías de Apollo 15 y 16 (Jacob et al., LPSC, NASA NTRS 20250011301). La ventana de 5 m coincide con la resolución horizontal real de un DTM HiRISE, que no es mejor que 3–5 píxeles (Kirk, MSL Landing Site Workshop).
+
+### σ no es la altura del escalón
+σ es un desvío estándar. En un campo de bloques de altura *h* que cubren una fracción *p* del suelo, σ = h·√(p(1−p)), que vale como mucho **h/2** (con p = 0,5), y al restar la tendencia da un poco menos. En simulación, un campo denso de bloques de 1 m da una σ mediana de 0,46–0,48 m. Por eso el corte de no transitable es **σ ≥ 0,40 m**, que corresponde a bloques o escalones de ~1 m. Lo verifica `pipeline/tests/test_terrain_layers.py` ("bloques de 1 m → no transitable", "bloques de 30 cm → nunca no transitable").
+
+### Pendiente
+Los astronautas de Apollo caminaron en pendientes de menos de 15° (Iqbal et al., 2024, *Acta Astronautica*), y la planificación de caminatas en el polo sur lunar limita las travesías a menos de 20°. **El límite de 25° para "no transitable" es una decisión del equipo** (`api/safety.py`, ver `docs/seguridad.md`), no un número de esa bibliografía: esta capa lo toma tal cual para que el mapa y el planificador digan lo mismo.
+
+### η de Pandolf
+Interpolación lineal de σ entre anclas, saturada en los extremos: σ ≤ 0,05 m → 1,1 (camino de tierra; el regolito nunca es asfalto), 0,15 m → 1,2 (matorral liviano), 0,25 m → 1,5 (matorral denso), ≥ 0,40 m → 1,8 (pantano). Los valores de η de referencia son de Soule & Goldman (1972), usados en Pandolf et al. (1977). En Pandolf la pendiente entra aparte, como el grado **G**, y depende de la dirección de marcha: la calcula el planificador sobre la ruta con `dtm.tif` (`G = 100 · Δz / Δd`). Todavía no está conectado a `api/consumables.py`, donde `terrain_factor` es la constante 1.1.
+
+### Limitaciones
+- Precisión vertical de un DTM HiRISE de 1 m: decenas de cm (Sutton et al., 2022, *Remote Sensing* 14:2403). El corte más bajo (σ 0,15 m) queda cerca de ese ruido. En un recorte de 2×2 km del piso de Jezero, el 99 % del terreno tiene σ < 0,16 m.
+- Un DTM de 1 m no ve rocas sueltas de menos de ~3–5 m: la rugosidad marca zonas con bloques, no rocas individuales.
+- No distingue roca firme de arena suelta (η 2,1 en Pandolf).
+- En Gale, la parte del DEM rellenada sin detalle da rugosidad 0: ahí la clase sale solo de la pendiente.
+- Cerca de los huecos del DTM, las ventanas usan solo las celdas válidas.
+
+## Dosis de radiación por celda (`pipeline/radiation.py`) · MSL RAD · MODELED
+
+Paso de `precompute.py`. Escribe `dose_rate.tif` (dosis equivalente, µSv/h, grilla de 100 m) y `skyview.tif`, y los registra en `terrain.json` como `survival-dose` y `survival-skyview`, con tiles en `dose/`.
+
+`dosis = H0 × sky_view / sky_view(Bradbury Landing)`, con H0 = 0,64 ± 0,12 mSv/día medida por RAD en Gale. La dosis cambia con el lugar menos que la incertidumbre de RAD: **se muestra como presupuesto de dosis de la travesía** (el planificador promedia la dosis por celda sobre la ruta) y el raster queda como capa secundaria con escala fija. Modelo, decisión y limitaciones: [`docs/radiation.md`](docs/radiation.md).
 
 ---
 Prototipo educativo, no software de vuelo.

@@ -44,7 +44,7 @@ Sin `.env.local`, el frontend arranca en **modo ejemplo**: fixtures locales y un
 | `GET /api/sites`, `GET /api/sites/{id}` | inventario del sitio | anda |
 | `GET /api/sites/{id}/point?lat=&lon=` | elevación y pendiente en un punto | anda, necesita el DTM bajado |
 | `POST /api/route/consumables` | consumibles por tramo + perfil de elevación | anda, necesita el DTM bajado |
-| `POST /api/route` | planificador 4D: ruta por el terreno, horarios, consumibles y veredicto | anda, necesita `slope.tif` (si no, tramos en línea recta como `unknown`); la sombra, la pila de `illumination.py` |
+| `POST /api/route` | planificador 4D: ruta por el terreno, horarios, consumibles, veredicto GO / CAUTION / NO-GO con puntaje, límites, robustez y costo por factor (`docs/seguridad.md`) | anda, necesita `slope.tif` (si no, tramos en línea recta como `unknown`); la sombra, la pila de `illumination.py` |
 | `POST /api/illumination/window` | sol/sombra precomputados entre dos puntos | anda, necesita la pila de `illumination.py` (si no, 503) |
 
 **`/tiles/*` — lo que se dibuja.** nginx sirve `/data/output/` tal cual. Ahí viven los tiles PNG, las curvas en GeoJSON y el índice `terrain.json`.
@@ -68,7 +68,9 @@ Sin `.env.local`, el frontend arranca en **modo ejemplo**: fixtures locales y un
 | Pipeline: DTM a COG, pendiente, sombreado, curvas | listo |
 | Pipeline: teselado a XYZ PNG y ortoimagen | listo; falta correrlo |
 | Planificador de travesía, fichas, tira imprimible | listo, contra el planificador de ejemplo |
-| Capas de peligro, refugio, dosis y sombras | no empezadas |
+| Capa de peligro de terreno (pendiente + rugosidad), tiles `hazard/` | listo (`pipeline/terrain_layers.py`, paso de `precompute.py`) |
+| Capa de dosis por celda (secundaria) y presupuesto de dosis en el planificador | listo (`pipeline/radiation.py`, paso de `precompute.py`) |
+| Capas de refugio y sombras | no empezadas |
 
 ---
 
@@ -100,10 +102,10 @@ Enciende **hillshade, pendiente y curvas de nivel**. Deja `terrain.json` y, con 
 **3. La ortoimagen**, aparte porque es la más cara (7,4 GB a 25 cm/px en Jezero, horas de proceso):
 
 ```bash
-.venv-pipeline/bin/python pipeline/precompute.py --site jezero --ortho --max-zoom 18
+.venv-pipeline/bin/python pipeline/precompute.py --site jezero --ortho
 ```
 
-Sin `--max-zoom` genera una cantidad enorme de PNG. Se recorta sola al bbox del sitio.
+La tesela hasta z17 (~0,64 m/px) y la recorta sola al bbox del sitio. Con `--ortho-max-zoom 18` llega a ~0,32 m/px, cerca de los 25 cm nativos, pero son ~4 veces más tiles. No le pases `--max-zoom`: ese tope es del relieve, y `--ortho` vuelve a generar también la pendiente y el sombreado.
 
 **4. Validar el reloj** (cierra su ticket):
 
@@ -128,5 +130,5 @@ curl -s "http://<server>/api/sites/jezero/point?lat=18.488&lon=77.403" | jq
 ## 5. Lo que todavía bloquea
 
 - **El frontend no se despliega.** nginx sirve `/opt/mapeando-ando/web` directo, `deploy/update.sh` no corre `npm build` y el server no tiene Node. Mientras no se resuelva, el mapa solo se ve en local aunque esté mergeado en `main`. Es la decisión abierta de `context.md` y **no depende de los datos**.
-- **Las capas de supervivencia** (peligro, refugio, dosis, sombras) no las genera nadie todavía. Sol y sombra existen en `pipeline/illumination.py` pero escriben su propio `index.json` y no se teselan.
+- **Las capas de supervivencia** de refugio no las genera nadie todavía; peligro y dosis ya salen de `precompute.py` (`pipeline/terrain_layers.py`, `pipeline/radiation.py`). Sol y sombra sí: `pipeline/illumination.py` calcula la pila por hora y `pipeline/shadow_tiles.py` la tesela para el deslizador del sol (ver `docs/illumination.md`).
 - **El valor por capa en el inspector** viene vacío hasta que esas capas existan.

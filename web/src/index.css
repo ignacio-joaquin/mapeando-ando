@@ -16,6 +16,7 @@
   --color-observed: #6cb8e0;
   --color-derived: #a993e8;
   --color-modeled: #e08cc0;
+  --color-assumed: #c8c0b4;
 }
 
 html, body, #root { height: 100%; margin: 0; }

@@ -114,3 +114,31 @@ export function ltstAt(date: Date, lonEast: number): number {
   const mt = marsTime(date);
   return localTrueSolarTime(mt.mtc, lonEast, mt.eotHours);
 }
+
+/** Sol medio en ms terrestres (1,027491252 días). */
+export const SOL_MS = 88_775_244;
+
+/**
+ * Última medianoche local (LTST 00:00) en o antes del instante, en ms UTC.
+ * Igual que `local_midnight_before` de api/mars_time.py.
+ */
+export function localMidnightBefore(date: Date, lonEast: number): number {
+  const t = date.getTime();
+  let m = t - (ltstAt(date, lonEast) / 24) * SOL_MS;
+  // La ecuación del tiempo cambia segundos por sol: converge enseguida.
+  for (let i = 0; i < 3; i++) {
+    const off = ((ltstAt(new Date(m), lonEast) + 12) % 24 + 24) % 24 - 12;
+    m -= (off / 24) * SOL_MS;
+  }
+  return m <= t + 1000 ? m : m - SOL_MS;
+}
+
+/** Diferencia de estación de `fromLs` a `toLs`, en grados, entre −180 y 180. */
+export function dlsDeg(fromLs: number, toLs: number): number {
+  return mod360(toLs - fromLs + 180) - 180;
+}
+
+/** Declinación del Sol (latitud subsolar) según Ls. Mars24, paso C-1. */
+export function declinationDeg(ls: number): number {
+  return Math.asin(0.42565 * sin(ls)) / DEG + 0.25 * sin(ls);
+}

@@ -80,6 +80,7 @@ class RoutePoint(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-360, le=360, description="Grados este, 0–360 o −180–180")
     elev_m: Optional[float] = Field(None, description="Si falta en todos los puntos, se lee del DTM")
+    dwell_min: float = Field(0.0, ge=0, le=600, description="Tiempo que el astronauta se queda en este punto")
 
 
 class SuitOverrides(BaseModel):
@@ -150,13 +151,16 @@ def _segments_from_request(req: ConsumablesRequest) -> tuple[list[list[Step]], l
 @app.post("/api/route/consumables")
 def route_consumables(req: ConsumablesRequest):
     """Consumibles del traje por tramo sobre una ruta ya armada (lista de puntos).
-    Cada tramo va de points[i] a points[i+1]. Todo el resultado es MODELED.
+    Cada tramo va de points[i] a points[i+1]. Un punto intermedio puede traer `dwell_min`:
+    la permanencia se suma al tramo que llega a ese punto, igual que en /api/route. En la
+    salida y en la llegada final no cuenta. Todo el resultado es MODELED.
 
     Antes vivía en /api/route; se mudó para dejarle esa ruta al planificador 4D,
     cuyo contrato (docs/context.md §4) ya consume web/."""
     params = SuitParams(cargo_kg=req.cargo_kg, **req.suit.model_dump())
     segments, elev, elev_source = _segments_from_request(req)
-    result = route_consumption(segments, req.speed_m_s, params)
+    dwell_s = [p.dwell_min * 60.0 for p in req.points[1:-1]] + [0.0]
+    result = route_consumption(segments, req.speed_m_s, params, dwell_s)
     for i, seg in enumerate(result["segments"]):
         a, b = req.points[i], req.points[i + 1]
         seg["from"] = {"lat": a.lat, "lon": a.lon, "elev_m": elev[i]}

@@ -4,7 +4,7 @@ import { PROVENANCE_LABEL, type Provenance, type SourceInfo } from "../domain/pr
 /**
  * Badge de procedencia: "MRO HiRISE · DERIVED".
  *
- * El color distingue OBSERVED / DERIVED / MODELED, pero la etiqueta va siempre
+ * El color distingue OBSERVED / DERIVED / MODELED / ASSUMED, pero la etiqueta va siempre
  * escrita: nada crítico se comunica solo por color (casco, guantes, luz dura).
  * Tooltip con fuente, resolución y supuestos al pasar el mouse, con foco de
  * teclado o con un toque en pantalla táctil (un toque da foco pero no
@@ -14,6 +14,7 @@ const TONE: Record<Provenance, string> = {
   OBSERVED: "border-observed/60 bg-observed/15 text-observed",
   DERIVED: "border-derived/60 bg-derived/15 text-derived",
   MODELED: "border-modeled/60 bg-modeled/15 text-modeled",
+  ASSUMED: "border-assumed/60 bg-assumed/15 text-assumed",
 };
 
 interface Props {
