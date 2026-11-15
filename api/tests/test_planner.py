@@ -144,6 +144,38 @@ class TestTerreno:
         assert body["verdict"]["status"] == "NO_GO"
         assert body["verdict"]["limiting_factor"] == "terrain"
 
+    def test_sin_camino_el_perfil_muestra_la_pared_en_su_lugar(self, client, site):
+        # Pared completa a mitad de camino (A en la columna 40, B en la 160, pared en la 100):
+        # no hay camino, pero el perfil tiene que salir igual, de la línea recta A→B medida,
+        # con la pendiente del veredicto en rojo justo donde está la pared.
+        slope = flat()
+        slope[:, 100] = 40.0
+        dtm = np.zeros((N, N), dtype=np.float32)
+        dtm[:, 100:] = 10.0                     # el escalón de la pared
+        write_terrain(site, slope, dtm=dtm)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["legs"][0]["class"] == "blocked"
+        profile = body["profile"]
+        assert profile["straight_legs"] == [0]
+        slopes, dist = profile["slope_deg"], profile["distance_m"]
+        assert max(slopes) == pytest.approx(40.0)
+        wall = next(i for i, s in enumerate(slopes) if s >= 25.0)
+        assert dist[wall] / dist[-1] == pytest.approx(0.5, abs=0.05)
+        assert all(s == pytest.approx(2.0) for s in slopes[:wall])   # antes de la pared, transitable
+        assert profile["elevation_m"][-1] - profile["elevation_m"][0] == pytest.approx(10.0)
+
+    def test_sin_camino_y_sin_dtm_no_hay_perfil(self, client, site):
+        # Sin DTM no hay elevación que medir: el perfil no se inventa.
+        slope = flat()
+        slope[:, 100] = 40.0
+        write_terrain(site, slope)
+        assert "profile" not in client.post("/api/route", json=request(band_time(13))).json()
+
+    def test_con_camino_el_perfil_no_tiene_tramos_rectos(self, client, site):
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["profile"]["straight_legs"] == []
+
     def test_pendiente_sin_dato_marca_el_tramo_unknown(self, client, site):
         slope = flat()
         slope[:, 90:110] = -9999.0

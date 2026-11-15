@@ -290,6 +290,12 @@ export const ProfileSchema = z.object({
   elevation_m: z.array(z.number()),
   slope_deg: z.array(z.number()),
   leg_starts: z.array(z.number()),
+  /**
+   * Tramos sin camino (el planificador no encontró paso): su parte del perfil es la
+   * línea recta A→B medida sobre el DTM, no una ruta. Sirve para ver dónde está lo que
+   * bloquea. Opcional: el planificador de ejemplo y /api/route/consumables no lo mandan.
+   */
+  straight_legs: z.array(z.number()).optional(),
 });
 
 export const TerrainStatusSchema = z.enum(["complete", "partial", "missing"]);

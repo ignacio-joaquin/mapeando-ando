@@ -608,16 +608,17 @@ export function MapView({ center, bbox, siteId }: Props) {
         id: "route-line",
         type: "line",
         source: "route",
-        filter: ["!=", ["get", "class"], "unknown"],
+        filter: ["all", ["!=", ["get", "class"], "unknown"], ["!", ["get", "straight"]]],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": color, "line-width": 5 },
       });
-      // Tramos sin evaluar (falta DTM): punteada, para que no se lea como "ok".
+      // Tramos sin evaluar (falta DTM) y tramos sin camino (línea recta A→B, que no es
+      // una ruta): punteada, para que no se lean como un camino transitable.
       map.addLayer({
         id: "route-line-unknown",
         type: "line",
         source: "route",
-        filter: ["==", ["get", "class"], "unknown"],
+        filter: ["any", ["==", ["get", "class"], "unknown"], ["get", "straight"]],
         paint: { "line-color": color, "line-width": 4, "line-dasharray": [1.5, 1.2] },
       });
       // Los pines quedan arriba de la ruta.
@@ -912,7 +913,14 @@ function legsToGeoJSON(legs: readonly RouteLeg[]): FeatureCollection<LineString>
     type: "FeatureCollection",
     features: legs.map((l) => ({
       type: "Feature",
-      properties: { class: l.class, from: l.from, to: l.to },
+      // Un tramo bloqueado con solo dos puntos es la línea recta A→B que deja el
+      // planificador cuando no encuentra paso: no es un camino.
+      properties: {
+        class: l.class,
+        from: l.from,
+        to: l.to,
+        straight: l.class === "blocked" && l.coordinates.length === 2,
+      },
       geometry: { type: "LineString", coordinates: l.coordinates.map(([x, y]) => [x, y]) },
     })),
   };
