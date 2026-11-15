@@ -4,7 +4,7 @@
  *   ?site=jezero&depart=2026-11-14T15:00:00.000Z&pts=18.44463,77.45089,0;18.48,77.38,15,iau-15872
  *
  * Cada punto es `lat,lon,minutos[,id de lugar]`, en orden: hábitat, paradas,
- * destino. El texto de las tareas no viaja (alarga el enlace y no cambia el
+ * destino. `ret=0` = solo ida; sin `ret`, la travesía vuelve al hábitat. El texto de las tareas no viaja (alarga el enlace y no cambia el
  * cálculo). Este módulo no importa los stores: store.ts lo usa al arrancar.
  */
 import type { LatLon } from "../mars/geo";
@@ -16,6 +16,7 @@ export interface SharedPoint extends LatLon {
 
 export interface SharedPlan {
   readonly departAt: Date | null;
+  readonly roundTrip: boolean;
   readonly points: readonly SharedPoint[];
 }
 
@@ -40,8 +41,10 @@ export function encodePlan(
   siteId: string,
   departAt: Date,
   points: readonly SharedPoint[],
+  roundTrip: boolean,
 ): string {
   const q = new URLSearchParams({ site: siteId, depart: departAt.toISOString() });
+  if (!roundTrip) q.set("ret", "0");
   if (points.length > 0) {
     q.set(
       "pts",
@@ -74,7 +77,11 @@ export function decodePlan(qs: string): SharedPlan {
       placeId: placeId && PLACE_ID.test(placeId) ? placeId : null,
     });
   }
-  return { departAt: d && !Number.isNaN(d.getTime()) ? d : null, points };
+  return {
+    departAt: d && !Number.isNaN(d.getTime()) ? d : null,
+    roundTrip: q.get("ret") !== "0",
+    points,
+  };
 }
 
 export function planFromUrl(): SharedPlan | null {
