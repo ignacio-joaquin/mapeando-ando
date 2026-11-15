@@ -140,7 +140,8 @@ export const DirectionKindSchema = z.enum([
 ]);
 
 /** De dónde sale el landmark: catálogo IAU, cráteres de Robbins o pico extraído del DEM. */
-export const LandmarkCatalogSchema = z.enum(["IAU", "Robbins", "DEM"]);
+/** IAU / Robbins / DEM (cerros de places.json) o el mástil del hábitat (punto A). */
+export const LandmarkCatalogSchema = z.enum(["IAU", "Robbins", "DEM", "habitat"]);
 
 export const LandmarkSchema = z.object({
   id: z.string(),
@@ -154,6 +155,31 @@ export const LandmarkSchema = z.object({
 
 const FALLBACK_KINDS: readonly string[] = ["fallback_sun", "fallback_bearing"];
 
+/** Procedencia sin valor: la de una confirmación o de la posición del Sol. */
+const SourceInfoSchema = MeasuredValueSchema.omit({ value: true, unit: true });
+
+/**
+ * "Vas bien si…": confirmaciones del trecho. `sun` = el Sol respecto del cuerpo y la
+ * sombra (o que a esa hora no sirve), `habitat` = se ve el mástil, `landmark` = cómo se
+ * ve la referencia principal (distancia y altura en dedos/puños).
+ */
+export const DirectionCheckSchema = SourceInfoSchema.extend({
+  kind: z.enum(["sun", "habitat", "landmark"]),
+  text: z.string(),
+});
+
+/** "Pará cuando…": lo que queda al costado al final del trecho. */
+export const DirectionUntilSchema = z.object({
+  text: z.string(),
+  landmark: LandmarkSchema.nullable(),
+});
+
+/** El Sol a la hora de paso por el trecho (SPICE de la pila de sombras, o Mars24). */
+export const DirectionSunSchema = SourceInfoSchema.extend({
+  azimuth_deg: z.number(),
+  elevation_deg: z.number(),
+});
+
 export const DirectionSchema = z
   .object({
     kind: DirectionKindSchema,
@@ -165,6 +191,13 @@ export const DirectionSchema = z
     relative_bearing_deg: z.number().nullable(),
     /** Fracción 0–1 del tramo desde la que se ve el landmark. `value: null` en los respaldos. */
     visible_fraction: MeasuredValueSchema,
+    /** Minutos del trecho según el modelo del traje. */
+    duration: MeasuredValueSchema.optional(),
+    /** Posición de reloj del landmark (12 = al frente, 3 = derecha). null en los respaldos. */
+    clock: z.number().int().min(1).max(12).nullable().optional(),
+    checks: z.array(DirectionCheckSchema).optional(),
+    until: DirectionUntilSchema.nullable().optional(),
+    sun: DirectionSunSchema.optional(),
   })
   .refine((d) => FALLBACK_KINDS.includes(d.kind) === (d.landmark === null), {
     message: "Una indicación con landmark necesita `landmark`; un respaldo (fallback_*) no lo lleva.",
@@ -590,6 +623,7 @@ export type DirectionKind = z.infer<typeof DirectionKindSchema>;
 export type LandmarkCatalog = z.infer<typeof LandmarkCatalogSchema>;
 export type Landmark = z.infer<typeof LandmarkSchema>;
 export type Direction = z.infer<typeof DirectionSchema>;
+export type DirectionCheck = z.infer<typeof DirectionCheckSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type SafetyLimit = z.infer<typeof SafetyLimitSchema>;
 export type Robustness = z.infer<typeof RobustnessSchema>;

@@ -869,7 +869,10 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     # ---- indicaciones por landmarks (api/directions.py). Opcionales: si el cálculo falla, la
     # ruta sale igual, sin `directions`, y el frontend dice que faltan.
     try:
-        per_leg = directions.route_directions(data_dir, site_id, dtm_path, [plan.latlon for plan in legs_plan])
+        dir_legs = [directions.LegInput(plan.latlon, departures[i], plan.duration_s)
+                    for i, plan in enumerate(legs_plan)]
+        per_leg = directions.route_directions(data_dir, site_id, dtm_path, dir_legs, stack=stack,
+                                              contact=contact, habitat=pts[0])
     except Exception:  # noqa: BLE001 — degradar, no romper
         per_leg = None
     if per_leg is not None:

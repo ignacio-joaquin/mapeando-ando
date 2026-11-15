@@ -7,7 +7,7 @@
  * imágenes), para que un cráter no tenga dos badges distintos en la app. La
  * API manda solo el catálogo y acá se arma el badge.
  */
-import type { DirectionKind, LandmarkCatalog } from "../api/schemas";
+import type { DirectionCheck, DirectionKind, LandmarkCatalog } from "../api/schemas";
 import type { SourceInfo } from "./provenance";
 
 export const LANDMARK_SOURCE: Record<LandmarkCatalog, SourceInfo> = {
@@ -31,12 +31,20 @@ export const LANDMARK_SOURCE: Record<LandmarkCatalog, SourceInfo> = {
     source: "Máximos locales del DTM del sitio (pipeline/places.py, kind landmark)",
     assumptions: ["Sin nombre oficial: el número solo lo ordena por relieve"],
   },
+  habitat: {
+    provenance: "DERIVED",
+    mission: null,
+    instrument: "punto A",
+    source: "El hábitat que marcaste como salida en el planificador",
+    assumptions: ["Mástil de 3 m sobre el suelo (api/contact.py)"],
+  },
 };
 
 export const LANDMARK_CATALOG_LABEL: Record<LandmarkCatalog, string> = {
   IAU: "nombre IAU",
   Robbins: "cráter Robbins",
   DEM: "cerro del DTM, sin nombre",
+  habitat: "punto A",
 };
 
 export function isFallback(kind: DirectionKind): boolean {
@@ -55,6 +63,13 @@ export const DIRECTION_ICON: Record<DirectionKind, string> = {
   turn: "↱",
   fallback_sun: "☀",
   fallback_bearing: "∠",
+};
+
+/** Símbolo de cada confirmación. Decorativo: el texto lleva el sentido. */
+export const CHECK_ICON: Record<DirectionCheck["kind"], string> = {
+  sun: "☀",
+  habitat: "⌂",
+  landmark: "◆",
 };
 
 /** Etiqueta corta del respaldo: dice con qué se guía cuando no hay landmark. */

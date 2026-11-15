@@ -1,5 +1,6 @@
 import type { RouteResponse } from "../../api/schemas";
 import {
+  CHECK_ICON,
   DIRECTION_ICON,
   FALLBACK_LABEL,
   LANDMARK_CATALOG_LABEL,
@@ -11,11 +12,13 @@ import { stopLabel } from "../../map/route";
 import { usePlan } from "../../state/plan";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
-import { formatDistanceM } from "./format";
+import { formatDistanceM, formatMinutes } from "./format";
 
 /**
  * Indicaciones paso a paso, como en Google Maps pero sin GPS: cada paso nombra
- * algo que se ve desde el trecho ("Caminá 1,5 km hacia el cráter…").
+ * algo que se ve desde el trecho, en posición de reloj ("…hacia el cráter X, a
+ * las 2"), con confirmaciones ("Vas bien si…": el Sol y la sombra, el mástil
+ * del hábitat, cómo se ve el landmark) y una señal de parada ("Pará cuando…").
  *
  * Pasar el mouse (o el foco) por un paso lo resalta en el mapa con su línea de
  * vista; un clic lo fija y lo encuadra. Un respaldo (nada visible) se marca
@@ -149,6 +152,30 @@ function StepItem({ step }: { readonly step: RouteStep }) {
         </span>
       </button>
 
+      {d.checks && d.checks.length > 0 ? (
+        <div className="mt-2 ml-7">
+          <p className="text-[10px] font-semibold tracking-wide text-muted uppercase">Vas bien si</p>
+          <ul className="mt-0.5 flex flex-col gap-1">
+            {d.checks.map((c, k) => (
+              <li key={k} className="flex items-start gap-1.5 text-xs leading-snug text-fg/90">
+                <span aria-hidden className="w-3 shrink-0 text-center text-muted">
+                  {CHECK_ICON[c.kind]}
+                </span>
+                <span className="min-w-0 flex-1">{c.text}</span>
+                <ProvenanceBadge source={c} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {d.until ? (
+        <p className="mt-2 ml-7 flex items-start gap-1.5 rounded border border-line bg-bg/60 px-2 py-1 text-xs leading-snug text-fg">
+          <span aria-hidden className="text-rust">■</span>
+          <span>{d.until.text}</span>
+        </p>
+      ) : null}
+
       <div className="mt-1.5 ml-7 flex flex-col gap-1 text-[11px] text-muted">
         {d.landmark ? (
           <span className="flex flex-wrap items-center gap-1.5">
@@ -168,6 +195,12 @@ function StepItem({ step }: { readonly step: RouteStep }) {
             trecho
             <Measure data={{ ...d.distance, unit: null }} format={formatDistanceM} align="left" />
           </span>
+          {d.duration ? (
+            <span className="inline-flex items-center gap-1.5">
+              ≈
+              <Measure data={{ ...d.duration, unit: null }} format={formatMinutes} align="left" />
+            </span>
+          ) : null}
         </span>
       </div>
     </li>

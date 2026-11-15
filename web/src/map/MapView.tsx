@@ -16,7 +16,7 @@ import {
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Point, Polygon } from "geojson";
-import { midpoint, routeSteps, type RouteStep } from "../domain/steps";
+import { midpoint, offset, pathLength, routeSteps, type RouteStep } from "../domain/steps";
 import { geojsonUrl, LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
 import { readyTiles, terrainLayer, usesGeojson } from "./terrain";
 import { TERRAIN_TRUE_SCALE } from "../mars/constants";
@@ -667,6 +667,37 @@ export function MapView({ center, bbox, siteId }: Props) {
           filter: ["==", ["get", "part"], "sight"],
           paint: { "line-color": "#ece6de", "line-width": 1.5, "line-dasharray": [2, 2] },
         });
+        // El Sol del paso: rayo amarillo hacia el Sol y la sombra, oscura, para el otro lado.
+        map.addLayer({
+          id: "route-step-sun",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sun"],
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#f2c94c", "line-width": 3 },
+        });
+        map.addLayer({
+          id: "route-step-shadow",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "shadow"],
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#0b0a09", "line-width": 6, "line-opacity": 0.8 },
+        });
+        map.addLayer({
+          id: "route-step-sun-label",
+          type: "symbol",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sun-label"],
+          layout: {
+            "text-field": ["get", "label"],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 12,
+            "text-anchor": "left",
+            "text-offset": [0.4, 0],
+          },
+          paint: { "text-color": "#f2c94c", "text-halo-color": "#0b0a09", "text-halo-width": 1.5 },
+        });
         map.addLayer({
           id: "landmarks-points",
           type: "circle",
@@ -887,10 +918,13 @@ function landmarksToGeoJSON(steps: readonly RouteStep[], active: RouteStep | und
   return { type: "FeatureCollection", features: [...seen.values()] };
 }
 
-/** El trecho resaltado y, si nombra un landmark, la línea de vista hacia él. */
-function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineString> {
+/**
+ * El trecho resaltado; si nombra un landmark, la línea de vista hacia él; y si
+ * hay Sol a esa hora, hacia dónde está (y para dónde cae la sombra).
+ */
+function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineString | Point> {
   if (!step) return { type: "FeatureCollection", features: [] };
-  const features: Feature<LineString>[] = [
+  const features: Feature<LineString | Point>[] = [
     {
       type: "Feature",
       properties: { part: "stretch" },
@@ -904,6 +938,23 @@ function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineStrin
       properties: { part: "sight" },
       geometry: { type: "LineString", coordinates: [[mx, my], [step.aim[0], step.aim[1]]] },
     });
+  }
+  const sun = step.direction.sun;
+  if (sun && sun.elevation_deg > 0) {
+    const mid = midpoint(step.path);
+    // Un largo que se vea a la escala del trecho, sin tapar media pantalla.
+    const len = Math.min(Math.max(pathLength(step.path) * 0.35, 120), 800);
+    const toSun = offset(mid, sun.azimuth_deg, len);
+    const shadow = offset(mid, sun.azimuth_deg + 180, len * 0.6);
+    features.push(
+      { type: "Feature", properties: { part: "sun" }, geometry: { type: "LineString", coordinates: [[...mid], [...toSun]] } },
+      { type: "Feature", properties: { part: "shadow" }, geometry: { type: "LineString", coordinates: [[...mid], [...shadow]] } },
+      {
+        type: "Feature",
+        properties: { part: "sun-label", label: `☀ Sol ${Math.round(sun.elevation_deg)}°` },
+        geometry: { type: "Point", coordinates: [...toSun] },
+      },
+    );
   }
   return { type: "FeatureCollection", features };
 }
