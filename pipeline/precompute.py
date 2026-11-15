@@ -11,6 +11,8 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   dose_rate.tif     dosis equivalente por celda, µSv/h, y skyview.tif (pipeline/radiation.py)
   slope/, hillshade/, hazard/, dose/  tiles XYZ PNG para el mapa (pipeline/tiles.py), con los
                     colores de la leyenda de web/src/map/layers.ts
+  coverage.geojson  dónde hay DTM de 1 m de verdad (huella de los píxeles válidos), en lon/lat.
+                    El planificador rechaza un destino que cae afuera.
   terrain.json      procedencia, parámetros, estado de cada capa y zoom/límites de los tiles.
                     El frontend lo lee para saber qué capa puede prender.
 
@@ -43,7 +45,10 @@ from urllib.parse import urlparse
 
 import numpy as np
 import rasterio
+from rasterio import features
+from rasterio.transform import Affine
 from rasterio.warp import transform as warp_transform
+from rasterio.warp import transform_geom
 from rasterio.windows import Window
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -64,6 +69,7 @@ CONTOUR_DECIMALS = 6       # 1e-6° ≈ 6 cm en Marte
 HILLSHADE_Z = 3            # exageración vertical del sombreado (solo visual)
 HILLSHADE_AZIMUTH_DEG = 315
 HILLSHADE_ALTITUDE_DEG = 45
+COVERAGE_CELL_PX = 10     # celda de la máscara de cobertura: 10 px = 10 m en un DTM de 1 m
 PRUEBA_PX = 2000           # tamaño del recorte en modo --prueba (2000 px = 2 km a 1 m/px)
 
 SLOPE_NODATA = -9999.0
@@ -265,6 +271,53 @@ def compute_slope(dtm, dst):
                 "shape": [h, w]}
 
 
+# ------------------------------------------------------------------ cobertura
+
+def coverage_mask(dtm, cell=COVERAGE_CELL_PX):
+    """Máscara de cobertura: celdas de `cell` x `cell` píxeles donde TODOS los píxeles del DTM
+    tienen dato. Conservadora a propósito: una celda con un solo hueco queda afuera, así un
+    destino aceptado nunca cae sobre nodata. Se lee por franjas, sin cargar el DTM entero.
+
+    Devuelve (máscara uint8 1/0, transform de la grilla de celdas, crs).
+    """
+    with rasterio.open(dtm) as ds:
+        h, w = ds.height, ds.width
+        ch, cw = -(-h // cell), -(-w // cell)
+        mask = np.zeros((ch, cw), dtype=np.uint8)
+        strip = max(1, STRIP_PX // (w * cell))        # filas de celdas por franja
+        for c0 in range(0, ch, strip):
+            c1 = min(ch, c0 + strip)
+            r0, r1 = c0 * cell, min(h, c1 * cell)
+            band = ds.read(1, window=Window(0, r0, w, r1 - r0), masked=True)
+            z = band.astype(np.float32).filled(np.nan)
+            valid = np.isfinite(z) & (np.abs(z) < BAD_Z_M)
+            # La última fila y columna de celdas pueden quedar incompletas: se rellenan con
+            # "sin dato" y quedan afuera.
+            full = np.zeros(((c1 - c0) * cell, cw * cell), dtype=bool)
+            full[: r1 - r0, :w] = valid
+            mask[c0:c1] = full.reshape(c1 - c0, cell, cw, cell).all(axis=(1, 3))
+        return mask, ds.transform @ Affine.scale(cell), ds.crs
+
+
+def coverage_geojson(mask, transform, crs):
+    """Polígonos de las celdas con dato, en lon/lat planetocéntricas (este positivo)."""
+    feats = []
+    for geom, value in features.shapes(mask, mask=mask == 1, transform=transform):
+        if value != 1:
+            continue
+        g = transform_geom(crs, MARS_LONGLAT, geom, precision=CONTOUR_DECIMALS)
+        feats.append({"type": "Feature", "properties": {}, "geometry": g})
+    return {"type": "FeatureCollection", "features": feats}
+
+
+def compute_coverage(dtm, dst, cell=COVERAGE_CELL_PX):
+    """Escribe coverage.geojson. Devuelve celdas con dato, celdas totales y cantidad de polígonos."""
+    mask, transform, crs = coverage_mask(dtm, cell)
+    fc = coverage_geojson(mask, transform, crs)
+    Path(dst).write_text(json.dumps(fc, separators=(",", ":")))
+    return {"cells_ok": int(mask.sum()), "cells": int(mask.size), "features": len(fc["features"])}
+
+
 # ------------------------------------------------------------------ salidas
 
 def to_cog(src, dst):
@@ -413,7 +466,24 @@ def main(argv=None):
         "crs": MARS_LONGLAT,
     }
 
-    # 5. Peligro de terreno: pendiente + rugosidad (pipeline/terrain_layers.py). Usa la pendiente
+    # 5. Cobertura: dónde hay DTM de 1 m de verdad. El planificador rechaza destinos afuera.
+    def coverage_step():
+        info = compute_coverage(dtm, work / "coverage.geojson")
+        publish(work / "coverage.geojson", out / "coverage.geojson")
+        layers["coverage"]["stats"] = info
+        if info["cells_ok"] == 0:
+            raise RuntimeError("El DTM no tiene ninguna celda completa con dato")
+
+    layers["coverage"] = {
+        "file": "coverage.geojson", "unit": None, "provenance": "DERIVED", "mission": entry.get("mission"),
+        "resolution": f"celdas de {COVERAGE_CELL_PX} x {COVERAGE_CELL_PX} píxeles del DTM",
+        "params": {"cell_px": COVERAGE_CELL_PX},
+        "crs": MARS_LONGLAT,
+        "assumptions": ["Una celda cuenta solo si todos sus píxeles del DTM tienen dato: el borde "
+                        "real del DTM puede quedar hasta una celda más afuera."],
+    }
+
+    # 6. Peligro de terreno: pendiente + rugosidad (pipeline/terrain_layers.py). Usa la pendiente
     #    del paso 2, así que si esa falló, este también. Deja además la rugosidad y el η de
     #    Pandolf, que no van al mapa pero los usa el modelo de consumibles.
     def hazard_step():
@@ -463,7 +533,7 @@ def main(argv=None):
         "note": "Solo rugosidad: en Pandolf la pendiente entra aparte como el grado G de la ruta.",
     }
 
-    # 6. Dosis de radiación (pipeline/radiation.py): base de RAD × sky-view, normalizada en
+    # 7. Dosis de radiación (pipeline/radiation.py): base de RAD × sky-view, normalizada en
     #    Bradbury Landing. Grilla de 100 m. Si falta el DEM de 200 m sigue, con un aviso.
     def dose_step():
         summary = radiation.compute(site["id"], dtm, work, data_dir=DATA_DIR)
@@ -503,8 +573,8 @@ def main(argv=None):
     # Un paso que falla no frena a los demás: el terrain.json dice qué quedó y qué no.
     failed = False
     for layer_id, fn in (("relief-slope", slope_step), ("relief-hillshade", hillshade_step),
-                         ("relief-contours", contours_step), ("survival-hazard", hazard_step),
-                         ("survival-dose", dose_step)):
+                         ("relief-contours", contours_step), ("coverage", coverage_step),
+                         ("survival-hazard", hazard_step), ("survival-dose", dose_step)):
         try:
             fn()
             layers[layer_id]["status"] = "ok"
@@ -513,7 +583,7 @@ def main(argv=None):
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
-    # 7. Tiles PNG para el mapa, desde los COG que quedaron bien.
+    # 8. Tiles PNG para el mapa, desde los COG que quedaron bien.
     missing_tools = tiles.faltan_herramientas()
     for layer_id, (folder, color) in TILED_LAYERS.items():
         layer = layers[layer_id]
@@ -531,7 +601,7 @@ def main(argv=None):
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
 
-    # 8. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    # 9. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
     #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
     #    25 cm/px y teselarla compite por disco y CPU con la descarga.
