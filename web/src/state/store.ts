@@ -53,6 +53,7 @@ interface AppState {
   setPlaces: (places: PlacesIndex | null, error?: string | null) => void;
   setCoverage: (coverage: Coverage | null) => void;
   togglePlaceKind: (kind: PlaceKind) => void;
+  setPlaceKinds: (kinds: Readonly<Record<PlaceKind, boolean>>) => void;
   setSelectedPlace: (id: string | null) => void;
   setCursor: (p: LatLon | null) => void;
   setPicked: (p: LatLon | null) => void;
@@ -112,6 +113,7 @@ export const useStore = create<AppState>((set) => ({
   setPlaces: (places, error = null) => set({ places, placesError: error }),
   setCoverage: (coverage) => set({ coverage }),
   togglePlaceKind: (kind) => set((s) => ({ placeKinds: { ...s.placeKinds, [kind]: !s.placeKinds[kind] } })),
+  setPlaceKinds: (placeKinds) => set({ placeKinds }),
   setSelectedPlace: (selectedPlaceId) => set({ selectedPlaceId }),
   setCursor: (cursor) => set({ cursor }),
   setPicked: (picked) => set({ picked }),

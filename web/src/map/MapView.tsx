@@ -24,6 +24,7 @@ import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
 import { useStore } from "../state/store";
+import { useEdu, type CameraSpec } from "../state/edu";
 import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
@@ -131,6 +132,10 @@ interface Props {
 export function MapView({ center, bbox, siteId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  /** Reencuadre pendiente de la lección: si el mapa cambia de tamaño justo después del vuelo. */
+  const refitRef = useRef<(() => void) | null>(null);
+  /** Sube en cada vuelo: solo el último traba el zoom al terminar (uno cortado, no). */
+  const flyGenRef = useRef(0);
   const setCursor = useStore((s) => s.setCursor);
   const setPicked = useStore((s) => s.setPicked);
   const layers = useStore((s) => s.layers);
@@ -199,7 +204,15 @@ export function MapView({ center, bbox, siteId }: Props) {
       else plan.addPoint(p);
     });
     mapRef.current = map;
+    // El contenedor cambia de tamaño sin que cambie la ventana (el modo
+    // entrenamiento esconde paneles): sin esto el mapa queda estirado.
+    const resize = new ResizeObserver(() => {
+      map.resize();
+      refitRef.current?.();
+    });
+    resize.observe(containerRef.current);
     return () => {
+      resize.disconnect();
       map.remove();
       mapRef.current = null;
       readyRef.current = false;
@@ -248,6 +261,60 @@ export function MapView({ center, bbox, siteId }: Props) {
     };
     whenReady(map, apply);
   }, [bbox]);
+
+  // 2a. Cámara del modo entrenamiento (src/edu/): vuela a donde pide el paso y,
+  //     si la lección lo pide, traba el zoom ahí. El mapa se sigue pudiendo mover.
+  const camera = useEdu((s) => s.camera);
+  const zoomLock = useEdu((s) => s.zoomLock);
+  const zoomRangeRef = useRef<readonly [number, number] | null>(null);
+  const zoomRange = (map: MapLibreMap) => {
+    zoomRangeRef.current ??= [map.getMinZoom(), map.getMaxZoom()];
+    return zoomRangeRef.current;
+  };
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !camera) return;
+    whenReady(map, () => {
+      // Destrabar antes de volar: con min = max el vuelo no puede cambiar el zoom.
+      const [min, max] = zoomRange(map);
+      setZoomRange(map, min, max);
+      const target = cameraTarget(camera.spec, bbox);
+      const fly = (duration: number) => {
+        const gen = ++flyGenRef.current;
+        map.once("moveend", () => {
+          if (gen === flyGenRef.current && useEdu.getState().zoomLock) lockZoom(map);
+        });
+        if (target.kind === "bounds") map.fitBounds(target.bounds, { padding: 80, duration, maxZoom: 17 });
+        else map.flyTo({ center: target.center, zoom: target.zoom, duration });
+      };
+      fly(1200);
+      // El paso suele mostrar paneles nuevos (perfil, veredicto) que achican el
+      // mapa recién después del vuelo: durante un rato, un cambio de tamaño reencuadra.
+      const until = Date.now() + 2500;
+      refitRef.current = () => {
+        if (Date.now() > until) {
+          refitRef.current = null;
+          return;
+        }
+        // Cortar el vuelo en curso antes de destrabar: su moveend ya no traba nada.
+        flyGenRef.current++;
+        map.stop();
+        setZoomRange(map, min, max);
+        fly(0);
+      };
+    });
+  }, [camera, bbox]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!zoomLock) {
+      const [min, max] = zoomRange(map);
+      setZoomRange(map, min, max);
+    } else if (!map.isMoving()) {
+      // Si está volando, lo traba el moveend del vuelo.
+      lockZoom(map);
+    }
+  }, [zoomLock]);
 
   // 2b. Contorno del terreno de 1 m (coverage.geojson). Sin esto, el usuario se
   //     entera de que un punto no sirve recién cuando el clic se rechaza. Línea
@@ -975,6 +1042,64 @@ export function MapView({ center, bbox, siteId }: Props) {
         : null}
     </div>
   );
+}
+
+type CameraTarget =
+  | { readonly kind: "bounds"; readonly bounds: [[number, number], [number, number]] }
+  | { readonly kind: "center"; readonly center: [number, number]; readonly zoom: number };
+
+/** Zoom al que se centra el hábitat cuando no hay ruta para encuadrar. */
+const HABITAT_ZOOM = 15;
+
+/** A dónde va la cámara de una lección: el sitio o la travesía del alumno, nunca un punto inventado. */
+function cameraTarget(spec: CameraSpec, bbox: Bbox): CameraTarget {
+  const site: CameraTarget = {
+    kind: "bounds",
+    bounds: [
+      [bbox.lon_min, bbox.lat_min],
+      [bbox.lon_max, bbox.lat_max],
+    ],
+  };
+  const { waypoints, result } = usePlan.getState();
+  const habitat = waypoints[0];
+  if (spec.kind === "site") return site;
+  if (spec.kind === "habitat") {
+    return habitat ? { kind: "center", center: [habitat.lon, habitat.lat], zoom: spec.zoom } : site;
+  }
+  // La ruta calculada si corresponde a estos puntos (con ida y vuelta trae una
+  // parada más: la vuelta al hábitat); si no, los puntos.
+  const stops = result?.route.stops.length ?? -1;
+  const legs = result && (stops === waypoints.length || stops === waypoints.length + 1) ? result.route.legs : [];
+  const pts: (readonly [number, number])[] =
+    legs.length > 0 ? legs.flatMap((l) => l.coordinates) : waypoints.map((w) => [w.lon, w.lat] as const);
+  if (pts.length >= 2) {
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    return {
+      kind: "bounds",
+      bounds: [
+        [Math.min(...xs), Math.min(...ys)],
+        [Math.max(...xs), Math.max(...ys)],
+      ],
+    };
+  }
+  return habitat ? { kind: "center", center: [habitat.lon, habitat.lat], zoom: HABITAT_ZOOM } : site;
+}
+
+function lockZoom(map: MapLibreMap): void {
+  const z = map.getZoom();
+  setZoomRange(map, z, z);
+}
+
+/**
+ * Cambia el rango de zoom. Los botones + y − de MapLibre se actualizan recién
+ * con un "move": el jumpTo en el lugar lo dispara (salvo en pleno vuelo, que
+ * no se corta; el vuelo mismo los actualiza).
+ */
+function setZoomRange(map: MapLibreMap, min: number, max: number): void {
+  map.setMinZoom(min);
+  map.setMaxZoom(max);
+  if (!map.isMoving()) map.jumpTo({ zoom: map.getZoom() });
 }
 
 const LANDMARKS_SOURCE = "route-landmarks";

@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { PROVENANCE_LABEL, type Provenance, type SourceInfo } from "../domain/provenance";
+import { HOW_WE_KNOW, INSTRUMENT_NOTE, PROVENANCE_LABEL, type Provenance, type SourceInfo } from "../domain/provenance";
 
 /**
  * Badge de procedencia: "MRO HiRISE · DERIVED".
@@ -8,7 +8,11 @@ import { PROVENANCE_LABEL, type Provenance, type SourceInfo } from "../domain/pr
  * escrita: nada crítico se comunica solo por color (casco, guantes, luz dura).
  * Tooltip con fuente, resolución y supuestos al pasar el mouse, con foco de
  * teclado o con un toque en pantalla táctil (un toque da foco pero no
- * `focus-visible`, por eso el tooltip abre con `focus` a secas).
+ * `focus-visible`, por eso el tooltip abre con `focus` a secas). Abre también
+ * con `focus-within`, para poder llegar con Tab al enlace de adentro.
+ *
+ * Arriba de todo, "¿Cómo lo sabemos?": qué quiere decir este tipo de dato en
+ * lenguaje llano, para cualquier edad.
  */
 const TONE: Record<Provenance, string> = {
   OBSERVED: "border-observed/60 bg-observed/15 text-observed",
@@ -45,9 +49,14 @@ export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Pr
       <span
         id={tipId}
         role="tooltip"
-        className={`invisible absolute z-30 w-60 rounded border border-line bg-panel p-2 text-left text-[11px] leading-snug font-normal whitespace-normal text-fg opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 ${align === "right" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
+        className={`invisible absolute z-30 w-60 rounded border border-line bg-panel p-2 text-left text-[11px] leading-snug font-normal whitespace-normal text-fg opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 group-focus-within:visible group-focus-within:opacity-100 ${align === "right" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
       >
-        <span className="block font-semibold">
+        <span className="block font-semibold">¿Cómo lo sabemos?</span>
+        <span className="mt-0.5 block">{HOW_WE_KNOW[source.provenance]}</span>
+        {source.instrument && INSTRUMENT_NOTE[source.instrument] ? (
+          <span className="mt-1 block text-muted">{INSTRUMENT_NOTE[source.instrument]}</span>
+        ) : null}
+        <span className="mt-1.5 block border-t border-line pt-1.5 font-semibold">
           {PROVENANCE_LABEL[source.provenance]}
           {who ? ` · ${who}` : " · cálculo local del frontend"}
         </span>
@@ -67,6 +76,14 @@ export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Pr
             ))}
           </span>
         ) : null}
+        <a
+          href="https://ciencia.nasa.gov/"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1.5 block text-rust underline underline-offset-2"
+        >
+          Más sobre Marte en ciencia.nasa.gov ↗
+        </a>
       </span>
     </span>
   );
