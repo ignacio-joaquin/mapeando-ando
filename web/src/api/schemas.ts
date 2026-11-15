@@ -252,6 +252,17 @@ export const RouteResponseSchema = z.object({
  * MMGIS → sol → fotos) es del backend; el frontend solo dibuja.
  * Documentado en docs/context.md §4.
  */
+export const RoverElementSchema = MeasuredValueSchema.extend({
+  element: z.string(),
+  note: z.string().optional(),
+});
+
+export const RoverCompositionSchema = z.object({
+  summary: z.string().optional(),
+  elements: z.array(RoverElementSchema),
+  note: z.string().optional(),
+});
+
 export const RoverPhotoSchema = z.object({
   /** Imagen para la ficha (tamaño chico o mediano). */
   url: z.string(),
@@ -269,6 +280,8 @@ export const RoverPhotoSchema = z.object({
   lon: z.number(),
   /** Distancia entre el punto pedido y el waypoint de la foto. */
   distance: MeasuredValueSchema,
+  /** Composición elemental medida por el rover en esa zona, si la API la reporta. */
+  composition: RoverCompositionSchema.optional(),
 });
 
 export const RoverPhotosSchema = z.object({
@@ -415,6 +428,8 @@ export type Robustness = z.infer<typeof RobustnessSchema>;
 export type RouteCost = z.infer<typeof RouteCostSchema>;
 export type RouteResponse = z.infer<typeof RouteResponseSchema>;
 export type Profile = z.infer<typeof ProfileSchema>;
+export type RoverElement = z.infer<typeof RoverElementSchema>;
+export type RoverComposition = z.infer<typeof RoverCompositionSchema>;
 export type RoverPhoto = z.infer<typeof RoverPhotoSchema>;
 export type RoverPhotos = z.infer<typeof RoverPhotosSchema>;
 export type IlluminationCatalog = z.infer<typeof IlluminationCatalogSchema>;
