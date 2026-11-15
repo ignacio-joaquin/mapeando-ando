@@ -677,7 +677,7 @@ function markerClass(kind: ReturnType<typeof waypointLabel>["kind"], open: boole
   const base =
     "grid size-7 cursor-grab place-items-center rounded-full border-2 text-xs font-bold shadow-lg active:cursor-grabbing";
   const tone =
-    kind === "origin"
+    kind === "origin" || kind === "return"
       ? "border-fg bg-ok text-bg"
       : kind === "destination"
         ? "border-fg bg-alert text-bg"
