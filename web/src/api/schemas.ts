@@ -117,6 +117,54 @@ export interface RouteRequest {
  */
 export const LegClassSchema = z.enum(["ok", "caution", "limit", "blocked", "unknown"]);
 
+/**
+ * Indicaciones por landmarks de un tramo (`legs[].directions[]`), PROPUESTA
+ * del ticket de navegación por landmarks. Documentado en docs/context.md §4.
+ *
+ * - `toward` / `keep_left` / `keep_right` / `turn` nombran un landmark que se
+ *   ve desde el tramo: `landmark` es obligatorio.
+ * - `fallback_sun` / `fallback_bearing` = no hay nada visible: `landmark` va
+ *   en null. Nunca se inventa un landmark para no caer en el respaldo.
+ */
+export const DirectionKindSchema = z.enum([
+  "toward",
+  "keep_left",
+  "keep_right",
+  "turn",
+  "fallback_sun",
+  "fallback_bearing",
+]);
+
+/** De dónde sale el landmark: catálogo IAU, cráteres de Robbins o pico extraído del DEM. */
+export const LandmarkCatalogSchema = z.enum(["IAU", "Robbins", "DEM"]);
+
+export const LandmarkSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  source: LandmarkCatalogSchema,
+  lat: z.number(),
+  lon: z.number(),
+});
+
+const FALLBACK_KINDS: readonly string[] = ["fallback_sun", "fallback_bearing"];
+
+export const DirectionSchema = z
+  .object({
+    kind: DirectionKindSchema,
+    /** La indicación lista para leer, con la distancia del tramo. */
+    text: z.string(),
+    landmark: LandmarkSchema.nullable(),
+    distance: MeasuredValueSchema,
+    /** Ángulo del landmark respecto de la marcha (0 = al frente, + = derecha). null en los respaldos. */
+    relative_bearing_deg: z.number().nullable(),
+    /** Fracción 0–1 del tramo desde la que se ve el landmark. `value: null` en los respaldos. */
+    visible_fraction: MeasuredValueSchema,
+  })
+  .refine((d) => FALLBACK_KINDS.includes(d.kind) === (d.landmark === null), {
+    message: "Una indicación con landmark necesita `landmark`; un respaldo (fallback_*) no lo lleva.",
+    path: ["landmark"],
+  });
+
 export const RouteLegSchema = z.object({
   from: z.number().int(),
   to: z.number().int(),
@@ -129,6 +177,8 @@ export const RouteLegSchema = z.object({
   max_slope: MeasuredValueSchema,
   /** % de la ruta en sombra a la hora de paso. Solo si hay pila de sombras de ese sol. */
   shadow_fraction: MeasuredValueSchema.optional(),
+  /** Indicaciones por landmarks. Opcional: el server todavía no las calcula. */
+  directions: z.array(DirectionSchema).optional(),
 });
 
 export const RouteStopSchema = z.object({
@@ -510,6 +560,10 @@ export type LegClass = z.infer<typeof LegClassSchema>;
 export type RouteLeg = z.infer<typeof RouteLegSchema>;
 export type RouteStop = z.infer<typeof RouteStopSchema>;
 export type LimitingFactor = z.infer<typeof LimitingFactorSchema>;
+export type DirectionKind = z.infer<typeof DirectionKindSchema>;
+export type LandmarkCatalog = z.infer<typeof LandmarkCatalogSchema>;
+export type Landmark = z.infer<typeof LandmarkSchema>;
+export type Direction = z.infer<typeof DirectionSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type SafetyLimit = z.infer<typeof SafetyLimitSchema>;
 export type Robustness = z.infer<typeof RobustnessSchema>;

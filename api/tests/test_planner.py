@@ -86,6 +86,17 @@ class TestTerreno:
         assert "profile" in body
         assert "Ojo" not in body["verdict"]["summary"]
 
+    def test_el_perfil_se_colorea_con_la_pendiente_del_veredicto(self, client, site):
+        # DTM plano (desnivel 0 entre muestras) pero pendiente de 2° en cada celda: si el
+        # perfil usara el desnivel entre muestras daría 0°. Tiene que dar la del veredicto,
+        # para no pintar verde un tramo que el veredicto bloquea.
+        write_terrain(site, flat(2.0), dtm=np.zeros((N, N), dtype=np.float32))
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        slopes = body["profile"]["slope_deg"]
+        assert slopes and all(s == pytest.approx(2.0) for s in slopes)
+        assert max(slopes) == pytest.approx(body["legs"][0]["max_slope"]["value"])
+
     def test_esquiva_una_pared_por_el_hueco(self, client, site):
         slope = flat()
         slope[:, 100] = 40.0          # pared de norte a sur

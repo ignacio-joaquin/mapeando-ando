@@ -15,6 +15,7 @@ import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { SafetyBreakdown } from "./SafetyBreakdown";
 import { VerdictCard } from "./VerdictCard";
+import { LegDirections } from "./LegDirections";
 import { StationPhoto } from "./StationPhoto";
 import {
   earthShort,
@@ -656,7 +657,7 @@ function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference
   const same = (v: MeasuredValue, r: MeasuredValue | undefined) => repeatedBadge(v, r);
   return (
     <div className="ml-3 flex gap-3 border-l-4 py-1.5 pl-3 text-[11px]" style={{ borderColor: color }}>
-      <div className="flex flex-col gap-0.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="font-semibold" style={{ color }}>
           {LEG_CLASS_LABEL[leg.class]}
         </span>
@@ -673,6 +674,7 @@ function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference
           Pendiente máx.
           <Measure data={leg.max_slope} format={(v) => v.toFixed(0)} />
         </span>
+        <LegDirections directions={leg.directions} />
       </div>
     </div>
   );

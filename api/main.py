@@ -170,7 +170,8 @@ def route_consumables(req: ConsumablesRequest):
     return result
 
 
-def _profile(segments: list[list[Step]], vertex_elev: list[float]) -> dict:
+def _profile(segments: list[list[Step]], vertex_elev: list[float],
+             step_slopes: list[list[float | None]] | None = None) -> dict:
     """Perfil de elevación de la ruta: la serie que ya se muestreó, expuesta.
 
     `_segments_from_request` densifica cada tramo cada `sample_step_m` y lee el
@@ -180,17 +181,28 @@ def _profile(segments: list[list[Step]], vertex_elev: list[float]) -> dict:
     Por muestra: distancia acumulada desde la salida, elevación y pendiente del
     sub-paso que termina ahí. La pendiente del primer punto es la del primer
     sub-paso, para que la serie tenga el mismo largo que las otras dos.
+
+    `step_slopes` (lo pasa el planificador 4D): la pendiente de cada sub-paso tal
+    como la juzga el veredicto, la máxima de la celda (`grid.peak`). Si viene, el
+    perfil se colorea con ella y no con el desnivel entre muestras: un escalón de
+    2 m a 30° dentro de una celda bloquea el paso, pero promediado entre muestras
+    da 5° y se pintaba verde, y el gráfico contradecía al NO-GO. Sin ese dato
+    (consumibles, o una celda sin pendiente), queda el desnivel entre muestras.
     """
     dist = [0.0]
     elev = [vertex_elev[0] if vertex_elev else 0.0]
     slope = []
     acumulada = 0.0
-    for seg in segments:
-        for s in seg:
+    for i, seg in enumerate(segments):
+        pendientes = step_slopes[i] if step_slopes is not None else [None] * len(seg)
+        for s, celda in zip(seg, pendientes):
             acumulada += s.dx_m
             dist.append(acumulada)
             elev.append(elev[-1] + s.dz_m)
-            slope.append(math.degrees(math.atan2(s.dz_m, s.dx_m)) if s.dx_m else 0.0)
+            if celda is not None:
+                slope.append(celda)
+            else:
+                slope.append(math.degrees(math.atan2(s.dz_m, s.dx_m)) if s.dx_m else 0.0)
     slope.insert(0, slope[0] if slope else 0.0)
 
     # Dónde empieza cada tramo dentro de la serie, para marcar las estaciones.
