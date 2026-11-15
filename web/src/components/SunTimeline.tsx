@@ -4,13 +4,18 @@ import type { CatalogSol, SolTiles } from "../api/schemas";
 import { MARS24_LTST, type SourceInfo } from "../domain/provenance";
 import {
   SHADOWS_LAYER_ID,
+  SOL_REUSE_MAX_DLS_DEG,
+  type SolReuse,
   type TimeRange,
   clamp,
   daylightRange,
   flatCrossings,
+  formatDeg,
   frameAt,
   okBands,
-  solFor,
+  pickSol,
+  reuseAssumptions,
+  shiftSolTiles,
   tileGroundM,
   timelineRange,
 } from "../map/sun";
@@ -49,6 +54,7 @@ export function SunTimeline({ siteId, lat, lon }: Props) {
   const departAt = usePlan((s) => s.departAt);
   const catalog = useSun((s) => s.catalog);
   const sol = useSun((s) => s.sol);
+  const reuse = useSun((s) => s.reuse);
   const load = useSun((s) => s.load);
   const time = useSun((s) => s.time);
   const playing = useSun((s) => s.playing);
@@ -76,20 +82,27 @@ export function SunTimeline({ siteId, lat, lon }: Props) {
     };
   }, [siteId, setCatalog, setSol, setTime, setLoad]);
 
-  // 2. El sol que contiene la hora de salida, y su tiles.json.
-  const target = solFor(catalog, departAt);
+  // 2. El sol de la hora de salida (o uno de la misma estación, llevado a esa
+  //    fecha: mismo criterio que el veredicto) y su tiles.json.
+  const pick = pickSol(catalog, departAt, lon);
+  const target = pick?.sol ?? null;
+  const pickReuse = pick?.reuse ?? null;
   const targetTiles = target?.tiles ?? null;
   const targetTag = target?.tag ?? null;
+  // Al minuto: dos salidas en el mismo sol dan el mismo corrimiento salvo ruido numérico.
+  const shiftKey = pickReuse ? Math.round(pickReuse.shiftMs / 60_000) : 0;
   useEffect(() => {
     if (!targetTiles) {
       setSol(null);
       return;
     }
-    if (useSun.getState().sol?.sol_tag === targetTag) return;
+    const cur = useSun.getState();
+    const curShift = cur.reuse ? Math.round(cur.reuse.shiftMs / 60_000) : 0;
+    if (cur.sol?.sol_tag === targetTag && curShift === shiftKey) return;
     let alive = true;
     fetchSolTiles(siteId, targetTiles)
       .then((s) => {
-        if (alive) setSol(s);
+        if (alive) setSol(pickReuse ? shiftSolTiles(s, pickReuse.shiftMs) : s, pickReuse);
       })
       .catch((e: unknown) => {
         if (alive) setLoad({ kind: "error", message: e instanceof Error ? e.message : String(e) });
@@ -97,7 +110,8 @@ export function SunTimeline({ siteId, lat, lon }: Props) {
     return () => {
       alive = false;
     };
-  }, [siteId, targetTiles, targetTag, setSol, setLoad]);
+    // `pickReuse` va por `shiftKey`: es un objeto nuevo en cada render.
+  }, [siteId, targetTiles, targetTag, shiftKey, setSol, setLoad]);
 
   // 3. La hora de salida mueve el deslizador (y cambiar de sol lo ubica). Si la
   //    salida es de noche, el deslizador queda de noche: no salta al amanecer.
@@ -144,13 +158,27 @@ export function SunTimeline({ siteId, lat, lon }: Props) {
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
           Sol y sombra
-          {sol ? <span className="ml-2 font-normal normal-case">sol {sol.sol_tag}</span> : null}
-          {sol?.sol.ls_deg != null ? (
-            <span className="ml-2 font-normal normal-case">Ls {sol.sol.ls_deg.toFixed(1)}°</span>
+          {sol ? (
+            <span className="ml-2 font-normal normal-case">
+              {reuse ? `sombras del sol ${sol.sol_tag}, reutilizado` : `sol ${sol.sol_tag}`}
+            </span>
+          ) : null}
+          {reuse ? (
+            <span className="ml-2 font-normal normal-case">Ls {formatDeg(reuse.targetLs)}°</span>
+          ) : sol?.sol.ls_deg != null ? (
+            <span className="ml-2 font-normal normal-case">Ls {formatDeg(sol.sol.ls_deg)}°</span>
           ) : null}
         </h2>
-        {sol ? <ProvenanceBadge source={tilesSource(sol, lat)} /> : null}
+        {sol ? <ProvenanceBadge source={tilesSource(sol, lat, reuse)} /> : null}
       </div>
+
+      {sol && reuse ? (
+        <p className="mb-1 text-[11px] text-warn">
+          ⚠ Estimado: no hay sombras calculadas para este sol. Se muestran las del sol {reuse.sourceTag}, de la
+          misma estación (ΔLs {formatDeg(reuse.dls, 1, true)}°, declinación del Sol {formatDeg(reuse.ddecl, 2)}°
+          distinta), a la misma hora solar local.
+        </p>
+      ) : null}
 
       {load.kind === "error" ? (
         <p className="text-[11px] text-alert">No se pudo leer la pila de sombras. {load.message}</p>
@@ -177,7 +205,7 @@ export function SunTimeline({ siteId, lat, lon }: Props) {
   );
 }
 
-function tilesSource(sol: SolTiles, lat: number): SourceInfo {
+function tilesSource(sol: SolTiles, lat: number, reuse: SolReuse | null): SourceInfo {
   const p = sol.provenance;
   // Lo que se ve no es la resolución de la pila: los tiles llegan hasta un zoom
   // y, más cerca, el mapa agranda el último nivel.
@@ -187,13 +215,15 @@ function tilesSource(sol: SolTiles, lat: number): SourceInfo {
       ? [`Se dibuja con tiles hasta z${z} (~${tileGroundM(z, lat).toFixed(1)} m/px); más cerca, el mapa agranda el último nivel`]
       : [];
   return {
-    provenance: p.provenance,
+    // Las sombras de otro sol no son las de este: es una estimación.
+    provenance: reuse ? "MODELED" : p.provenance,
     mission: p.mission,
     instrument: p.instrument,
     ...(p.resolution ? { resolution: p.resolution } : {}),
-    ...(p.source ? { source: p.source } : {}),
+    ...(p.source ? { source: reuse ? `${p.source} · reutilizado por estación` : p.source } : {}),
     assumptions: [
       ...(p.assumptions ?? []),
+      ...(reuse ? reuseAssumptions(reuse) : []),
       "Una máscara por hora; entre horas se muestra la más cercana",
       "Noche: Sol bajo el horizonte plano",
       ...drawn,
@@ -207,7 +237,8 @@ function NoSolForDeparture({ sols }: { readonly sols: readonly CatalogSol[] }) {
   return (
     <div className="text-[11px]">
       <p className="text-warn">
-        No hay sombras precomputadas para el sol de la hora de salida. Elegí una salida en un sol calculado:
+        No hay sombras precomputadas para el sol de la hora de salida, ni para uno de la misma estación (±
+        {SOL_REUSE_MAX_DLS_DEG}° Ls). Elegí una salida en un sol calculado:
       </p>
       {usable.length === 0 ? (
         <p className="mt-1 text-muted">Ningún sol de este sitio está teselado todavía.</p>
@@ -225,6 +256,7 @@ function NoSolForDeparture({ sols }: { readonly sols: readonly CatalogSol[] }) {
                 className="rounded border border-line px-2 py-0.5 text-fg hover:border-rust"
               >
                 sol {s.tag}
+                {s.ls_deg != null ? <span className="text-muted"> · Ls {formatDeg(s.ls_deg)}°</span> : null}
               </button>
             </li>
           ))}

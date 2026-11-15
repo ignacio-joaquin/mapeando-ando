@@ -65,26 +65,40 @@ def write_terrain(data_dir: Path, slope: np.ndarray, dtm: np.ndarray | None = No
 
 
 def write_shadow_stack(data_dir: Path, bands: dict[int, np.ndarray] | None = None, site: str = "jezero",
-                       tag: str = SOL_TAG) -> Path:
-    """Pila de 24 bandas: todo al sol salvo las que se pasan en `bands` (1 sol, 0 sombra, 255 sin dato)."""
+                       tag: str = SOL_TAG, start: float = SOL_START, ls_deg: float | None = None,
+                       center_lon: float | None = None) -> Path:
+    """Pila de 24 bandas: todo al sol salvo las que se pasan en `bands` (1 sol, 0 sombra, 255 sin dato).
+
+    Sin `ls_deg` y `center_lon` es una pila vieja: solo sirve para su propio sol. Con
+    ellos, `start` tiene que ser la medianoche local de verdad para que las horas LTST
+    de las bandas sean ciertas (ver test_sol_reuse.py)."""
     d = data_dir / "output" / site / "illumination" / tag
     d.mkdir(parents=True, exist_ok=True)
     stack = np.ones((N_BANDS, N, N), dtype=np.uint8)
     for b, arr in (bands or {}).items():
         stack[b - 1] = arr
     _write(d / "shadow_hourly.tif", stack, "uint8", 255)
+
+    def bt(b: int) -> float:
+        return start + (b - 1) * BAND_S
+
+    sol = {"start_utc": iso(start), "end_utc": iso(start + N_BANDS * BAND_S),
+           "flat_sunrise": {"utc": iso(bt(7)), "ltst": "06:00"},
+           "flat_sunset": {"utc": iso(bt(19)), "ltst": "18:00"}}
+    if ls_deg is not None:
+        sol["ls_deg"] = ls_deg
     index = {
         "site": site,
-        "sol": {"start_utc": iso(SOL_START), "end_utc": iso(SOL_START + N_BANDS * BAND_S),
-                "flat_sunrise": {"utc": iso(band_time(7)), "ltst": "06:00"},
-                "flat_sunset": {"utc": iso(band_time(19)), "ltst": "18:00"}},
+        "sol": sol,
         "shadow_hourly": {"file": "shadow_hourly.tif", "step_min": 60,
-                          "bands": [{"band": b, "ltst": f"{b - 1:02d}:00", "utc": iso(band_time(b)),
+                          "bands": [{"band": b, "ltst": f"{b - 1:02d}:00", "utc": iso(bt(b)),
                                      "sun_el_deg": 30.0, "lit_fraction": 1.0} for b in range(1, N_BANDS + 1)]},
         "grid": {"shape": [N, N], "pixel_ground_m": [round(PX * math.cos(math.radians(LAT0)), 3), PX]},
         "provenance": {"ephemeris": "NAIF SPICE: test"},
         "assumptions": ["Sol puntual (centro del disco); sin refracción ni polvo."],
     }
+    if center_lon is not None:
+        index["site_center"] = {"lat": LAT0, "lon": center_lon, "elev_m": 0.0}
     (d / "index.json").write_text(json.dumps(index))
     return d
 

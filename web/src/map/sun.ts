@@ -9,22 +9,122 @@
  */
 import type { CatalogSol, IlluminationCatalog, ShadowBand, SolTiles } from "../api/schemas";
 import { MARS_RADIUS_M } from "../mars/constants";
+import { declinationDeg, dlsDeg, localMidnightBefore, marsTime } from "../mars/mars24";
 
 export const SHADOWS_LAYER_ID = "survival-shadows";
 /** Velo sobre el sitio cuando el Sol está bajo el horizonte (capa de MapLibre). */
 export const SHADOWS_NIGHT_LAYER_ID = "shadow-night";
+
+/**
+ * Distancia de estación máxima para mostrar las sombras de otro sol (docs/context.md §5).
+ * Es el mismo tope que usa el veredicto (SOL_REUSE_MAX_DLS_DEG de api/illumination.py):
+ * si cambia uno, cambia el otro.
+ */
+export const SOL_REUSE_MAX_DLS_DEG = 2;
 
 export interface TimeRange {
   readonly start: number;
   readonly end: number;
 }
 
+/** Sombras de otro sol de la misma estación, llevadas a la fecha pedida. */
+export interface SolReuse {
+  readonly sourceTag: string;
+  readonly sourceLs: number;
+  readonly targetLs: number;
+  /** Ls de destino menos Ls de origen, entre −180 y 180. */
+  readonly dls: number;
+  /** Diferencia de declinación del Sol entre los dos soles (°). */
+  readonly ddecl: number;
+  /** Cuánto se corren los instantes de la pila (ms, destino − origen). */
+  readonly shiftMs: number;
+}
+
+export interface SolPick {
+  readonly sol: CatalogSol;
+  /** null = es el sol de la hora pedida. */
+  readonly reuse: SolReuse | null;
+}
+
 const ms = (iso: string) => new Date(iso).getTime();
 
-/** El sol del catálogo que contiene el instante, o null si no se precomputó. */
-export function solFor(catalog: IlluminationCatalog | null, t: Date): CatalogSol | null {
+/**
+ * El sol del catálogo para el instante: el que lo contiene o, si no se
+ * precomputó, el de la misma estación (|ΔLs| ≤ tope, cualquier año marciano)
+ * más cercano. Mismo criterio que stack_for_time de api/illumination.py, así el
+ * deslizador y el veredicto usan el mismo sol. `lonEast`: meridiano de la
+ * medianoche local (el centro del sitio).
+ */
+export function pickSol(catalog: IlluminationCatalog | null, t: Date, lonEast: number): SolPick | null {
+  if (!catalog) return null;
   const x = t.getTime();
-  return catalog?.sols.find((s) => ms(s.start_utc) <= x && x < ms(s.end_utc)) ?? null;
+  const exact = catalog.sols.find((s) => ms(s.start_utc) <= x && x < ms(s.end_utc));
+  if (exact) return { sol: exact, reuse: null };
+
+  const midnight = localMidnightBefore(t, lonEast);
+  const targetLs = marsTime(new Date(midnight)).ls;
+  let best: SolPick | null = null;
+  for (const s of catalog.sols) {
+    if (s.ls_deg == null) continue; // pila vieja: solo sirve para su propio sol
+    const dls = dlsDeg(s.ls_deg, targetLs);
+    if (Math.abs(dls) > SOL_REUSE_MAX_DLS_DEG) continue;
+    if (best?.reuse && Math.abs(best.reuse.dls) <= Math.abs(dls)) continue;
+    best = {
+      sol: s,
+      reuse: {
+        sourceTag: s.tag,
+        sourceLs: s.ls_deg,
+        targetLs,
+        dls,
+        ddecl: Math.abs(declinationDeg(targetLs) - declinationDeg(s.ls_deg)),
+        shiftMs: midnight - ms(s.start_utc),
+      },
+    };
+  }
+  return best;
+}
+
+/** Número con coma decimal. */
+export function formatDeg(x: number, digits = 1, signed = false): string {
+  return x.toLocaleString("es-AR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+    signDisplay: signed ? "always" : "auto",
+  });
+}
+
+/** Supuestos de una pila reutilizada: los mismos que declara la API (api/illumination.py). */
+export function reuseAssumptions(r: SolReuse): string[] {
+  return [
+    `Sombras del sol ${r.sourceTag} (Ls ${formatDeg(r.sourceLs)}°) usadas para la fecha pedida ` +
+      `(Ls ${formatDeg(r.targetLs)}°, ΔLs ${formatDeg(r.dls, 1, true)}°, tope ±${SOL_REUSE_MAX_DLS_DEG}°): ` +
+      "misma estación y misma hora solar local, de cualquier año marciano",
+    `A la misma hora solar local solo cambia la declinación del Sol: ${formatDeg(r.ddecl, 2)}° de ` +
+      "diferencia (Mars24). Las sombras con el Sol bajo son las que más se apartan",
+    "Amanecer y atardecer: los de ese sol, a la misma hora solar local",
+  ];
+}
+
+const shiftIso = (iso: string, d: number) => new Date(ms(iso) + d).toISOString();
+
+/**
+ * La misma pila con todos sus instantes corridos: misma hora solar local, otro
+ * sol. Los tiles (plantillas por hora LTST) no cambian.
+ */
+export function shiftSolTiles(sol: SolTiles, shiftMs: number): SolTiles {
+  if (shiftMs === 0) return sol;
+  const cross = (c: SolTiles["sol"]["flat_sunrise"]) => (c ? { ...c, utc: shiftIso(c.utc, shiftMs) } : c);
+  return {
+    ...sol,
+    sol: {
+      ...sol.sol,
+      start_utc: shiftIso(sol.sol.start_utc, shiftMs),
+      end_utc: shiftIso(sol.sol.end_utc, shiftMs),
+      flat_sunrise: cross(sol.sol.flat_sunrise),
+      flat_sunset: cross(sol.sol.flat_sunset),
+    },
+    bands: sol.bands.map((b) => ({ ...b, utc: shiftIso(b.utc, shiftMs) })),
+  };
 }
 
 /** Bandas teseladas sin error, ordenadas por hora. */

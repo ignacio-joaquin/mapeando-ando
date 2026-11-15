@@ -24,12 +24,12 @@ export const LEG_CLASS_LABEL: Record<LegClass, string> = {
 
 export type WaypointKind = "origin" | "station" | "destination";
 
-/** A = salida, B = llegada, 1, 2… = estaciones. Con un solo punto, es la salida. */
+/** A = hábitat (salida), B = destino, 1, 2… = paradas. Con un solo punto, es el hábitat. */
 export function waypointLabel(
   index: number,
   total: number,
 ): { readonly kind: WaypointKind; readonly short: string; readonly long: string } {
-  if (index === 0) return { kind: "origin", short: "A", long: "Salida" };
-  if (index === total - 1) return { kind: "destination", short: "B", long: "Llegada" };
-  return { kind: "station", short: String(index), long: `Estación ${index}` };
+  if (index === 0) return { kind: "origin", short: "A", long: "Hábitat (salida)" };
+  if (index === total - 1) return { kind: "destination", short: "B", long: "Destino" };
+  return { kind: "station", short: String(index), long: `Parada ${index}` };
 }

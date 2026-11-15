@@ -17,6 +17,7 @@ import math
 import os
 import re
 import subprocess
+import time
 import sys
 import urllib.parse
 import urllib.request
@@ -25,6 +26,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 RAW = DATA_DIR / "raw"
+
+# Identificable siempre (skill mapeando-geodata): si algo sale mal, el host sabe quién es.
+UA = "mapeando-ando/1.0 (NASA Space Apps 2026; descarga dirigida de datos PDS)"
+BACKOFF_S = 600          # ante 429/503: el server pide aire, se espera en serio
+BACKOFF_TRIES = 3
+NET_RETRY_S = 30         # caída de red (timeout, conexión): reintento corto
+NET_TRIES = 8
 
 
 def log(msg):
@@ -44,7 +52,9 @@ class _Links(html.parser.HTMLParser):
 
 
 def discover(index_url, pattern, pick="first"):
-    with urllib.request.urlopen(index_url, timeout=60) as r:
+    polite_wait(index_url)
+    req = urllib.request.Request(index_url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=60) as r:
         page = r.read().decode("utf-8", "replace")
     p = _Links()
     p.feed(page)
@@ -56,16 +66,50 @@ def discover(index_url, pattern, pick="first"):
     return hits[-1] if pick == "last" else hits[0]
 
 
+# Crawl-delay del robots.txt de cada host (segundos entre pedidos). PDS Geosciences: 10 s.
+CRAWL_DELAY = {"pds-geosciences.wustl.edu": 10}
+_last_request = {}
+
+
+def polite_wait(url):
+    """Espera lo que pida el Crawl-delay del host desde el último pedido a ese mismo host."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    delay = CRAWL_DELAY.get(host, 0)
+    wait = _last_request.get(host, -1e9) + delay - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    _last_request[host] = time.monotonic()
+
+
 def fetch(url, dest):
+    """Baja url a dest, reanudando. Los reintentos los maneja este loop, no curl: así un 429/503
+    espera BACKOFF_S (no los 10 s de --retry-delay) y cada intento pasa por el Crawl-delay."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    log(f"GET {url} -> {dest}")
-    # --retry solo reintenta errores transitorios (timeouts, 5xx); un 404 falla enseguida
-    cmd = ["curl", "--fail", "-L", "-C", "-", "--retry", "8", "--retry-delay", "10",
-           "--retry-connrefused", "-sS", "-o", str(dest), url]
-    rc = subprocess.run(cmd).returncode
-    # curl returns 33 when the server ignores range on an already complete file
-    if rc not in (0, 33):
-        raise RuntimeError(f"curl exit {rc} for {url}")
+    cmd = ["curl", "--fail", "-L", "-C", "-", "-A", UA, "-sS", "-w", "%{http_code}",
+           "-o", str(dest), url]
+    backoffs = net_errors = 0
+    while True:
+        polite_wait(url)
+        log(f"GET {url} -> {dest}")
+        out = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+        rc, code = out.returncode, (out.stdout or "").strip()[-3:]
+        # curl devuelve 33 cuando el server ignora el range sobre un archivo ya completo
+        if rc in (0, 33):
+            return
+        if code in ("429", "503") and backoffs < BACKOFF_TRIES:
+            backoffs += 1
+            log(f"HTTP {code} de {url}: espero {BACKOFF_S} s ({backoffs}/{BACKOFF_TRIES})")
+            time.sleep(BACKOFF_S)
+            continue
+        # 6 DNS, 7 conexión, 18 transferencia parcial, 28 timeout, 52/56 conexión cortada; y los
+        # 500/502/504 pasajeros del server o de un proxy, que antes reintentaba curl --retry.
+        if (rc in (6, 7, 18, 28, 52, 56) or code in ("500", "502", "504")) and net_errors < NET_TRIES:
+            net_errors += 1
+            log(f"curl exit {rc} (HTTP {code or '?'}) para {url}: reintento en {NET_RETRY_S} s "
+                f"({net_errors}/{NET_TRIES})")
+            time.sleep(NET_RETRY_S)
+            continue
+        raise RuntimeError(f"curl exit {rc} (HTTP {code or '?'}) for {url}")
 
 
 def gdal_summary(path):
