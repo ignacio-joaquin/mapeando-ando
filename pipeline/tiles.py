@@ -16,12 +16,12 @@ que ninguno tenga que saber del otro.
   python pipeline/tiles.py --vector /data/output/jezero/contours.gpkg \
                            --out /data/output/jezero/contours.geojson
 
-precompute.py lo llama solo para la pendiente y el sombreado (raster_a_tiles) y anota
+precompute.py lo llama para la pendiente, el sombreado y el peligro (raster_a_tiles) y anota
 el zoom y los límites en terrain.json; a mano sirve para cualquier otro raster.
 
 El nombre de la carpeta de salida es CONTRATO: tiene que ser el último segmento
 de la plantilla `tiles` de web/src/map/layers.ts (`hillshade/`, `slope/`,
-`ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
+`hazard/`, `ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
 capa queda deshabilitada.
 
 Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr),
@@ -47,8 +47,16 @@ RAMPAS = {
     "pendiente": [
         (0, 10, "47 125 79"),     # transitable        #2f7d4f
         (10, 20, "224 162 74"),   # con cuidado        #e0a24a
-        (20, 30, "224 122 74"),   # límite del rover   #e07a4a
-        (30, 90, "224 86 74"),    # no transitable     #e0564a
+        (20, 25, "224 122 74"),   # límite del rover   #e07a4a
+        (25, 90, "224 86 74"),    # no transitable     #e0564a  (25° = límite duro, api/safety.py)
+    ],
+    # Clases de pipeline/terrain_layers.py (hazard.tif) = leyenda de survival-hazard en
+    # web/src/map/layers.ts. Mismos colores que la pendiente: el mismo nivel de riesgo se ve igual.
+    "peligro": [
+        (0, 1, "47 125 79"),      # bajo               #2f7d4f
+        (1, 2, "224 162 74"),     # medio              #e0a24a
+        (2, 3, "224 122 74"),     # alto               #e07a4a
+        (3, 4, "224 86 74"),      # no transitable     #e0564a
     ],
     # Capas de refugio (pipeline/shelter.py). Un color con cuatro números lleva su alfa.
     "cielo": [
@@ -70,6 +78,19 @@ RAMPAS = {
         (30, 100000, "224 86 74"),    # > 30 min           #e0564a
     ],
 }
+# Dosis (dose_rate.tif, µSv/h) con escala FIJA de 0 a la base de RAD (0,64 mSv/día = 26,7 µSv/h),
+# en cuartos, y un solo tono: no se estira al rango del sitio para no dramatizar diferencias que
+# son menores que la incertidumbre de la medición. = leyenda de survival-dose en layers.ts.
+RAMPAS["dosis"] = [
+    (0.0, 6.67, "232 228 240"),     # < 6,7 µSv/h        #e8e4f0
+    (6.67, 13.33, "190 178 216"),   # 6,7–13,3           #beb2d8
+    (13.33, 20.0, "143 125 186"),   # 13,3–20            #8f7dba
+    (20.0, 1000.0, "96 76 150"),    # ≥ 20 (base 26,7)   #604c96
+]
+
+# Rampas de un raster POR CLASES: al reproyectar se usa el vecino más cercano, porque un
+# bilineal entre la clase 0 y la 3 inventa un 1,5 que no existe.
+RAMPAS_POR_CLASES = {"peligro"}
 
 # Un GeoJSON más pesado que esto no abre con poca banda.
 MAX_GEOJSON_MB = 20
@@ -164,19 +185,22 @@ def publicar_carpeta(nueva: Path, destino: Path) -> None:
 
 
 def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoom=None, te=None,
-                   warp="bilinear") -> dict:
+                   warp=None) -> dict:
     """Tesela `src` en `outdir` y devuelve lo que el mapa necesita para pedir los tiles.
 
     Los intermedios van a una carpeta oculta al lado de `outdir` y se borran al final.
     Una capa por clases (`color`) se remuestrea con el vecino más cercano: un promedio
     mezcla las clases e inventa colores que no están en la leyenda. `warp` es el remuestreo
-    al reproyectar: "near" para máscaras (0/1), donde un bilineal inventaría 0,5.
+    al reproyectar: "near" para máscaras (0/1), donde un bilineal inventaría 0,5. Sin `warp`,
+    "near" para las rampas de RAMPAS_POR_CLASES y bilineal para el resto.
     """
     work = outdir.parent / f".{outdir.name}.work"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
         web = work / "web.tif"
+        if warp is None:
+            warp = "near" if color in RAMPAS_POR_CLASES else "bilinear"
         a_crs_web(src, web, resampling=warp, te=te)
         if color:
             coloreado = work / "color.tif"
@@ -214,7 +238,7 @@ def main():
     ap.add_argument("--out", type=Path, required=True,
                     help="carpeta de tiles, o archivo .geojson si es vectorial")
     ap.add_argument("--color", choices=sorted(RAMPAS),
-                    help="rampa de color por rangos (para pendiente)")
+                    help="rampa de color por rangos (pendiente o peligro)")
     ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
                     help="tope de zoom; por defecto lo deduce gdal2tiles del tamaño del pixel")
     ap.add_argument("--resampling", default=None,

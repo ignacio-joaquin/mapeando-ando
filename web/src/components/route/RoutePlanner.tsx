@@ -9,6 +9,7 @@ import { planKey, useFreshRoute, usePlan, type Waypoint } from "../../state/plan
 import { useStore } from "../../state/store";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
+import { SafetyBreakdown } from "./SafetyBreakdown";
 import { VerdictCard } from "./VerdictCard";
 import { StationPhoto } from "./StationPhoto";
 import {
@@ -149,6 +150,7 @@ export function RoutePlanner() {
         <>
           <VerdictCard verdict={route.verdict} />
           {result?.example ? <ExampleNotice /> : null}
+          <SafetyBreakdown verdict={route.verdict} cost={route.cost} />
           <button
             type="button"
             onClick={() => window.print()}

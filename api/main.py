@@ -1,9 +1,8 @@
 """API de Mapa Marciano.
 
-Expone el estado del servidor, el inventario de datos por sitio y
-/api/route/consumables, que calcula los consumibles del traje sobre una ruta dada.
-/api/route queda reservado para el planificador 4D (hoy responde 501). Acá se suman
-las point queries y el pathfinding.
+Expone el estado del servidor, el inventario de datos por sitio, la point query,
+/api/route (planificador 4D, api/planner.py), /api/route/consumables (consumibles
+del traje sobre una ruta ya armada) y /api/illumination/window (sol/sombra precomputados).
 """
 import json
 import math
@@ -13,9 +12,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .consumables import Step, SuitParams, route_consumption
+from .illumination import IlluminationNotReady, parse_utc, read_window, stack_for_tag
+from .planner import plan_route
 from .terrain import MARS_RADIUS_M, TerrainError, densify, haversine_m, sample_dtm
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
@@ -79,6 +80,7 @@ class RoutePoint(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-360, le=360, description="Grados este, 0–360 o −180–180")
     elev_m: Optional[float] = Field(None, description="Si falta en todos los puntos, se lee del DTM")
+    dwell_min: float = Field(0.0, ge=0, le=600, description="Tiempo que el astronauta se queda en este punto")
 
 
 class SuitOverrides(BaseModel):
@@ -149,13 +151,16 @@ def _segments_from_request(req: ConsumablesRequest) -> tuple[list[list[Step]], l
 @app.post("/api/route/consumables")
 def route_consumables(req: ConsumablesRequest):
     """Consumibles del traje por tramo sobre una ruta ya armada (lista de puntos).
-    Cada tramo va de points[i] a points[i+1]. Todo el resultado es MODELED.
+    Cada tramo va de points[i] a points[i+1]. Un punto intermedio puede traer `dwell_min`:
+    la permanencia se suma al tramo que llega a ese punto, igual que en /api/route. En la
+    salida y en la llegada final no cuenta. Todo el resultado es MODELED.
 
     Antes vivía en /api/route; se mudó para dejarle esa ruta al planificador 4D,
     cuyo contrato (docs/context.md §4) ya consume web/."""
     params = SuitParams(cargo_kg=req.cargo_kg, **req.suit.model_dump())
     segments, elev, elev_source = _segments_from_request(req)
-    result = route_consumption(segments, req.speed_m_s, params)
+    dwell_s = [p.dwell_min * 60.0 for p in req.points[1:-1]] + [0.0]
+    result = route_consumption(segments, req.speed_m_s, params, dwell_s)
     for i, seg in enumerate(result["segments"]):
         a, b = req.points[i], req.points[i + 1]
         seg["from"] = {"lat": a.lat, "lon": a.lon, "elev_m": elev[i]}
@@ -358,16 +363,94 @@ def point(site_id: str, lat: float, lon: float):
     }
 
 
-@app.post("/api/route")
-def route():
-    """Planificador 4D (A* con costo según la hora de llegada). Todavía no existe.
+# ------------------------------------------------------------------ /api/route
 
-    Responde 501 a propósito: es la señal con la que web/ pasa al planificador
-    de ejemplo y lo avisa en pantalla. No lee el cuerpo, así un pedido con el
-    contrato de docs/context.md §4 no termina en 422.
+
+class PlannerWaypoint(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-360, le=360, description="Grados este, 0–360 o −180–180")
+    task: Optional[str] = Field(None, max_length=200)
+    dwell_min: float = Field(0, ge=0, le=600)
+
+
+class PlannerRequest(BaseModel):
+    """Contrato de docs/context.md §4 (RouteRequest en web/src/api/schemas.ts)."""
+    site: str = Field(min_length=1, max_length=64)
+    depart_utc: str = Field(description="ISO 8601 en UTC, por ejemplo 2026-11-15T12:00:00.000Z")
+    waypoints: list[PlannerWaypoint] = Field(min_length=2, max_length=20)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _contrato_viejo(cls, data):
+        if isinstance(data, dict) and "points" in data and "waypoints" not in data:
+            raise ValueError("Ese es el contrato de consumibles: usá POST /api/route/consumables")
+        return data
+
+
+@app.post("/api/route")
+def route(req: PlannerRequest):
+    """Planificador 4D: A* sobre la pendiente del sitio con costo según la hora de
+    llegada a cada celda (sombra de la pila precomputada). Modelo en api/planner.py.
+
+    Sitio desconocido o sin manifest: 404, y web/ pasa al planificador de ejemplo.
+    Con datos a medias responde igual: los tramos sin terreno van en línea recta
+    como `unknown` y el veredicto dice qué no se evaluó.
     """
-    raise HTTPException(
-        501,
-        "El planificador 4D todavía no está implementado. Para consumibles sobre "
-        "una ruta ya armada: POST /api/route/consumables.",
-    )
+    m = _manifest()
+    if m is None or req.site not in m["sites"]:
+        raise HTTPException(404, "Sitio desconocido o datos todavía no descargados")
+    try:
+        parse_utc(req.depart_utc)
+    except ValueError:
+        raise HTTPException(422, "depart_utc tiene que ser una fecha ISO 8601, por ejemplo 2026-11-15T12:00:00Z")
+    try:
+        out = plan_route(req.site, req.depart_utc, [w.model_dump() for w in req.waypoints], DATA_DIR, REPO_DIR)
+    except OSError as e:
+        raise HTTPException(503, f"No se pudo leer un raster del sitio: {e}")
+    inputs = out.pop("_profile_inputs", None)
+    if inputs is not None:
+        out["profile"] = _profile(*inputs)
+    return out
+
+
+# ------------------------------------------------------- /api/illumination/window
+
+
+class IlluminationPoint(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-360, le=360)
+
+
+class IlluminationWindowRequest(BaseModel):
+    site_id: str = Field(min_length=1, max_length=64)
+    sol_tag: Optional[str] = Field(None, pattern=r"^\d{8}T\d{4}Z$",
+                                   description="Carpeta del sol, por ejemplo 20261115T0649Z; si falta, el último")
+    ltst: Optional[str] = Field(None, description="Hora solar local HH:MM, múltiplo del paso de la pila")
+    band: Optional[int] = Field(None, ge=1, description="Banda del GeoTIFF, en lugar de ltst")
+    p1: IlluminationPoint
+    p2: IlluminationPoint
+
+
+@app.post("/api/illumination/window")
+def illumination_window(req: IlluminationWindowRequest):
+    """Sol/sombra precomputados en el rectángulo entre dos puntos, para una hora.
+
+    Solo lee la pila que escribe pipeline/illumination.py. Celdas: true al sol,
+    false en sombra, null sin dato. El tamaño de celda sale de la grilla real.
+    """
+    if (req.ltst is None) == (req.band is None):
+        raise HTTPException(422, "Mandá ltst o band (uno de los dos)")
+    m = _manifest()
+    if m is None or req.site_id not in m["sites"]:
+        raise HTTPException(404, "Sitio desconocido o datos todavía no descargados")
+    try:
+        stack = stack_for_tag(DATA_DIR, req.site_id, req.sol_tag)
+    except IlluminationNotReady as e:
+        raise HTTPException(503, str(e))
+    try:
+        band = req.band if req.band is not None else stack.band_for_ltst(req.ltst)
+        return read_window(stack, band, (req.p1.lat, req.p1.lon), (req.p2.lat, req.p2.lon))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except OSError as e:
+        raise HTTPException(503, f"No se pudo leer la pila de sombras: {e}")

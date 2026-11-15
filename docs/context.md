@@ -29,13 +29,15 @@ Todo lo demás es secundario. Tres consecuencias prácticas:
 sites/      1 JSON por sitio (jezero, gale) + common.json   → sumar un sitio = sumar un archivo
 pipeline/   Python: descarga + precómputo (rasterio, numpy, spiceypy, GDAL)
 api/        FastAPI: estado, inventario, consumibles (/api/route/consumables) y (en camino) point query + /api/route
-web/        Frontend. Hoy: página de estado en HTML plano. Va: React 19 + MapLibre
+web/        Frontend: React 19 + MapLibre (Vite). En el server se compila con deploy/build-web.sh
 deploy/     bootstrap, nginx, systemd, auto-deploy
 reference/  tablas de referencia versionadas (ej. dosis en superficie)
 docs/       documentación del proyecto (este archivo)
 ```
 
 **El flujo de datos, en una línea:** `sites/*.json` declara qué bajar → `pipeline/` baja a `/data/raw/` y precomputa a `/data/output/` → nginx sirve eso en `/tiles/` → la API lee `/data/manifest.json` y responde consultas puntuales → `web/` dibuja.
+
+**Build y deploy del frontend** (resuelto 2026-11-14): el auto-deploy compila `web/` en el server cuando cambia (`deploy/build-web.sh`, Node 22). Compila fuera del repo (`/var/lib/mapeando-web`), publica cada build en `/var/www/mapeando/releases/<sha>` y nginx sirve el symlink `/var/www/mapeando/current`. Si el build falla, sigue la versión anterior y el error queda en `/var/log/mapeando-deploy.log`. El CI corre `npm run build` en cada PR para que no llegue a `main` algo que no compila.
 
 **La regla de reparto:** lo pesado se precomputa en el pipeline; la API solo lee e indexa; el frontend solo dibuja. Si algo tarda más de ~1 s en un request, va al pipeline.
 
@@ -100,26 +102,43 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 }
 ```
 
-- `provenance`: `OBSERVED` (medido por un instrumento), `DERIVED` (calculado de forma determinista desde un dato observado) o `MODELED` (sale de un modelo con supuestos; debería traer `assumptions`).
+- `provenance`: `OBSERVED` (medido por un instrumento), `DERIVED` (calculado de forma determinista desde un dato observado), `MODELED` (sale de un modelo con supuestos; debería traer `assumptions`) o `ASSUMED` (valor elegido por el equipo, sin fuente citable todavía; hoy, los límites duros del veredicto).
 - `value: null` = el dato falta. Nunca se rellena.
 - `mission` / `instrument` en `null` solo para cálculos locales sin fuente de misión.
 - `resolution`, `source` y `assumptions` son opcionales y van al tooltip del badge.
 - Lo valida `MeasuredValueSchema` en `web/src/api/schemas.ts`.
 
-**`POST /api/route` (propuesta, la consume el planificador de `web/`).** Es el endpoint del planificador 4D. El modelo de costo sigue siendo decisión abierta (§5); esto fija solo qué entra y qué sale. Lo valida `RouteResponseSchema` en `web/src/api/schemas.ts`. Hasta que el 4D exista, la API responde **501**. Los consumibles del traje sobre una ruta ya armada (Pandolf, PR #2) se mudaron a `POST /api/route/consumables`, con su contrato de siempre (ver README).
+**`POST /api/route` (la consume el planificador de `web/`).** Es el endpoint del planificador 4D (`api/planner.py`; el modelo de costo está en §5). Lo valida `RouteResponseSchema` en `web/src/api/schemas.ts`. Los consumibles del traje sobre una ruta ya armada (Pandolf, PR #2) se mudaron a `POST /api/route/consumables`, con su contrato de siempre (ver README).
 
 - Entra: `{ site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }] }`. El primero es la salida, el último la llegada, el resto estaciones en orden. Salida y llegada pueden ser puntos distintos.
 - Sale: `{ site, depart_utc, legs, stops, verdict }`.
-  - `legs[]`: `from`, `to`, `coordinates` (`[lon, lat]`), `class` (`ok` | `caution` | `limit` | `blocked` | `unknown`) y `distance`, `duration`, `bearing`, `max_slope` como valor con procedencia. `unknown` = no se pudo evaluar el terreno; se dibuja punteado, nunca como `ok`.
+  - `legs[]`: `from`, `to`, `coordinates` (`[lon, lat]`), `class` (`ok` | `caution` | `limit` | `blocked` | `unknown`) y `distance`, `duration`, `bearing`, `max_slope` como valor con procedencia. `unknown` = no se pudo evaluar el terreno; se dibuja punteado, nunca como `ok`. Opcional: `shadow_fraction` (% de la ruta en sombra a la hora de paso), solo si hay pila de sombras para ese sol.
+  - `profile` (opcional): perfil de elevación, igual que en `/api/route/consumables`. Solo viene si todos los puntos de la ruta tienen cota del DTM.
   - `stops[]`: `index`, `lat`, `lon`, `task`, `arrive_utc`, `depart_utc` (null en la salida y en la llegada final, respectivamente) y `o2_remaining`, `battery_remaining`, `dose_accumulated`, `margin` (min) como valor con procedencia.
-  - `verdict`: `status` (`GO` | `NO_GO`), `limiting_factor` (`o2` | `battery` | `dose` | `daylight` | `terrain` | null), `summary` (una frase en español) y `margin` (min).
-- Mientras el server responda 404/405/501, el frontend usa un planificador de ejemplo (`web/src/api/routeFixture.ts`) y lo avisa en pantalla.
+  - `verdict`: `status` (`GO` | `CAUTION` | `NO_GO`), `limiting_factor` (`o2` | `battery` | `dose` | `daylight` | `terrain` | `contact` | `calories` | null), `summary` (una frase en español) y `margin` (min). Además, opcionales (el planificador de ejemplo no los manda):
+    - `score`: valor con procedencia, 0–100 pts.
+    - `limits[]`: por límite duro, `id`, `label`, `status` (`ok` | `broken` | `not_evaluated` | `undefined`), `complete`, `note`, `margin` (1 − usado/límite, recortado a −1), y `used` y `limit` como valores con procedencia. `limit` va `ASSUMED` cuando el número entero es del equipo; O2, batería y luz van `MODELED` (capacidad del traje, atardecer) con la parte del equipo en `assumptions`.
+    - `robustness`: `{ passed, evaluated, scenarios: [{ id, label, status: pass | fail | not_evaluated, limiting_factor, score, note }] }`.
+  - `cost` (opcional): `{ formula, unit, base_minutes, total_minutes, factors: [{ id, label, weight, active, minutes, note }] }`, el desglose del costo del A\* por factor.
+  - Modelo, valores y pesos: `docs/seguridad.md`.
+- Sitio desconocido o sin manifest: **404**, y el frontend usa el planificador de ejemplo (`web/src/api/routeFixture.ts`) y lo avisa en pantalla (también ante 405/501). Con datos a medias responde 200: los tramos que no se pudieron evaluar van en línea recta como `unknown` y el `summary` dice qué faltó ("Ojo: …").
+
+**`POST /api/illumination/window` (lo lee quien depura la pila de sombras; hoy no lo consume `web/`).** Sol/sombra precomputados en el rectángulo entre dos puntos, para una hora. Entra `{ site_id, sol_tag?, ltst | band, p1: {lat, lon}, p2: {lat, lon} }`; `sol_tag` es la carpeta del sol (`AAAAMMDDTHHMMZ`, default: el último). Sale `values[fila][col]` con `true` (sol), `false` (sombra) o `null` (sin dato), `cell_ground_m` real, `decimation` si se remuestreó y la procedencia. Sin pila precomputada responde 503: la API nunca corre el pipeline.
+
+**Sombras por hora para el mapa (las consume el deslizador del sol de `web/`).** Las escribe `pipeline/shadow_tiles.py` a partir de la pila de `illumination.py`; nginx las sirve en `/tiles/<sitio>/illumination/`. Las plantillas son relativas a `/tiles/<sitio>/`, como en `terrain.json`. Las validan `IlluminationCatalogSchema` y `SolTilesSchema` en `web/src/api/schemas.ts`.
+
+- `illumination/catalog.json`: `sols[]` con `tag`, `start_utc`, `end_utc`, `ls_deg`, `flat_sunrise`/`flat_sunset` (`{ utc, ltst }`), `step_min` y `tiles` (ruta del `tiles.json` del sol, o `null` si está calculado pero sin teselar).
+- `illumination/<sol>/tiles.json`: `sol_tag`, `step_min`, `max_zoom` (el `--max-zoom` de la corrida), `sol`, `provenance` (DERIVED), `warnings` y `bands[]`: por hora con el Sol sobre el horizonte, `band`, `ltst`, `utc`, `sun_az_deg`, `sun_el_deg`, `lit_fraction` y `status`; si `ok`, `template` (`illumination/<sol>/tiles/<HHMM>/{z}/{x}/{y}.png`), `minzoom`, `maxzoom` y `bounds`.
+- Colores de los PNG: sombra `RGBA 12 10 9 175`, sol transparente, sin dato `RGBA 120 130 150 110`, fuera del DTM transparente. Si cambian, cambia la leyenda de `survival-shadows` en `web/src/map/layers.ts`.
+- El deslizador recorre el sol entero (medianoche a medianoche LTST) y "reproducir" va de amanecer a atardecer; los dos se marcan con horizonte plano y la UI lo dice. Las horas de noche no se teselan: con el Sol bajo el horizonte plano, el mapa pone un velo sobre el sitio, arriba de todo raster. No se interpola entre horas: el mapa muestra la máscara más cercana y dice de qué hora es.
 
 **`GET /tiles/{site}/terrain.json` (lo escribe `pipeline/precompute.py`, lo lee `web/`).** Índice de las capas de relieve de un sitio; el frontend prende una capa solo si este archivo dice que está lista. Lo valida `TerrainIndexSchema` en `web/src/api/schemas.ts`.
 
-- `{ site, generated_at, mode, source, radius_m, gdal, grid, layers, warnings }`. `layers` va indexado por id de capa (`relief-slope`, `relief-hillshade`, `relief-contours`, más `dtm`).
+- `{ site, generated_at, mode, source, radius_m, gdal, grid, layers, warnings }`. `layers` va indexado por id de capa (`relief-slope`, `relief-hillshade`, `relief-contours`, `survival-hazard`, `survival-dose`, más `dtm`, `terrain-roughness`, `terrain-factor` y `survival-skyview`, que no se dibujan en el mapa).
 - Por capa: `file`, `status` (`ok` | `error`), `error?`, `resolution?` (píxel real sobre el suelo), `provenance`, `assumptions?` y, si va teselada, `tiles`: `{ status: "ok", template, minzoom, maxzoom, bounds: [oeste, sur, este, norte] }` o `{ status: "error", error }`.
-- El nombre de la carpeta de tiles (`slope/`, `hillshade/`) es el último segmento de la plantilla `tiles` de `web/src/map/layers.ts`.
+- `survival-hazard` (lo escribe `pipeline/terrain_layers.py`): `hazard.tif` uint8 con clases 0 bajo, 1 medio, 2 alto, 3 no transitable y 255 sin dato (`classes`, `nodata`); los cortes van en `params`, y los de pendiente son los de `SLOPE_CUTS` de `api/planner.py`. Tiles en `hazard/`.
+- `survival-dose` (lo escribe `pipeline/radiation.py`, como paso de `precompute.py`): `dose_rate.tif` float32 con la dosis equivalente en µSv/h (`unit`), en una grilla propia de 100 m (no la del DTM), NaN sin dato. `display: "budget"`: se muestra como presupuesto de dosis de la travesía y el raster es una capa secundaria (§5). `method` describe el modelo y `summary` trae el rango real (`h0_usv_h`, `skyview_reference`, `skyview_median`, `dose_usv_h` con p1/p50/p99, `spread_vs_uncertainty`, `warnings`). `api/planner.py` (`_route_dose_rate`) la lee solo con `status: "ok"`; si no, usa la tasa de base de RAD. Tiles en `dose/`, con la escala fija de `RAMPAS["dosis"]` de `pipeline/tiles.py`, que es la leyenda de `survival-dose` en `web/src/map/layers.ts`: si cambia una, cambia la otra. `survival-skyview` (`skyview.tif`, fracción de cielo 0–1, misma grilla, DERIVED) no se dibuja.
+- El nombre de la carpeta de tiles (`slope/`, `hillshade/`, `hazard/`, `dose/`) es el último segmento de la plantilla `tiles` de `web/src/map/layers.ts`.
 - Sin `terrain.json` (404), las capas de relieve quedan en "esperando el pipeline".
 
 **`GET /api/sites/{site}/photos?lat=&lon=` (propuesta, MAP-33).** Fotos reales del rover más cercanas a un punto, para la ficha de cada estación. El cruce (punto → waypoint MMGIS → sol → fotos crudas de mars.nasa.gov, prefiriendo Navcam / Mastcam / Mastcam-Z) es del backend; el frontend solo dibuja. Lo valida `RoverPhotosSchema` en `web/src/api/schemas.ts`.
@@ -139,10 +158,19 @@ Código, ids, endpoints y nombres de archivo en **inglés**. Comentarios, docs, 
 
 Cosas que hay que resolver en equipo; quien las resuelva, lo escribe acá.
 
-- **Build del frontend y deploy.** nginx sirve `/opt/mapeando-ando/web` directo y `deploy/update.sh` **no corre `npm build`**. Al pasar a React hay que decidir: build en CI y commitear `web/dist` (hoy está en `.gitignore`), o agregar el build al auto-deploy en `deploy/update.sh` y apuntar nginx a `web/dist`. Hoy no está resuelto: si se mergea React a `main` sin esto, el sitio se rompe.
-- **Formato de tiles de salida**: resuelto para el relieve (2026-11-14): raster pre-teselado. El COG es la fuente de valores (point query, perfil) y lo que se dibuja son tiles XYZ PNG en `/data/output/<sitio>/<capa>/{z}/{x}/{y}.png`, que genera `pipeline/tiles.py` (lat/lon de Marte etiquetado como EPSG:4326 + `gdal2tiles --xyz`). `precompute.py` lo corre para pendiente y sombreado y anota zoom y límites en `terrain.json`. Las capas por clases (pendiente) se remuestrean con vecino más cercano en el pipeline y en el mapa, para no inventar colores fuera de la leyenda. Sigue abierto para sol y sombra: hoy son COG + `index.json` en `illumination/`, sin teselar.
-- **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa. Parcial (2026-11-14): sol y sombra se precomputan por sol, con fecha y cantidad de soles como parámetros (`--start`, `--sols`) y paso de 1 h LTST. Falta decidir qué soles usa la demo. Ver `docs/illumination.md`.
-- **Modelo de rutas**: qué pesa en el costo (pendiente, rugosidad, dosis, luz) y con qué datos se valida. Parcial (2026-11-14): los minutos al refugio (`pipeline/shelter.py`) usan Tobler escalado a 0,8 m/s en plano y bloquean > 30°, como costo provisorio. Ver `docs/refugios.md`.
+- **Formato de tiles de salida**: resuelto para el relieve (2026-11-14): raster pre-teselado. El COG es la fuente de valores (point query, perfil) y lo que se dibuja son tiles XYZ PNG en `/data/output/<sitio>/<capa>/{z}/{x}/{y}.png`, que genera `pipeline/tiles.py` (lat/lon de Marte etiquetado como EPSG:4326 + `gdal2tiles --xyz`). `precompute.py` lo corre para pendiente, sombreado y peligro y anota zoom y límites en `terrain.json`. Las capas por clases (pendiente, peligro) se remuestrean con vecino más cercano en el pipeline y en el mapa, para no inventar colores fuera de la leyenda. Sol y sombra, resuelto (2026-11-14): tiles PNG por hora en `illumination/<sol>/tiles/<HHMM>/`, que genera `pipeline/shadow_tiles.py` (vecino más cercano, hasta z15 por defecto), con `catalog.json` y `tiles.json` como índices (contrato en §4).
+- **Alcance del planificador 4D**: qué paso temporal y qué rango de soles se precomputa. Parcial (2026-11-14): sol y sombra se precomputan por sol, con fecha y cantidad de soles como parámetros (`--start`, `--sols`) y paso de 1 h LTST. El mapa muestra el sol que contiene la hora de salida del planificador (2026-11-14); falta decidir qué soles se precomputan para la demo y correrlos con `illumination.py` + `shadow_tiles.py`. Ver `docs/illumination.md`.
+- **Dosis de radiación** (2026-11-14): resuelto. Se muestra como **presupuesto de dosis de la travesía**, no como mapa de zonas: la dosis por celda (`survival-dose`, `pipeline/radiation.py`) varía menos que la incertidumbre de RAD (±19 %). El planificador la promedia sobre la ruta; el raster es una capa secundaria con escala fija de 0 a la base. Unidad: dosis equivalente (mSv, µSv/h). Detalle en `docs/radiation.md`.
+- **Modelo de rutas**: resuelto en una segunda versión (2026-11-14), falta validarlo con datos reales. El detalle está en `docs/seguridad.md`.
+  - **A\*** (`api/planner.py`) sobre `slope.tif`, con costo = Σ Δt · (1 + Σ w_k · r_k(celda, hora de llegada)).
+  - **Factores activos:** pendiente (w = 2), sombra según la banda de `shadow_hourly.tif` más cercana a la hora de llegada (w = 1) y sin línea de vista al hábitat (w = 1).
+  - **Factores con peso pero sin capa todavía:** suelo suelto y radiación por terreno. La rugosidad ya tiene capa (`roughness.tif`, σ en m, de `precompute.py`), pero el A\* todavía no la lee.
+  - **Celdas que no se pisan:** las que superan la pendiente máxima (límite duro, 25°). Se mide con la **f-ésima pendiente más alta** de los f × f píxeles de `slope.tif` de la celda: una franja que la cruza bloquea, una roca suelta no.
+  - **Corte único de 25°** (2026-11-14): el A\*, la clase `blocked` del tramo, la leyenda del mapa y los tiles de pendiente cortan en 25° (antes 30°). Los tiles ya generados hay que regenerarlos con `precompute.py`.
+  - **Ventana:** cada tramo se resuelve con margen (≥ 300 m), promediado a ≤ 300 × 300 celdas.
+  - **Veredicto** (`api/safety.py`): límites duros sin compensación (pendiente, reserva de O2 y batería, regreso antes del atardecer, minutos sin contacto, dosis, calorías), puntaje = 100 · el margen más chico y robustez en escenarios de estrés. GO / CAUTION / NO-GO.
+  - **Minutos al refugio** (`pipeline/shelter.py`, aparte del A\*): Tobler escalado a 0,8 m/s en plano y el mismo corte de 25°, como costo provisorio. Ver `docs/refugios.md`.
+  - **Pendiente de decidir:** los valores de los límites son `ASSUMED` hasta tener fuente; el equipo tiene que confirmarlos o cambiarlos, incluido el tope de calorías, que hoy está sin definir.
 
 ---
 
