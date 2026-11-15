@@ -221,17 +221,25 @@ export const LAYERS: readonly LayerSpec[] = [
     group: "supervivencia",
     unit: "hora solar local",
     source: {
-      provenance: "MODELED",
+      provenance: "DERIVED",
       mission: "MRO",
-      instrument: "HiRISE DTM + SPICE",
-      resolution: "1 m/px",
-      source: "Geometría solar (SPICE) sobre el DTM HiRISE",
-      assumptions: ["Solo geometría: no considera polvo ni atmósfera"],
+      instrument: "HiRISE DTM + NAIF SPICE",
+      // La pila sale a la resolución del DTM, pero lo que se dibuja son tiles
+      // hasta z15: ~2,5 m/px en Marte (el badge del deslizador da el número del sitio).
+      resolution: "pila a la del DTM; se dibuja hasta z15 (~2,5 m/px)",
+      source: "pipeline/illumination.py: geometría solar (SPICE) sobre el DTM",
+      assumptions: [
+        "Sol puntual, sin refracción ni polvo; solo sol directo",
+        "Una máscara por hora: la hora la elige el deslizador del sol",
+        "De noche (Sol bajo el horizonte plano), un velo sobre todo el sitio",
+      ],
     },
+    // Colores de pipeline/shadow_tiles.py (COLORES). Al sol no se pinta.
     legend: [
-      { color: "#161412", label: "en sombra" },
-      { color: "#e0a24a", label: "al sol" },
+      { color: "#0c0a09", label: "en sombra" },
+      { color: "#788296", label: "sin dato" },
     ],
+    // No se usa: las horas salen de illumination/<sol>/tiles.json (map/sun.ts).
     tiles: "/tiles/{site}/shadows/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: false,
