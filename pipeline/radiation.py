@@ -1,186 +1,253 @@
 #!/usr/bin/env python3
-"""Capa de dosis de radiación (MSL RAD · MODELED) y datos para el presupuesto de dosis.
+"""Dosis de radiación por celda (MSL RAD · MODELED) para el presupuesto de la travesía.
 
-Modelo:
-  dosis(celda) = D0 × sky_view(celda)
-  D0       = dosis absorbida en superficie medida por MSL RAD en Gale (reference/rad_surface_dose.json)
-  sky_view = fracción del ángulo sólido del cielo que no tapa el terreno
-           = 1 − promedio_azimut( sin(ángulo del horizonte) )
-  Supone radiación (GCR) isótropa desde el cielo. El horizonte se busca en 32 direcciones
-  hasta ~60 km, con el DTM cerca y el DEM global de 200 m lejos, y con la curvatura de Marte.
+Modelo (detalle y limitaciones en docs/radiation.md):
 
-Salidas en /data/output/<sitio>/:
+    dosis(celda) = H0 × sky_view(celda) / sky_view(Bradbury Landing)
+
+    H0        dosis equivalente en superficie medida por MSL RAD en Gale
+              (reference/rad_surface_dose.json): 0,64 mSv/día = 26,7 µSv/h
+    sky_view  fracción del ángulo sólido del cielo que no tapa el terreno
+              = 1 − promedio sobre azimuts de sin(ángulo del horizonte)
+
+Se normaliza por el sky-view del lugar donde RAD midió: así el modelo da exactamente H0 en
+Bradbury Landing y no cuenta dos veces el horizonte de Gale. Supone radiación isótropa desde
+el cielo; el horizonte se busca en 32 direcciones hasta 60 km, con el DTM cerca y el DEM
+global de 200 m lejos, en metros reales sobre el suelo y con la curvatura de Marte.
+
+Lo llama precompute.py como un paso más (escritura atómica, terrain.json y tiles). Escribe:
   skyview.tif     fracción de cielo visible (0-1), grilla de 100 m
-  dose_rate.tif   dosis absorbida, mGy/día, grilla de 100 m (para el planificador)
-  radiation.json  rango real de valores, decisión de visualización (capa o presupuesto),
-                  tasa por hora para el presupuesto de la travesía, método y limitaciones.
-
-Uso:
-  python pipeline/radiation.py --site jezero
+  dose_rate.tif   dosis equivalente, µSv/h, grilla de 100 m (la usa api/planner.py)
 """
-import argparse
+from __future__ import annotations
+
 import json
 import math
 import os
-import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import rasterio #!!
+import rasterio
 from rasterio.transform import from_origin
-from rasterio.warp import Resampling, reproject
+from rasterio.warp import Resampling, reproject, transform
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+REFERENCE_FILE = ROOT / "reference" / "rad_surface_dose.json"
 
-RADIO_MARTE_M = 3_389_500        # radio medio (issue: distancias con 3389.5 km)
-RES_M = 100                      # la dosis no varía a escala de metros
-N_AZIMUTS = 32
-DIST_MAX_M = 60_000              # hasta dónde se busca el horizonte
-N_DISTANCIAS = 200               # muestras por dirección (espaciadas en forma geométrica)
-BADGE = "MSL RAD · MODELED"
+# Radio del proyecto: el de sites/common.json (regla 6 de docs/context.md).
+MARS_RADIUS_M = float(json.loads((ROOT / "sites" / "common.json").read_text())["dem200"]["radius_m"])
+MARS_LONGLAT = f"+proj=longlat +R={MARS_RADIUS_M:.0f} +no_defs"
+
+RES_M = 100                 # la dosis no cambia a escala de metros
+N_AZIMUTHS = 32
+MAX_DIST_M = 60_000         # hasta dónde se busca el horizonte
+N_DISTANCES = 200           # muestras por dirección, espaciadas en forma geométrica
+BAD_Z_M = 1e5               # mismo filtro de nodata que precompute.py
+
+# Donde midió RAD: Bradbury Landing, en Gale (primeros ~300 soles, Hassler et al. 2014).
+RAD_SITE = {"site": "gale", "name": "Bradbury Landing", "lat": -4.5895, "lon": 137.4417}
 
 
-def sky_view(z_grande, filas, cols, res):
-    """Fracción de cielo visible para las celdas (filas, cols) de z_grande (m, NaN = sin dato)."""
-    z0 = z_grande[filas, cols]
-    H, W = z_grande.shape
-    pasos = np.unique(np.round(np.geomspace(1, DIST_MAX_M / res, N_DISTANCIAS)).astype(int)) #.astype?
-    suma_sen = np.zeros(z0.shape) #.zeros?
-    for k in range(N_AZIMUTS):
-        az = 2 * math.pi * k / N_AZIMUTS             # 0 = norte, sentido horario
-        dfil, dcol = -math.cos(az), math.sin(az)     # las filas crecen hacia el sur
-        hmax = np.zeros(z0.shape)                    # horizonte mínimo: 0° (el plano)
-        for p in pasos:
-            f = np.round(filas + dfil * p).astype(int)
-            c = np.round(cols + dcol * p).astype(int)
-            dentro = (f >= 0) & (f < H) & (c >= 0) & (c < W)
-            if not dentro.any(): #.any?
+class MissingInput(Exception):
+    """Falta el DTM del sitio."""
+
+
+@dataclass
+class Grid:
+    z: np.ndarray            # alturas en la grilla grande (DTM cerca, DEM 200 m lejos)
+    has_dtm: np.ndarray      # celdas con DTM
+    transform: object
+    crs: object
+    roi: tuple[int, int, int, int]   # fila, columna, alto, ancho del área del DTM
+    kx: float                # metros sobre el suelo por metro de proyección, este-oeste
+
+
+# ------------------------------------------------------------------ datos de entrada
+
+def load_reference():
+    """H0 (mSv/día), su incertidumbre y la cita, de reference/rad_surface_dose.json."""
+    ref = json.loads(REFERENCE_FILE.read_text())
+    eq = ref["dose_equivalent_mSv_per_day"]
+    return {"h0_msv_day": float(eq["value"]), "h0_unc_msv_day": float(eq["uncertainty"]),
+            "citation": ref["reference"], "period": ref["period"]}
+
+
+def find_dem200(site_id, data_dir=None):
+    """dem200_crop.tif del sitio (lo recorta download.py), o None si no está."""
+    data_dir = Path(data_dir or DATA_DIR)
+    manifest = data_dir / "manifest.json"
+    if manifest.exists():
+        files = json.loads(manifest.read_text()).get("sites", {}).get(site_id, {}).get("files", [])
+        entry = next((f for f in files if f.get("key") == "dem200_crop"), None)
+        if entry and entry.get("status") == "ok" and (data_dir / entry["path"]).exists():
+            return data_dir / entry["path"]
+    local = data_dir / "raw" / site_id / "dem200_crop.tif"
+    return local if local.exists() else None
+
+
+def ground_scale_x(crs, x, y):
+    """Metros sobre el suelo por metro de proyección en sentido este-oeste.
+
+    En equirectangular con paralelo estándar lat_ts, un "metro" de la proyección mide
+    cos(lat)/cos(lat_ts) sobre el suelo (en Jezero, 0,948). Norte-sur no cambia.
+    """
+    lat_ts = float(crs.to_dict().get("lat_ts", 0.0)) if crs.is_projected else 0.0
+    _, lats = transform(crs, MARS_LONGLAT, [x], [y])
+    return math.cos(math.radians(lats[0])) / math.cos(math.radians(lat_ts))
+
+
+# ------------------------------------------------------------------ sky-view
+
+def sky_view(z, rows, cols, res_m, kx=1.0):
+    """Fracción de cielo visible en las celdas (rows, cols) de z (m, NaN = sin dato)."""
+    z0 = z[rows, cols]
+    H, W = z.shape
+    dists = np.geomspace(res_m, MAX_DIST_M, N_DISTANCES)
+    sum_sin = np.zeros(z0.shape)
+    for k in range(N_AZIMUTHS):
+        az = 2 * math.pi * k / N_AZIMUTHS                 # 0 = norte, sentido horario
+        # Paso en metros sobre el suelo -> desplazamiento en píxeles de la proyección.
+        dcol, drow = math.sin(az) / (res_m * kx), -math.cos(az) / res_m
+        hmax = np.zeros(z0.shape)                         # horizonte mínimo: el plano (0°)
+        for d in dists:
+            r = np.rint(rows + drow * d).astype(int)
+            c = np.rint(cols + dcol * d).astype(int)
+            inside = (r >= 0) & (r < H) & (c >= 0) & (c < W)
+            if not inside.any():
                 break
-            d = p * res
             zs = np.full(z0.shape, np.nan)
-            zs[dentro] = z_grande[f[dentro], c[dentro]]
-            caida = d * d / (2 * RADIO_MARTE_M)      # curvatura: el terreno lejano "baja"
+            zs[inside] = z[r[inside], c[inside]]
+            drop = d * d / (2 * MARS_RADIUS_M)            # curvatura: lo lejano "baja"
             with np.errstate(invalid="ignore"):
-                ang = np.arctan2(zs - caida - z0, d)
-            hmax = np.fmax(hmax, ang)                # fmax ignora NaN
-        suma_sen += np.sin(hmax)
-    return 1 - suma_sen / N_AZIMUTS
+                hmax = np.fmax(hmax, np.arctan2(zs - drop - z0, d))   # fmax ignora NaN
+        sum_sin += np.sin(hmax)
+    return 1 - sum_sin / N_AZIMUTHS
 
 
-def grilla_combinada(dtm_path, dem200_path, pad_m):
-    """DEM de 100 m: DTM (promediado) donde hay, DEM global de 200 m alrededor."""
-    with rasterio.open(dtm_path) as dtm:
-        crs, b = dtm.crs, dtm.bounds
-        x0, y1 = b.left - pad_m, b.top + pad_m
-        W = int(math.ceil((b.right - b.left + 2 * pad_m) / RES_M))
-        H = int(math.ceil((b.top - b.bottom + 2 * pad_m) / RES_M))
-        t = from_origin(x0, y1, RES_M, RES_M)
-        z_dtm = np.full((H, W), np.nan, dtype="float64")
-        reproject(rasterio.band(dtm, 1), z_dtm, dst_transform=t, dst_crs=crs,
-                  dst_nodata=np.nan, resampling=Resampling.average)
-        # celdas del área de interés (donde hay DTM)
-        roi = (int((b.top - y1) / -RES_M), int((b.left - x0) / RES_M))
-        roi_hw = (int(math.ceil((b.top - b.bottom) / RES_M)), int(math.ceil((b.right - b.left) / RES_M)))
+def _read_valid(arr):
+    return np.where(np.isfinite(arr) & (np.abs(arr) < BAD_Z_M), arr, np.nan)
+
+
+def build_grid(bounds, crs, dtm_path, dem200_path, pad_m):
+    """Grilla de RES_M m alineada con el borde oeste y norte de `bounds`.
+
+    Alturas del DTM (promediadas) donde hay; alrededor, el DEM global de 200 m.
+    """
+    left, bottom, right, top = bounds
+    n_pad = int(math.ceil(pad_m / RES_M))
+    roi_w = int(math.ceil((right - left) / RES_M))
+    roi_h = int(math.ceil((top - bottom) / RES_M))
+    W, H = roi_w + 2 * n_pad, roi_h + 2 * n_pad
+    t = from_origin(left - n_pad * RES_M, top + n_pad * RES_M, RES_M, RES_M)
+
+    z_dtm = np.full((H, W), np.nan)
+    if dtm_path is not None:
+        with rasterio.open(dtm_path) as src:
+            reproject(rasterio.band(src, 1), z_dtm, dst_transform=t, dst_crs=crs,
+                      dst_nodata=np.nan, resampling=Resampling.average)
+        z_dtm = _read_valid(z_dtm)
     z = z_dtm.copy()
-    if dem200_path.exists():
-        with rasterio.open(dem200_path) as dem:
-            z_dem = np.full((H, W), np.nan, dtype="float64")
-            reproject(rasterio.band(dem, 1), z_dem, dst_transform=t, dst_crs=crs,
+    if dem200_path is not None:
+        z_dem = np.full((H, W), np.nan)
+        with rasterio.open(dem200_path) as src:
+            reproject(rasterio.band(src, 1), z_dem, dst_transform=t, dst_crs=crs,
                       dst_nodata=np.nan, resampling=Resampling.bilinear)
-        z = np.where(np.isnan(z), z_dem, z)
-    else:
-        print(f"AVISO: no encuentro {dem200_path}; el horizonte lejano no se incluye", flush=True)
-    return z, z_dtm, t, roi, roi_hw, crs
+        z = np.where(np.isnan(z), _read_valid(z_dem), z)
+    cx, cy = (left + right) / 2, (bottom + top) / 2
+    return Grid(z, ~np.isnan(z_dtm), t, crs, (n_pad, n_pad, roi_h, roi_w), ground_scale_x(crs, cx, cy))
 
 
-def procesar(site_id, out_base):
-    t0 = time.time()
-    site = json.loads((ROOT / "sites" / f"{site_id}.json").read_text())
-    ref = json.loads((ROOT / "reference" / "rad_surface_dose.json").read_text())
-    D0 = ref["absorbed_dose_mGy_per_day"]["value"]
-    D0_err = ref["absorbed_dose_mGy_per_day"]["uncertainty"]
-    H0 = ref["dose_equivalent_mSv_per_day"]["value"]
+def point_sky_view(lat, lon, dtm_path, dem200_path):
+    """Sky-view de un punto suelto (para la normalización en Bradbury desde otro sitio)."""
+    src_path = dtm_path or dem200_path
+    with rasterio.open(src_path) as ds:
+        crs = ds.crs
+    if not crs.is_projected:
+        return None
+    xs, ys = transform(MARS_LONGLAT, crs, [lon], [lat])
+    x, y = xs[0], ys[0]
+    g = build_grid((x - RES_M / 2, y - RES_M / 2, x + RES_M / 2, y + RES_M / 2), crs,
+                   dtm_path, dem200_path, MAX_DIST_M)
+    r0, c0, _, _ = g.roi
+    if np.isnan(g.z[r0, c0]):
+        return None
+    return float(sky_view(g.z, np.array([r0]), np.array([c0]), RES_M, g.kx)[0])
 
-    carpeta = out_base / site_id
-    dtm_path = carpeta / "dtm.tif"
+
+# ------------------------------------------------------------------ cálculo del sitio
+
+def compute(site_id, dtm_path, out_dir, data_dir=None, pad_m=MAX_DIST_M):
+    """Escribe skyview.tif y dose_rate.tif (GTiff) en out_dir. Devuelve un resumen."""
+    data_dir = Path(data_dir or DATA_DIR)
+    dtm_path, out_dir = Path(dtm_path), Path(out_dir)
     if not dtm_path.exists():
-        raise SystemExit(f"Falta {dtm_path}. Corré antes pipeline/precompute.py --site {site_id}")
-    dem200_path = DATA_DIR / "raw" / site_id / "dem200_crop.tif"
-    pad_m = min(DIST_MAX_M, math.radians(site.get("horizon_pad_deg", 1.0)) * RADIO_MARTE_M)
+        raise MissingInput(f"Falta {dtm_path}. Corré antes pipeline/precompute.py --site {site_id}")
+    ref = load_reference()
+    warnings = []
 
-    z, z_dtm, t, (r0, c0), (h, w), crs = grilla_combinada(dtm_path, dem200_path, pad_m)
-    print(f"{site['name']}: grilla {z.shape[1]}x{z.shape[0]} celdas de {RES_M} m, "
-          f"área de interés {w}x{h}", flush=True)
+    dem200 = find_dem200(site_id, data_dir)
+    if dem200 is None:
+        warnings.append("Falta dem200_crop.tif: el horizonte lejano (más allá del DTM) no se incluye, "
+                        "así que el sky-view sale más alto de lo real.")
 
-    filas, cols = np.mgrid[r0:r0 + h, c0:c0 + w]
-    con_dato = ~np.isnan(z_dtm[filas, cols])
+    with rasterio.open(dtm_path) as ds:
+        bounds, crs = ds.bounds, ds.crs
+    g = build_grid(bounds, crs, dtm_path, dem200, pad_m)
+    r0, c0, h, w = g.roi
+    rows, cols = np.mgrid[r0:r0 + h, c0:c0 + w]
+    valid = g.has_dtm[rows, cols]
     svf = np.full((h, w), np.nan)
-    svf[con_dato] = sky_view(z, filas[con_dato], cols[con_dato], RES_M)
-    dosis = D0 * svf
+    svf[valid] = sky_view(g.z, rows[valid], cols[valid], RES_M, g.kx)
 
-    perfil = dict(driver="GTiff", width=w, height=h, count=1, dtype="float32", crs=crs,
-                  transform=t * rasterio.Affine.translation(c0, r0), nodata=np.nan,
-                  compress="deflate", tiled=True, blockxsize=256, blockysize=256)
-    with rasterio.open(carpeta / "skyview.tif", "w", **perfil) as dst:
+    # Normalización: el sky-view donde midió RAD.
+    svf_ref, ref_how = _reference_sky_view(site_id, svf, g, data_dir)
+    if svf_ref is None:
+        svf_ref = 1.0
+        warnings.append("No se pudo calcular el sky-view de Bradbury Landing (faltan los datos de Gale): "
+                        "la dosis no está normalizada y sale hasta ~8 % más baja.")
+
+    h0_usv_h = ref["h0_msv_day"] * 1000 / 24
+    dose = h0_usv_h * svf / svf_ref
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    profile = dict(driver="GTiff", width=w, height=h, count=1, dtype="float32", crs=crs,
+                   transform=g.transform @ rasterio.Affine.translation(c0, r0), nodata=np.nan,
+                   compress="deflate", tiled=True, blockxsize=256, blockysize=256)
+    with rasterio.open(out_dir / "skyview.tif", "w", **profile) as dst:
         dst.write(svf.astype("float32"), 1)
-    with rasterio.open(carpeta / "dose_rate.tif", "w", **perfil) as dst:
-        dst.write(dosis.astype("float32"), 1)
+    with rasterio.open(out_dir / "dose_rate.tif", "w", **profile) as dst:
+        dst.write(dose.astype("float32"), 1)
 
-    v = dosis[con_dato]
-    p1, p50, p99 = np.percentile(v, [1, 50, 99])
-    variacion_rel = (p99 - p1) / p50
-    incert_rel = D0_err / D0
-    modo = "presupuesto" if variacion_rel < incert_rel else "capa"
-
-    meta = {
-        "badge": BADGE,
-        "sitio": site["name"],
-        "unidades": {"dose_rate.tif": "mGy/día (dosis absorbida)", "skyview.tif": "fracción 0-1"},
-        "grilla_m": RES_M,
-        "base": {"dosis_absorbida_mGy_dia": D0, "incertidumbre_mGy_dia": D0_err,
-                 "dosis_equivalente_mSv_dia": H0, "fuente": ref["reference"], "periodo": ref["period"]},
-        "rango_real": {
-            "skyview_min": round(float(np.nanmin(svf)), 4), "skyview_mediana": round(float(np.nanmedian(svf)), 4),
-            "dosis_p1_mGy_dia": round(float(p1), 4), "dosis_mediana_mGy_dia": round(float(p50), 4),
-            "dosis_p99_mGy_dia": round(float(p99), 4),
-            "variacion_relativa_p1_p99": round(float(variacion_rel), 4),
-            "incertidumbre_relativa_medicion": round(incert_rel, 4),
+    v = dose[np.isfinite(dose)]
+    p1, p50, p99 = (float(x) for x in np.percentile(v, [1, 50, 99])) if v.size else (math.nan,) * 3
+    return {
+        "h0_usv_h": round(h0_usv_h, 3),
+        "skyview_reference": {**RAD_SITE, "value": round(svf_ref, 4), "how": ref_how},
+        "skyview_median": round(float(np.nanmedian(svf)), 4) if v.size else None,
+        "dose_usv_h": {"p1": round(p1, 2), "p50": round(p50, 2), "p99": round(p99, 2)},
+        "spread_vs_uncertainty": {
+            "half_spread_pct": round(100 * (p99 - p1) / 2 / p50, 1) if v.size else None,
+            "rad_uncertainty_pct": round(100 * ref["h0_unc_msv_day"] / ref["h0_msv_day"], 1),
         },
-        "visualizacion": {
-            "modo": modo,
-            "regla": "presupuesto si la variación espacial (p1-p99) es menor que la incertidumbre de la medición RAD",
-            "escala_colores": "si se muestra el raster, usar escala fija de 0 a D0 (no estirar al rango min-max)",
-        },
-        "presupuesto": {
-            "tasa_mediana_uGy_h": round(float(p50) * 1000 / 24, 2),
-            "tasa_equivalente_mediana_uSv_h": round(H0 * float(np.nanmedian(svf)) * 1000 / 24, 2),
-            "formula": "dosis_travesía = Σ dose_rate(celda) × horas_en_celda / 24  (mGy)",
-            "ejemplo_EVA_4h_uGy": round(float(p50) * 1000 / 24 * 4, 1),
-        },
-        "limitaciones": [
-            "D0 se midió en el piso de Gale (con algo de horizonte propio): se usa como valor de cielo abierto; el error es de pocos %, menor que la incertidumbre de ±19 %.",
-            "Supone radiación isótropa; en realidad cerca del horizonte llega menos (más atmósfera), así que el efecto del terreno está sobreestimado: es una cota superior del apantallamiento.",
-            "No incluye eventos de partículas solares, ciclo solar ni variación estacional de presión (cambian D0 en el tiempo, no en el espacio).",
-            "No incluye secundarios del suelo (neutrones de albedo), que no dependen del sky-view.",
-        ],
+        "warnings": warnings,
     }
-    (carpeta / "radiation.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
-
-    print(f"Listo en {(time.time() - t0) / 60:.1f} min -> {carpeta}")
-    print(f"  sky-view: mín {meta['rango_real']['skyview_min']}  mediana {meta['rango_real']['skyview_mediana']}")
-    print(f"  dosis (mGy/día): p1 {p1:.4f}  mediana {p50:.4f}  p99 {p99:.4f}")
-    print(f"  variación espacial {variacion_rel * 100:.1f} % vs incertidumbre {incert_rel * 100:.0f} % -> modo: {modo.upper()}")
-    print(f"  presupuesto: {meta['presupuesto']['tasa_mediana_uGy_h']} µGy/h -> EVA de 4 h ≈ {meta['presupuesto']['ejemplo_EVA_4h_uGy']} µGy")
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Capa de dosis de radiación (MSL RAD · MODELED)")
-    ap.add_argument("--site", required=True)
-    ap.add_argument("--out", default=str(DATA_DIR / "output"), help="carpeta base de salidas (default /data/output)")
-    args = ap.parse_args()
-    procesar(args.site, Path(args.out).expanduser())
-
-
-if __name__ == "__main__":
-    main()
+def _reference_sky_view(site_id, svf, g, data_dir):
+    """Sky-view en Bradbury: de la grilla si el sitio es Gale, si no con los datos de Gale."""
+    if site_id == RAD_SITE["site"]:
+        xs, ys = transform(MARS_LONGLAT, g.crs, [RAD_SITE["lon"]], [RAD_SITE["lat"]])
+        r0, c0, h, w = g.roi
+        col = int((xs[0] - g.transform.c) / RES_M) - c0
+        row = int((g.transform.f - ys[0]) / RES_M) - r0
+        if 0 <= row < h and 0 <= col < w and np.isfinite(svf[row, col]):
+            return float(svf[row, col]), "grilla de Gale (DTM + DEM 200 m)"
+    dem = find_dem200(RAD_SITE["site"], data_dir)
+    if dem is None:
+        return None, None
+    # Desde otro sitio: solo el DEM de 200 m (leer el DTM de Gale entero tarda minutos).
+    # Bradbury está en una planicie: el detalle del DTM cerca casi no cambia su horizonte.
+    value = point_sky_view(RAD_SITE["lat"], RAD_SITE["lon"], None, dem)
+    return value, "DEM 200 m de Gale (sin el DTM)" if value is not None else None

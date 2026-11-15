@@ -8,8 +8,9 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   contours.geojson  curvas de nivel en lon/lat planetocéntricas (este positivo)
   roughness.tif     rugosidad σ (m) y terrain_factor.tif, η de Pandolf (pipeline/terrain_layers.py)
   hazard.tif        peligro de terreno por clases: pendiente + rugosidad (pipeline/terrain_layers.py)
-  slope/, hillshade/, hazard/  tiles XYZ PNG para el mapa (pipeline/tiles.py); pendiente y
-                    peligro, con los colores de la leyenda de web/src/map/layers.ts
+  dose_rate.tif     dosis equivalente por celda, µSv/h, y skyview.tif (pipeline/radiation.py)
+  slope/, hillshade/, hazard/, dose/  tiles XYZ PNG para el mapa (pipeline/tiles.py), con los
+                    colores de la leyenda de web/src/map/layers.ts
   terrain.json      procedencia, parámetros, estado de cada capa y zoom/límites de los tiles.
                     El frontend lo lee para saber qué capa puede prender.
 
@@ -46,6 +47,7 @@ from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import radiation  # noqa: E402
 import terrain_layers  # noqa: E402
 import terrain_shadows as ts  # noqa: E402
 import tiles  # noqa: E402
@@ -73,7 +75,7 @@ MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DT
 # Capas que se teselan para el mapa: carpeta de salida y rampa de color de tiles.py.
 # La carpeta es CONTRATO: el último segmento de la plantilla `tiles` de web/src/map/layers.ts.
 TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None),
-                "survival-hazard": ("hazard", "peligro")}
+                "survival-hazard": ("hazard", "peligro"), "survival-dose": ("dose", "dosis")}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
 
@@ -461,10 +463,48 @@ def main(argv=None):
         "note": "Solo rugosidad: en Pandolf la pendiente entra aparte como el grado G de la ruta.",
     }
 
+    # 6. Dosis de radiación (pipeline/radiation.py): base de RAD × sky-view, normalizada en
+    #    Bradbury Landing. Grilla de 100 m. Si falta el DEM de 200 m sigue, con un aviso.
+    def dose_step():
+        summary = radiation.compute(site["id"], dtm, work, data_dir=DATA_DIR)
+        for name in ("skyview", "dose_rate"):
+            to_cog(work / f"{name}.tif", work / f"{name}_cog.tif")
+            publish(work / f"{name}_cog.tif", out / f"{name}.tif")
+        layers["survival-skyview"].update(status="ok")
+        layers["survival-skyview"].pop("error", None)
+        layers["survival-dose"]["summary"] = summary
+        index["warnings"].extend(summary["warnings"])
+
+    ref = radiation.load_reference()
+    dose_resolution = f"derivada, {radiation.RES_M} m/px"
+    layers["survival-dose"] = {
+        "file": "dose_rate.tif", "unit": "µSv/h", "provenance": "MODELED", "mission": "MSL",
+        "instrument": "RAD", "resolution": dose_resolution,
+        "source": f"{ref['citation']} ({ref['period']}), modulada por sky-view del terreno",
+        # Decidido (docs/context.md §5): la dosis varía con el lugar menos que la incertidumbre
+        # de RAD, así que se muestra como presupuesto de la travesía; el raster es secundario.
+        "display": "budget",
+        "method": "H0 × sky_view / sky_view(Bradbury Landing); sky_view = 1 − promedio(sin γ) "
+                  f"en {radiation.N_AZIMUTHS} azimuts hasta {radiation.MAX_DIST_M / 1000:.0f} km",
+        "assumptions": [
+            f"Base medida por RAD en Gale: {ref['h0_msv_day']} ± {ref['h0_unc_msv_day']} mSv/día "
+            "(dosis equivalente); varía con el ciclo solar, la presión estacional y eventos solares.",
+            "Radiación isótropa desde el cielo: sobreestima el blindaje del terreno (cota superior).",
+            "Normalizada para dar exactamente la base en Bradbury Landing, donde midió RAD.",
+            "No incluye los neutrones que rebotan en el suelo.",
+        ],
+    }
+    layers["survival-skyview"] = {
+        "file": "skyview.tif", "unit": "fracción", "provenance": "DERIVED",
+        "mission": "MRO + MGS/MEX", "instrument": "HiRISE DTM + DEM HRSC/MOLA 200 m",
+        "resolution": dose_resolution, "status": "error", "error": "no se calculó",
+    }
+
     # Un paso que falla no frena a los demás: el terrain.json dice qué quedó y qué no.
     failed = False
     for layer_id, fn in (("relief-slope", slope_step), ("relief-hillshade", hillshade_step),
-                         ("relief-contours", contours_step), ("survival-hazard", hazard_step)):
+                         ("relief-contours", contours_step), ("survival-hazard", hazard_step),
+                         ("survival-dose", dose_step)):
         try:
             fn()
             layers[layer_id]["status"] = "ok"
@@ -473,7 +513,7 @@ def main(argv=None):
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
-    # 6. Tiles PNG para el mapa, desde los COG que quedaron bien.
+    # 7. Tiles PNG para el mapa, desde los COG que quedaron bien.
     missing_tools = tiles.faltan_herramientas()
     for layer_id, (folder, color) in TILED_LAYERS.items():
         layer = layers[layer_id]
@@ -491,7 +531,7 @@ def main(argv=None):
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
 
-    # 7. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    # 8. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
     #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
     #    25 cm/px y teselarla compite por disco y CPU con la descarga.

@@ -207,24 +207,29 @@ export const LAYERS: readonly LayerSpec[] = [
   },
   {
     id: "survival-dose",
-    label: "Dosis",
+    label: "Dosis (capa secundaria)",
     group: "supervivencia",
     unit: "µSv/h",
     source: {
       provenance: "MODELED",
       mission: "MSL",
       instrument: "RAD",
-      resolution: "derivada, 200 m/px",
-      source: "Base medida por MSL RAD en Gale (Hassler et al. 2014, reference/rad_surface_dose.json)",
+      resolution: "derivada, 100 m/px",
+      source:
+        "Base medida por MSL RAD en Gale (Hassler et al. 2014, reference/rad_surface_dose.json), modulada por sky-view del terreno",
       assumptions: [
-        "Valor de base medido en Gale, 2012–2013; se extrapola al terreno",
-        "Varía con el ciclo solar, la presión estacional y eventos solares",
+        "Base: 0,64 ± 0,12 mSv/día (26,7 µSv/h), medida en Gale en 2012–2013; varía con el ciclo solar, la presión estacional y eventos solares",
+        "Normalizada para dar exactamente la base en Bradbury Landing, donde midió RAD",
+        "Radiación isótropa desde el cielo: el blindaje del terreno es una cota superior",
+        "La diferencia entre lugares es menor que la incertidumbre de la medición: lo que pesa es el tiempo afuera (presupuesto de la travesía)",
       ],
     },
+    // Escala FIJA de 0 a la base, un solo tono: = RAMPAS["dosis"] en pipeline/tiles.py.
     legend: [
-      { color: "#2f7d4f", label: "nominal" },
-      { color: "#e0a24a", label: "elevada" },
-      { color: "#e0564a", label: "limitar exposición" },
+      { color: "#e8e4f0", label: "< 6,7 µSv/h" },
+      { color: "#beb2d8", label: "6,7–13,3 µSv/h" },
+      { color: "#8f7dba", label: "13,3–20 µSv/h" },
+      { color: "#604c96", label: "≥ 20 µSv/h (base de Gale: 26,7)" },
     ],
     tiles: "/tiles/{site}/dose/{z}/{x}/{y}.png",
     kind: "raster",

@@ -77,7 +77,9 @@ COST_FACTORS: tuple[tuple[str, str, str | None], ...] = (
     ("contact", "Sin contacto con el hábitat", None),
     ("roughness", "Rugosidad", "Falta la capa de rugosidad en el pipeline."),
     ("loose_soil", "Suelo suelto (THEMIS)", "Falta la inercia térmica de THEMIS procesada."),
-    ("radiation", "Radiación por terreno", "Falta la dosis por terreno: la tasa de base es igual en todas las celdas."),
+    ("radiation", "Radiación por terreno",
+     "La dosis por celda (survival-dose) varía menos que la incertidumbre de RAD: entra en el "
+     "presupuesto de dosis de la travesía, no en el costo del A*."),
 )
 
 MAX_CELLS_SIDE = 300
@@ -540,6 +542,49 @@ def _dose_rate_msv_per_h(repo_dir: Path) -> tuple[float | None, dict]:
                                   "Sin blindaje del terreno ni eventos solares"]}
 
 
+def _dose_layer(data_dir: Path, site_id: str) -> tuple[Path | None, dict]:
+    """dose_rate.tif según terrain.json (lo escribe pipeline/precompute.py con pipeline/radiation.py)."""
+    out = data_dir / "output" / site_id
+    try:
+        meta = json.loads((out / "terrain.json").read_text(encoding="utf-8"))["layers"]["survival-dose"]
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return None, {}
+    p = out / meta.get("file", "")
+    return (p if meta.get("status") == "ok" and meta.get("file") and p.is_file() else None), meta
+
+
+def _route_dose_rate(data_dir: Path, site_id: str, repo_dir: Path,
+                     legs_plan: list["LegPlan"]) -> tuple[float | None, dict]:
+    """Tasa de dosis de la travesía (mSv/h): promedio de dose_rate.tif sobre los puntos de la ruta.
+
+    Sin la capa (o con la ruta afuera), la tasa de base de RAD igual en todo el recorrido.
+    """
+    base_rate, base_src = _dose_rate_msv_per_h(repo_dir)
+    path, meta = _dose_layer(data_dir, site_id)
+    pts = [p for plan in legs_plan for p in plan.latlon]
+    if path is None or not pts:
+        return base_rate, base_src
+    import rasterio
+    with rasterio.open(path) as ds:
+        xs, ys = _to_xy(ds.crs, pts)
+        vals = np.array([v[0] for v in ds.sample(zip(xs, ys))], dtype=float)
+        nodata = ds.nodata
+    ok = np.isfinite(vals) & (vals > 0)
+    if nodata is not None and not np.isnan(nodata):
+        ok &= vals != nodata
+    if not ok.any():
+        return base_rate, {**base_src, "assumptions": list(base_src.get("assumptions", []))
+                           + ["La ruta queda fuera de la capa de dosis por terreno"]}
+    rate = float(vals[ok].mean()) / 1000.0          # µSv/h -> mSv/h
+    src = {"provenance": "MODELED", "mission": "MSL", "instrument": "RAD",
+           "resolution": meta.get("resolution"),
+           "source": "dose_rate.tif (pipeline/radiation.py): base de RAD × sky-view del terreno",
+           "assumptions": (meta.get("assumptions") or [])
+           + ["Promedio de la dosis por celda sobre los puntos de la ruta; la espera en las "
+              "estaciones usa el mismo promedio"]}
+    return rate, src
+
+
 SCORE_SRC = {
     "provenance": "MODELED", "mission": None, "instrument": None,
     "source": "Eslabón más débil: 100 · min(1 − usado/límite) sobre los límites duros (api/safety.py)",
@@ -659,7 +704,6 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     pts = [(float(w["lat"]), float(w["lon"])) for w in waypoints]
     slope_path, dtm_path, slope_meta = _terrain_inputs(data_dir, site_id)
     stack = stack_for_time(data_dir, site_id, t_depart)
-    dose_rate, dose_src = _dose_rate_msv_per_h(repo_dir)
     caveats: list[str] = []
     if slope_path is None:
         caveats.append("sin la pendiente procesada los tramos van en línea recta y el terreno no se evaluó")
@@ -711,6 +755,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         for ds in (slope_ds, dtm_ds, shadow_ds):
             if ds is not None:
                 ds.close()
+
+    # La dosis depende de por dónde pasa la ruta: se calcula con los tramos ya resueltos.
+    dose_rate, dose_src = _route_dose_rate(data_dir, site_id, repo_dir, legs_plan)
 
     t_end = t
     elapsed = max(t_end - t_depart, 0.0)

@@ -160,5 +160,11 @@ Interpolación lineal de σ entre anclas, saturada en los extremos: σ ≤ 0,05 
 - En Gale, la parte del DEM rellenada sin detalle da rugosidad 0: ahí la clase sale solo de la pendiente.
 - Cerca de los huecos del DTM, las ventanas usan solo las celdas válidas.
 
+## Dosis de radiación por celda (`pipeline/radiation.py`) · MSL RAD · MODELED
+
+Paso de `precompute.py`. Escribe `dose_rate.tif` (dosis equivalente, µSv/h, grilla de 100 m) y `skyview.tif`, y los registra en `terrain.json` como `survival-dose` y `survival-skyview`, con tiles en `dose/`.
+
+`dosis = H0 × sky_view / sky_view(Bradbury Landing)`, con H0 = 0,64 ± 0,12 mSv/día medida por RAD en Gale. La dosis cambia con el lugar menos que la incertidumbre de RAD: **se muestra como presupuesto de dosis de la travesía** (el planificador promedia la dosis por celda sobre la ruta) y el raster queda como capa secundaria con escala fija. Modelo, decisión y limitaciones: [`docs/radiation.md`](docs/radiation.md).
+
 ---
 Prototipo educativo, no software de vuelo.
