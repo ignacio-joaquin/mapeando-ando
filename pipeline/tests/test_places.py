@@ -52,7 +52,8 @@ def test_nothing_downloaded_reports_each_source(data_dir):
     index = places.build(SITE, COMMON)
     assert index["places"] == []
     assert {k: v["status"] for k, v in index["sources"].items()} == \
-        {"iau": "missing", "robbins": "missing", "rover": "missing"}
+        {"iau": "missing", "robbins": "missing", "rover": "missing",
+         "landmarks": "missing", "depressions": "missing", "crism": "missing"}
 
 
 def test_main_without_sources_writes_nothing(data_dir):
@@ -148,7 +149,8 @@ SITE_FULL = {**SITE, "files": SITE["files"] + [
 
 
 def test_optional_sources_only_when_declared(data_dir):
-    assert set(places.build(SITE, COMMON)["sources"]) == {"iau", "robbins", "rover"}
+    assert set(places.build(SITE, COMMON)["sources"]) == {"iau", "robbins", "rover",
+                                                         "landmarks", "depressions", "crism"}
     assert places.build(SITE_FULL, COMMON)["sources"]["heli"]["status"] == "missing"
 
 
@@ -330,3 +332,70 @@ def test_suggested_targets_best_placed_and_most_measured(data_dir):
     assert got["Jake Matijevic"]["suggested"] and got["Cerca"]["suggested"]
     assert not got["LD Paniri"]["suggested"]                # observado de lejos: no es un destino claro
     assert not any(k.startswith("_") for p in got.values() for k in p)
+
+
+# --- Cerros, hondonadas y observaciones CRISM ---------------------------------------------
+
+def _hill_grid(n=200, cell=10.0):
+    import numpy as np
+    yy, xx = np.mgrid[0:n, 0:n] * cell
+    z = np.zeros((n, n))
+    z += 60 * np.exp(-((xx - 600) ** 2 + (yy - 600) ** 2) / (2 * 120.0 ** 2))   # cerro de 60 m
+    z += 10 * np.exp(-((xx - 1500) ** 2 + (yy - 1500) ** 2) / (2 * 120.0 ** 2))  # loma de 10 m
+    z -= 20 * np.exp(-((xx - 1400) ** 2 + (yy - 500) ** 2) / (2 * 40.0 ** 2))    # hondonada de 20 m
+    return z
+
+
+def test_find_peaks_keeps_high_hill_only():
+    pytest.importorskip("scipy")
+    z = _hill_grid()
+    peaks = places.find_peaks(z, 10.0)
+    assert len(peaks) == 1
+    r, c, relief = peaks[0]
+    assert (r, c) == (60, 60) and relief > 50
+
+
+def test_find_peaks_on_negated_grid_finds_pit():
+    pytest.importorskip("scipy")
+    z = _hill_grid()
+    pits = places.find_peaks(-z, 10.0, radius_m=150, min_relief_m=8)
+    assert [(r, c) for r, c, _ in pits] == [(50, 140)]
+
+
+def test_find_peaks_ignores_circles_touching_nodata():
+    pytest.importorskip("scipy")
+    import numpy as np
+    z = _hill_grid()
+    z[55:65, 40:50] = np.nan   # hueco dentro del círculo del cerro: no se sabe si sigue subiendo
+    assert places.find_peaks(z, 10.0) == []
+
+
+def test_xy_to_lonlat_eqc():
+    class Crs:
+        is_geographic = False
+
+        def to_dict(self):
+            return {"proj": "eqc", "R": 3396190, "lat_ts": 0, "lon_0": 0}
+
+    deg = math.radians(1) * 3396190
+    lon, lat = places._xy_to_lonlat(Crs(), 77.4 * deg, 18.5 * deg)
+    assert lon == pytest.approx(77.4) and lat == pytest.approx(18.5)
+
+
+def test_crism_places_inside_bbox(tmp_path):
+    idx = tmp_path / "index.json"
+    idx.write_text(json.dumps([
+        {"pdsid": "FRT000047A3_07_IF166J_MTR3", "center_lat": "18.45", "center_lon": "77.4",
+         "files": ["frt000047a3_07_brcarj_mtr3.png", "frt000047a3_07_brfemj_mtr3.img"]},
+        {"pdsid": "FRT00000000_07_IF166J_MTR3", "center_lat": "10.0", "center_lon": "77.4", "files": []},
+    ]))
+    got = places.crism_places(idx, BBOX)
+    assert [p["kind"] for p in got] == ["orbital"]
+    assert got[0]["provenance"] == "OBSERVED" and "BRCAR" in got[0]["detail"]
+
+
+def test_missing_dtm_reports_landmarks_missing(data_dir):
+    index = places.build(SITE, COMMON)
+    assert index["sources"]["landmarks"]["status"] == "missing"
+    assert index["sources"]["depressions"]["status"] == "missing"
+    assert index["sources"]["crism"]["status"] == "missing"

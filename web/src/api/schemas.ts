@@ -373,7 +373,7 @@ export const TerrainIndexSchema = z.object({
  * Sin este archivo (404) el buscador dice que espera al pipeline.
  * Documentado en docs/context.md §4.
  */
-export const PlaceKindSchema = z.enum(["iau", "sample", "target", "heli", "rover", "crater"]);
+export const PlaceKindSchema = z.enum(["iau", "sample", "target", "heli", "rover", "crater", "landmark", "depression", "orbital"]);
 
 export const PlaceSchema = z.object({
   id: z.string(),
