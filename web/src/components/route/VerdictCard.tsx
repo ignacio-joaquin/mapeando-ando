@@ -1,4 +1,4 @@
-import type { LimitingFactor, Verdict } from "../../api/schemas";
+import type { DataQuality, LimitingFactor, Verdict } from "../../api/schemas";
 import { Measure } from "../Measure";
 import { formatMinutes } from "./format";
 
@@ -27,12 +27,29 @@ const LOOK = {
 
 interface Props {
   readonly verdict: Verdict;
+  readonly dataQuality?: DataQuality;
 }
 
-export function VerdictCard({ verdict }: Props) {
+export function VerdictCard({ verdict, dataQuality }: Props) {
   const look = LOOK[verdict.status];
   const rob = verdict.robustness;
   const skipped = rob ? rob.scenarios.length - rob.evaluated : 0;
+  const dataNotes: string[] = [];
+  if (dataQuality) {
+    const lightStatus = dataQuality.light_status ?? (dataQuality.light_evaluated ? "complete" : "missing");
+    if (lightStatus === "missing") {
+      dataNotes.push("luz sin evaluar");
+    } else {
+      if (dataQuality.light_source === "reused") {
+        dataNotes.push("luz estimada con otro sol de la misma estación");
+      } else if (lightStatus === "partial") {
+        dataNotes.push("luz parcialmente evaluada");
+      }
+    }
+    if (!dataQuality.contact_evaluated) dataNotes.push("contacto sin evaluar");
+    const terrainStatus = dataQuality.terrain_status ?? (dataQuality.terrain_evaluated ? "complete" : "missing");
+    if (terrainStatus !== "complete") dataNotes.push("terreno sin evaluar");
+  }
   return (
     <section aria-live="polite" className={`rounded border-2 p-3 ${look.box}`}>
       <div className="flex items-baseline gap-3">
@@ -48,6 +65,11 @@ export function VerdictCard({ verdict }: Props) {
         ) : null}
       </div>
       <p className="mt-1 text-sm font-medium text-fg">{verdict.summary}</p>
+      {dataNotes.length ? (
+        <p className="mt-1 text-[11px] font-medium text-warn">
+          Datos del cálculo: {dataNotes.join(" · ")}.
+        </p>
+      ) : null}
       <dl className="mt-2 flex flex-col gap-1 text-xs">
         {verdict.limiting_factor ? (
           <div className="flex justify-between gap-2">
