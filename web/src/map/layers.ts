@@ -89,6 +89,11 @@ export interface LayerSpec {
   readonly geojson?: string;
   readonly defaultVisible: boolean;
   /**
+   * Fuera del panel de capas: el contrato y el pipeline siguen, pero el mapa no la
+   * ofrece (ej. un raster que en el sitio es un solo color y no cambia ninguna decisión).
+   */
+  readonly hidden?: boolean;
+  /**
    * Raster por clases (cada color es un rango de la leyenda): se dibuja sin
    * suavizar al agrandar, para no inventar colores intermedios.
    */
@@ -385,6 +390,9 @@ export const LAYERS: readonly LayerSpec[] = [
   {
     id: "survival-water",
     label: "Hielo somero (SWIM, 0–1 m)",
+    // Píxel de ~3 km sobre sitios de ~20–50 km: en el mapa se ve un solo color.
+    // Oculta del panel; el dato sigue en terrain.json para usarlo como número.
+    hidden: true,
     group: "supervivencia",
     unit: "consistencia de hielo (−1 a +1)",
     source: {
@@ -474,5 +482,5 @@ export function geojsonUrl(spec: LayerSpec, siteId: string): string | null {
 }
 
 export function layersByGroup(group: LayerGroup): readonly LayerSpec[] {
-  return LAYERS.filter((l) => l.group === group);
+  return LAYERS.filter((l) => l.group === group && !l.hidden);
 }
