@@ -10,8 +10,10 @@ import {
   type CurrentConditionsData,
   HealthSchema,
   IlluminationCatalogSchema,
+  IlluminationWindowSchema,
   SolTilesSchema,
   type IlluminationCatalog,
+  type IlluminationWindow,
   type SolTiles,
   PlacesIndexSchema,
   type PlacesIndex,
@@ -339,6 +341,44 @@ export async function fetchIlluminationCatalog(siteId: string): Promise<Illumina
   const parsed = IlluminationCatalogSchema.safeParse(await res.json());
   if (!parsed.success) throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
   return parsed.data;
+}
+
+export type PointIllumination =
+  | { readonly kind: "ok"; readonly data: IlluminationWindow }
+  /** No hay dato de la pila para ese punto; `reason` dice por qué, para la UI. */
+  | { readonly kind: "missing"; readonly reason: string };
+
+/**
+ * Sol o sombra de la pila precomputada (pipeline/illumination.py) en un punto,
+ * para una banda de un sol: POST /api/illumination/window con p1 = p2. Es el
+ * mismo dato que usan el veredicto y el deslizador del sol. "missing" cuando
+ * no hay backend, el server no tiene el endpoint o la pila (503), o el punto
+ * cae fuera de ella (422): nunca se rellena.
+ */
+export async function fetchPointIllumination(
+  siteId: string,
+  solTag: string,
+  band: number,
+  p: { readonly lat: number; readonly lon: number },
+  signal?: AbortSignal,
+): Promise<PointIllumination> {
+  if (usingFixtures) return { kind: "missing", reason: "no hay backend (datos de ejemplo)" };
+  const point = { lat: p.lat, lon: p.lon };
+  const res = await fetch("/api/illumination/window", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ site_id: siteId, sol_tag: solTag, band, p1: point, p2: point }),
+    ...(signal ? { signal } : {}),
+  });
+  if (res.status === 404 || res.status === 405 || res.status === 501) {
+    return { kind: "missing", reason: "el server todavía no tiene el endpoint de sombras o no conoce el sitio" };
+  }
+  if (res.status === 503) return { kind: "missing", reason: `el server no tiene la pila de sombras${await errorDetail(res)}` };
+  if (res.status === 422) return { kind: "missing", reason: `la pila de sombras no cubre este punto${await errorDetail(res)}` };
+  if (!res.ok) throw new Error(`sombras: el server respondió ${res.status}${await errorDetail(res)}`);
+  const parsed = IlluminationWindowSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`sombras: no cumple el contrato: ${parsed.error.message}`);
+  return { kind: "ok", data: parsed.data };
 }
 
 /** tiles.json de un sol: qué horas están teseladas y con qué zoom. */
