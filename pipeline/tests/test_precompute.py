@@ -210,15 +210,15 @@ def test_full_run(data_dir):
     out = data_dir / "output" / "jezero"
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
-        ["contours", "contours.gpkg", "coverage.geojson", "dose", "dose_rate.tif", "dtm.tif", "hazard",
-         "hazard.tif", "hillshade", "hillshade.tif", "roughness.tif", "skyview.tif", "slope", "slope.tif",
-         "terrain.json", "terrain_factor.tif"]
+        ["contours", "contours.gpkg", "coverage.geojson", "dem", "dose", "dose_rate.tif", "dtm.tif",
+         "hazard", "hazard.tif", "hillshade", "hillshade.tif", "roughness.tif", "skyview.tif", "slope",
+         "slope.tif", "terrain.json", "terrain_factor.tif"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
         "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
         "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok",
-        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok"}
+        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "relief-dem": "ok"}
     dose = index["layers"]["survival-dose"]
     assert dose["unit"] == "µSv/h" and dose["display"] == "budget" and dose["instrument"] == "RAD"
     assert any("dem200" in w for w in index["warnings"])  # el test no tiene DEM de 200 m: sigue con aviso
@@ -228,6 +228,13 @@ def test_full_run(data_dir):
     assert index["radius_m"] == R
     assert index["source"]["mission"] == "MRO HiRISE"
     assert any("0.948" in w for w in index["warnings"])  # píxel anisótropo declarado
+
+    # Relieve 3D: el piso es el fondo del cráter y la codificación viaja en el índice.
+    dem = index["layers"]["relief-dem"]
+    assert dem["datum_m"] == pytest.approx(-2560, abs=1) and dem["encoding"] == tiles.DEM_ENCODING
+    assert dem["tiles"]["status"] == "ok" and dem["tiles"]["template"] == "dem/{z}/{x}/{y}.png"
+    assert dem["tiles"]["maxzoom"] == tiles.DEM_MAX_ZOOM
+    assert any((out / "dem" / str(tiles.DEM_MAX_ZOOM)).rglob("*.png"))
 
     for name in ("dtm.tif", "slope.tif", "hillshade.tif", "hazard.tif", "roughness.tif", "terrain_factor.tif"):
         with rasterio.open(out / name) as ds:
