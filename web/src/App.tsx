@@ -23,7 +23,8 @@ import {
 import type { Health, SiteSummary, TerrainIndex } from "./api/schemas";
 import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
-import { useFreshRoute } from "./state/plan";
+import { useFreshRoute, usePlan } from "./state/plan";
+import { insideCoverage } from "./map/coverage";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
@@ -47,6 +48,16 @@ export function App() {
         if (!alive) return;
         setHealth(h);
         setSites(s.sites);
+        // Un enlace con un ?site= que no existe: se cae al primero y la travesía
+        // del enlace se descarta (sus puntos eran de otro lugar).
+        const wanted = useStore.getState().activeSiteId;
+        const first = s.sites[0];
+        if (first && !s.sites.some((x) => x.id === wanted)) {
+          useStore.getState().setActiveSite(first.id);
+          const plan = usePlan.getState();
+          plan.clear();
+          plan.setNotice(`El enlace pedía el sitio "${wanted}", que no existe: abrí ${first.name}.`);
+        }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       }
@@ -76,7 +87,10 @@ export function App() {
       // el planificador sigue y avisa que no pudo verificar.
       try {
         const coverage = await fetchCoverage(activeSiteId, terrain);
-        if (alive) setCoverage(coverage);
+        if (alive) {
+          setCoverage(coverage);
+          if (coverage) usePlan.getState().dropOutside((p) => insideCoverage(coverage, p));
+        }
       } catch {
         if (alive) setCoverage(null);
       }

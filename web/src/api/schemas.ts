@@ -300,6 +300,8 @@ export const PlaceSourceSchema = z.object({
   desc: z.string(),
   count: z.number().int().optional(),
   error: z.string().optional(),
+  /** Una fuente ok pero incompleta lo dice acá (ej. "falta PIXL", "N observaciones sin posición"). */
+  note: z.string().optional(),
 });
 
 export const PlacesIndexSchema = z.object({

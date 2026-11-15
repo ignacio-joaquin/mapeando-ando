@@ -146,7 +146,12 @@ export function RoutePlanner() {
       </header>
 
       <DestinationSearch />
-      {waypoints.length > 0 && coverage === null ? (
+      {coverage !== null ? (
+        <p className="flex items-center gap-1.5 text-[11px] text-muted">
+          <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-[#f2e8d5]" />
+          Línea continua clara: borde del terreno de 1 m (DTM HiRISE). Los puntos van adentro.
+        </p>
+      ) : waypoints.length > 0 ? (
         <p className="text-[11px] text-warn">⚠ {UNVERIFIED_MESSAGE}</p>
       ) : null}
 

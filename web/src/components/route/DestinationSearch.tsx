@@ -1,5 +1,5 @@
 import { useId, useState, type KeyboardEvent } from "react";
-import type { Place } from "../../api/schemas";
+import type { Place, PlacesIndex } from "../../api/schemas";
 import { KIND_LABEL, searchPlaces } from "../../domain/places";
 import { checkCoverage } from "../../map/coverage";
 import { usePlan } from "../../state/plan";
@@ -198,19 +198,27 @@ export function DestinationSearch() {
 function SourcesNote({
   sources,
 }: {
-  readonly sources: Readonly<Record<string, { status: string; desc: string; count?: number | undefined }>>;
+  readonly sources: PlacesIndex["sources"];
 }) {
   const missing = Object.values(sources).filter((s) => s.status !== "ok");
+  const incomplete = Object.values(sources).filter((s) => s.status === "ok" && s.note);
   return (
     <details className="text-[11px] text-muted">
       <summary className="cursor-pointer">
-        De dónde salen los lugares{missing.length > 0 ? ` · faltan ${missing.length} fuentes` : ""}
+        De dónde salen los lugares
+        {missing.length > 0 ? ` · faltan ${missing.length} fuentes` : ""}
+        {incomplete.length > 0 ? ` · ${incomplete.length} incompletas` : ""}
       </summary>
       <ul className="mt-1 flex flex-col gap-0.5">
         {Object.entries(sources).map(([k, s]) => (
           <li key={k}>
-            {s.status === "ok" ? "✓" : "✕"} {s.desc}
-            {s.status === "ok" ? ` (${s.count ?? 0})` : ": todavía no está"}
+            {s.status === "ok" ? (s.note ? "⚠" : "✓") : "✕"} {s.desc}
+            {s.status === "ok"
+              ? ` (${s.count ?? 0})`
+              : s.status === "error"
+                ? `: falló al armar el índice${s.error ? ` (${s.error})` : ""}`
+                : ": todavía no está"}
+            {s.note ? <span className="block pl-3 text-warn">{s.note}</span> : null}
           </li>
         ))}
       </ul>

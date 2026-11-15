@@ -64,6 +64,12 @@ interface PlanState {
   setNotice: (notice: string | null) => void;
   /** Al cambiar de sitio: borra la travesía si era de otro. */
   switchSite: (siteId: string) => void;
+  /**
+   * Saca los puntos sin terreno de 1 m. Corre cuando llega la cobertura: un
+   * enlace compartido (o un punto marcado antes de que llegara) pasa por el
+   * mismo chequeo que un clic, en vez de calcular una ruta y dar GO afuera.
+   */
+  dropOutside: (inside: (p: LatLon) => boolean) => void;
 }
 
 let seq = 0;
@@ -166,6 +172,20 @@ export const usePlan = create<PlanState>((set) => ({
   setStatus: (status) => set({ status }),
   setOpenStop: (openStop) => set({ openStop }),
   setNotice: (notice) => set({ notice }),
+  dropOutside: (inside) =>
+    set((s) => {
+      const kept = s.waypoints.filter((w) => inside(w));
+      const dropped = s.waypoints.length - kept.length;
+      if (dropped === 0) return s;
+      return {
+        waypoints: kept,
+        openStop: null,
+        notice:
+          dropped === 1
+            ? "Saqué un punto de la travesía: ahí no hay terreno de 1 m real (DTM HiRISE)."
+            : `Saqué ${dropped} puntos de la travesía: ahí no hay terreno de 1 m real (DTM HiRISE).`,
+      };
+    }),
   switchSite: (siteId) =>
     set((s) =>
       s.siteId === siteId

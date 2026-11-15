@@ -1,6 +1,7 @@
 /**
- * Búsqueda sobre places.json (pipeline/places.py), en memoria: son unos pocos
- * cientos de lugares por sitio y filtrar en el navegador evita un endpoint.
+ * Búsqueda sobre places.json (pipeline/places.py), en memoria: son entre ~2.400
+ * y ~8.500 lugares por sitio (casi todos cráteres de Robbins y posiciones del
+ * rover) y filtrar eso en el navegador alcanza sin un endpoint.
  */
 import type { Place, PlaceKind } from "../api/schemas";
 

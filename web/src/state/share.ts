@@ -22,7 +22,9 @@ export interface SharedPlan {
 /** Tope de puntos que se aceptan de un enlace: más que esto no es una EVA. */
 const MAX_POINTS = 25;
 const DECIMALS = 6; // 1e-6° ≈ 6 cm en Marte
-const PLACE_ID = /^[\w.-]{1,64}$/;
+// Letras y números de cualquier idioma (places.py arma ids como `target-señal`); nunca `,` ni `;`,
+// que separan campos y puntos.
+const PLACE_ID = /^[\p{L}\p{N}_.-]{1,64}$/u;
 
 function search(): URLSearchParams | null {
   if (typeof window === "undefined") return null;
