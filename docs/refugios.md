@@ -95,6 +95,8 @@ Los minutos llevan **MODELED** y no DERIVED: dependen de un modelo de caminata c
 - **Umbrales propios.** El 0,85 y el 0,75 los elegimos nosotros. No salen de un estudio de dosis. Con un solo umbral no alcanzaba: 0,85 marca casi todas las faldas de Mount Sharp, y algo más estricto deja a Jezero casi sin refugios. Por eso hay dos niveles.
 - **Costo de caminata provisorio.** El modelo de rutas sigue abierto (`docs/context.md` §5). Si el planificador adopta otro costo, se cambia `walk_cost` y se recalcula.
 - **Isótropo.** Tobler es distinto subiendo que bajando; acá se promedia. La pendiente usada es la de la celda, no la del rumbo: sobreestima el tiempo en laderas que se cruzan de costado.
+- **Misma regla que el planificador, pero no la misma pendiente.** El criterio de paso es el de `api/planner.py` (la k-ésima pendiente más alta de la celda), pero acá se aplica a la pendiente a 2 m (DTM promediado 2 × 2), y el A\* usa `slope.tif` a 1 m. Una franja empinada de 1 m de ancho se suaviza un poco: en casos borde, el A\* puede bloquear una celda que acá se pasa.
+- **Sin pendiente, no se pasa.** Una celda sin dato de pendiente queda bloqueada, y si eso deja un punto sin camino, ese punto queda sin minutos (nodata, no un número inventado). El A\* hace otra cosa: la deja pasar con el costo de pendiente máximo. Acá preferimos el hueco: un "a N minutos" que cruza terreno sin medir sería un dato que no tenemos.
 
 ## Pendientes
 
