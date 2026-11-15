@@ -23,6 +23,7 @@ import {
 import { fixtureHealth, fixtureSiteDetail, fixtureSites } from "./fixtures";
 import { exampleRoute } from "./routeFixture";
 import type { ZodType } from "zod";
+import { getT } from "../i18n";
 
 /**
  * `true` cuando no hay backend: la UI tiene que avisarlo.
@@ -65,11 +66,11 @@ async function errorDetail(res: Response): Promise<string> {
 
 async function get<T>(path: string, schema: ZodType<T>): Promise<T> {
   const res = await fetch(path, { headers: { accept: "application/json" } });
-  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  if (!res.ok) throw new Error(getT().api.responded(path, res.status));
   const parsed = schema.safeParse(await res.json());
   if (!parsed.success) {
     // El contrato cambió: que se vea acá y no como undefined tres capas arriba.
-    throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+    throw new Error(getT().api.contract(path, parsed.error.message));
   }
   return parsed.data;
 }
@@ -113,7 +114,7 @@ export async function fetchPoint(
   if (!res.ok) return null;
   const parsed = PointSchema.safeParse(await res.json());
   if (!parsed.success) {
-    throw new Error(`/api/sites/${siteId}/point no cumple el contrato: ${parsed.error.message}`);
+    throw new Error(getT().api.contract(`/api/sites/${siteId}/point`, parsed.error.message));
   }
   return parsed.data;
 }
@@ -129,10 +130,10 @@ export async function fetchTerrain(siteId: string): Promise<TerrainIndex | null>
   const path = `/tiles/${siteId}/terrain.json`;
   const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
+  if (!res.ok) throw new Error(getT().api.responded(path, res.status));
   const parsed = TerrainIndexSchema.safeParse(await res.json());
   if (!parsed.success) {
-    throw new Error(`${path} no cumple el contrato: ${parsed.error.message}`);
+    throw new Error(getT().api.contract(path, parsed.error.message));
   }
   return parsed.data;
 }
@@ -179,11 +180,11 @@ export async function planRoute(req: RouteRequest, signal?: AbortSignal): Promis
     return { route: exampleRoute(req), example: true };
   }
   if (!res.ok) {
-    throw new Error(`/api/route respondió ${res.status}${await errorDetail(res)}`);
+    throw new Error(getT().api.responded("/api/route", res.status) + (await errorDetail(res)));
   }
   const parsed = RouteResponseSchema.safeParse(await res.json());
   if (!parsed.success) {
-    throw new Error(`/api/route no cumple el contrato: ${parsed.error.message}`);
+    throw new Error(getT().api.contract("/api/route", parsed.error.message));
   }
   return { route: parsed.data, example: false };
 }
@@ -200,7 +201,7 @@ export async function fetchRoverPhotos(
 ): Promise<RoverPhotos> {
   const missing: RoverPhotos = {
     photos: [],
-    note: "Falta el endpoint de fotos del server (MAP-33): todavía no hay fotos reales para mostrar.",
+    note: getT().photo.missingEndpoint,
   };
   if (usingFixtures) return missing;
   const qs = new URLSearchParams({ lat: String(p.lat), lon: String(p.lon) });
@@ -209,8 +210,8 @@ export async function fetchRoverPhotos(
     ...(signal ? { signal } : {}),
   });
   if (res.status === 404 || res.status === 405 || res.status === 501) return missing;
-  if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}${await errorDetail(res)}`);
+  if (!res.ok) throw new Error(getT().api.photosResponded(res.status) + (await errorDetail(res)));
   const parsed = RoverPhotosSchema.safeParse(await res.json());
-  if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
+  if (!parsed.success) throw new Error(getT().api.photosContract(parsed.error.message));
   return parsed.data;
 }

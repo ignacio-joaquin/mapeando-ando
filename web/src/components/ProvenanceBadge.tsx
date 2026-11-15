@@ -1,5 +1,6 @@
 import { useId } from "react";
-import { PROVENANCE_LABEL, type Provenance, type SourceInfo } from "../domain/provenance";
+import type { Provenance, SourceInfo } from "../domain/provenance";
+import { useT } from "../i18n";
 
 /**
  * Badge de procedencia: "MRO HiRISE · DERIVED".
@@ -26,6 +27,7 @@ interface Props {
 
 export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Props) {
   const tipId = useId();
+  const t = useT();
   const who = [source.mission, source.instrument].filter(Boolean).join(" ");
 
   return (
@@ -34,7 +36,7 @@ export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Pr
       aria-describedby={tipId}
       className="group relative inline-flex shrink-0 cursor-help items-center gap-1 rounded border border-line bg-bg/60 px-1.5 py-0.5 text-[10px] leading-none whitespace-nowrap text-muted outline-none focus-visible:ring-1 focus-visible:ring-fg/60"
     >
-      <span className="font-medium text-fg/80">{who || "cálculo local"}</span>
+      <span className="font-medium text-fg/80">{who || t.badge.localCalc}</span>
       <span
         className={`rounded-sm border px-1 py-px text-[9px] font-semibold tracking-wide ${TONE[source.provenance]}`}
       >
@@ -47,18 +49,22 @@ export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Pr
         className={`invisible absolute z-30 w-60 rounded border border-line bg-panel p-2 text-left text-[11px] leading-snug font-normal whitespace-normal text-fg opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 ${align === "right" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
       >
         <span className="block font-semibold">
-          {PROVENANCE_LABEL[source.provenance]}
-          {who ? ` · ${who}` : " · cálculo local del frontend"}
+          {t.provenance[source.provenance]}
+          {` · ${who || t.badge.localCalcLong}`}
         </span>
         {source.resolution ? (
-          <span className="block text-muted">Resolución: {source.resolution}</span>
+          <span className="block text-muted">
+            {t.badge.resolution} {source.resolution}
+          </span>
         ) : null}
         {source.source ? (
-          <span className="mt-1 block text-muted">Fuente: {source.source}</span>
+          <span className="mt-1 block text-muted">
+            {t.badge.source} {source.source}
+          </span>
         ) : null}
         {source.assumptions && source.assumptions.length > 0 ? (
           <span className="mt-1 block">
-            <span className="block text-muted">Supuestos:</span>
+            <span className="block text-muted">{t.badge.assumptions}</span>
             {source.assumptions.map((a) => (
               <span key={a} className="block">
                 · {a}

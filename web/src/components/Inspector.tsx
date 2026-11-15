@@ -3,7 +3,8 @@ import { useStore } from "../state/store";
 import { formatLatLon, formatDistance, marsDistanceM } from "../mars/geo";
 import type { LatLonDto, PointInfo } from "../api/schemas";
 import { fetchPoint } from "../api/client";
-import { LOCAL_GEOMETRY } from "../domain/provenance";
+import { localGeometry } from "../domain/provenance";
+import { useT } from "../i18n";
 import { Measure } from "./Measure";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 
@@ -21,6 +22,8 @@ interface Props {
 }
 
 export function Inspector({ center, siteId }: Props) {
+  const t = useT();
+  const geometry = localGeometry(t);
   const cursor = useStore((s) => s.cursor);
   const picked = useStore((s) => s.picked);
   const setPicked = useStore((s) => s.setPicked);
@@ -46,19 +49,19 @@ export function Inspector({ center, siteId }: Props) {
       <div>
         <div className="mb-1 flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Cursor
+            {t.inspector.cursor}
           </h3>
-          <ProvenanceBadge source={LOCAL_GEOMETRY} />
+          <ProvenanceBadge source={geometry} />
         </div>
         <p className="font-mono text-xs">
-          {cursor ? formatLatLon(cursor) : "— fuera del mapa —"}
+          {cursor ? formatLatLon(cursor) : t.inspector.offMap}
         </p>
       </div>
 
       <div>
         <div className="mb-1 flex items-center justify-between">
           <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Punto fijado
+            {t.inspector.picked}
           </h3>
           {picked ? (
             <button
@@ -66,25 +69,25 @@ export function Inspector({ center, siteId }: Props) {
               onClick={() => setPicked(null)}
               className="text-[11px] text-rust hover:underline"
             >
-              limpiar
+              {t.inspector.clear}
             </button>
           ) : null}
         </div>
         {picked ? (
           <dl className="flex flex-col gap-1 text-xs">
             <div className="flex justify-between gap-2">
-              <dt className="text-muted">Coordenadas</dt>
+              <dt className="text-muted">{t.inspector.coordinates}</dt>
               <dd className="flex flex-wrap items-center justify-end gap-1.5">
                 <span className="font-mono">{formatLatLon(picked)}</span>
-                <ProvenanceBadge source={LOCAL_GEOMETRY} />
+                <ProvenanceBadge source={geometry} />
               </dd>
             </div>
             <div className="flex justify-between gap-2">
-              <dt className="text-muted">Distancia al centro</dt>
+              <dt className="text-muted">{t.inspector.distanceToCenter}</dt>
               <dd>
                 <Measure
                   data={{
-                    ...LOCAL_GEOMETRY,
+                    ...geometry,
                     value: marsDistanceM(picked, { lat: center.lat, lon: center.lon }),
                     unit: null,
                   }}
@@ -93,25 +96,25 @@ export function Inspector({ center, siteId }: Props) {
               </dd>
             </div>
             <div className="flex justify-between gap-2">
-              <dt className="text-muted">Elevación</dt>
+              <dt className="text-muted">{t.inspector.elevation}</dt>
               <dd>
                 {point ? (
                   <Measure data={point.elevation} />
                 ) : (
                   <span className="font-mono text-xs text-muted">
-                    {cargando ? "consultando…" : "—"}
+                    {cargando ? t.inspector.querying : "—"}
                   </span>
                 )}
               </dd>
             </div>
             <div className="flex justify-between gap-2">
-              <dt className="text-muted">Pendiente</dt>
+              <dt className="text-muted">{t.inspector.slope}</dt>
               <dd>
                 {point ? (
                   <Measure data={point.slope} />
                 ) : (
                   <span className="font-mono text-xs text-muted">
-                    {cargando ? "consultando…" : "—"}
+                    {cargando ? t.inspector.querying : "—"}
                   </span>
                 )}
               </dd>
@@ -134,14 +137,13 @@ export function Inspector({ center, siteId }: Props) {
             ) : null}
             {!point && !cargando ? (
               <p className="mt-1 rounded border border-line bg-panel/60 p-2 text-[11px] text-warn">
-                Sin backend conectado: no hay de dónde leer la elevación. No se
-                muestra ningún valor estimado.
+                {t.inspector.noBackend}
               </p>
             ) : null}
           </dl>
         ) : (
           <p className="text-xs text-muted">
-            Con el modo «inspeccionar» del planificador, clic en el mapa para fijar un punto.
+            {t.inspector.hint}
           </p>
         )}
       </div>

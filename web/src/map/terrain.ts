@@ -7,6 +7,7 @@
  */
 import type { TerrainIndex, TerrainLayer, TileSet } from "../api/schemas";
 import type { LayerSpec } from "./layers";
+import { getT } from "../i18n";
 
 export type ReadyTiles = Extract<TileSet, { status: "ok" }>;
 
@@ -35,7 +36,7 @@ export function availableFromTerrain(spec: LayerSpec, terrain: TerrainIndex | nu
 export function pipelineError(terrain: TerrainIndex | null, id: string): string | null {
   const layer = terrainLayer(terrain, id);
   if (!layer) return null;
-  if (layer.status === "error") return layer.error ?? "error sin detalle";
+  if (layer.status === "error") return layer.error ?? getT().layerStack.noErrorDetail;
   if (layer.tiles?.status === "error") return `tiles: ${layer.tiles.error}`;
   return null;
 }

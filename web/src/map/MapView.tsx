@@ -15,6 +15,7 @@ import { useStore } from "../state/store";
 import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
+import { useT } from "../i18n";
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -186,7 +187,7 @@ export function MapView({ center, bbox, siteId }: Props) {
                 type: "line",
                 source: spec.id,
                 paint: {
-                  "line-color": spec.legend[0]?.color ?? "#e0a24a",
+                  "line-color": spec.legendColors[0] ?? "#e0a24a",
                   // Finas de lejos y más marcadas de cerca: de otro modo, a
                   // zoom bajo las curvas tapan el relieve que hay debajo.
                   "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.4, 17, 1.2],
@@ -245,6 +246,8 @@ export function MapView({ center, bbox, siteId }: Props) {
   //    Arrastrables; al soltar se mueve el punto en el store.
   const waypoints = usePlan((s) => s.waypoints);
   const openStop = usePlan((s) => s.openStop);
+  // El título y el aria-label de cada marcador cambian con el idioma.
+  const t = useT();
   const markersRef = useRef(new Map<string, Marker>());
   useEffect(() => {
     const map = mapRef.current;
@@ -258,7 +261,7 @@ export function MapView({ center, bbox, siteId }: Props) {
       }
     }
     waypoints.forEach((w, i) => {
-      const label = waypointLabel(i, waypoints.length);
+      const label = waypointLabel(i, waypoints.length, t);
       let m = markers.get(w.id);
       if (!m) {
         const el = document.createElement("button");
@@ -295,7 +298,7 @@ export function MapView({ center, bbox, siteId }: Props) {
       );
       el.className = [...fromMapLibre, markerClass(label.kind, openStop === i)].join(" ");
     });
-  }, [waypoints, openStop]);
+  }, [waypoints, openStop, t]);
 
   // 5. Línea de la ruta (id de contrato: route-line), coloreada por tramo.
   //    Solo la ruta vigente: mientras se recalcula, no queda la línea vieja.

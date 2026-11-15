@@ -1,6 +1,7 @@
 import { MARS_RADIUS_M } from "../mars/constants";
 import { formatDistance, marsMetersPerPixel } from "../mars/geo";
-import { LOCAL_GEOMETRY } from "../domain/provenance";
+import { localGeometry } from "../domain/provenance";
+import { useT } from "../i18n";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 
 /**
@@ -19,6 +20,7 @@ const NICE = [
 ];
 
 export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
+  const t = useT();
   const mpp = marsMetersPerPixel(lat, zoom);
 
   const maxMeters = mpp * maxPx;
@@ -28,7 +30,7 @@ export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
   return (
     <div
       className="pointer-events-none select-none"
-      title={`Esfera IAU Mars 2000, radio ${(MARS_RADIUS_M / 1000).toFixed(2)} km: el mismo de los DTM y de api/terrain.py`}
+      title={t.scale.title((MARS_RADIUS_M / 1000).toFixed(2))}
     >
       <div className="text-[10px] text-muted">{formatDistance(meters)}</div>
       <div
@@ -36,10 +38,10 @@ export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
         style={{ width: `${px}px` }}
       />
       <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted">
-        escala marciana · R {(MARS_RADIUS_M / 1000).toFixed(1)} km
+        {t.scale.label((MARS_RADIUS_M / 1000).toFixed(1))}
         {/* El badge recibe eventos aunque la barra no, para poder ver el tooltip. */}
         <span className="pointer-events-auto">
-          <ProvenanceBadge source={LOCAL_GEOMETRY} align="left" side="top" />
+          <ProvenanceBadge source={localGeometry(t)} align="left" side="top" />
         </span>
       </div>
     </div>

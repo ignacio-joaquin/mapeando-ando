@@ -1,12 +1,10 @@
-import { LAYERS, type LayerGroup } from "../map/layers";
+import { LAYERS, layerLegend, layerSource, layerText, type LayerGroup } from "../map/layers";
 import { pipelineError, terrainLayer } from "../map/terrain";
 import { useStore } from "../state/store";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { useT } from "../i18n";
 
-const GROUP_LABEL: Record<LayerGroup, string> = {
-  relieve: "Relieve",
-  supervivencia: "Supervivencia",
-};
+const GROUPS: readonly LayerGroup[] = ["relieve", "supervivencia"];
 
 /**
  * Stack de capas: toggle, opacidad, leyenda con unidad y badge de procedencia.
@@ -15,6 +13,7 @@ const GROUP_LABEL: Record<LayerGroup, string> = {
  * no corrió, o si corrió y falló (con el motivo, de terrain.json).
  */
 export function LayerStack() {
+  const t = useT();
   const layers = useStore((s) => s.layers);
   const toggleLayer = useStore((s) => s.toggleLayer);
   const setOpacity = useStore((s) => s.setOpacity);
@@ -25,13 +24,13 @@ export function LayerStack() {
     <div className="flex flex-col gap-4">
       {terrainError ? (
         <p role="alert" className="rounded border border-alert p-2 text-xs text-alert">
-          ⚠ No se pudo leer el índice de capas del pipeline: {terrainError}
+          {t.layerStack.indexError(terrainError)}
         </p>
       ) : null}
-      {(Object.keys(GROUP_LABEL) as LayerGroup[]).map((group) => (
+      {GROUPS.map((group) => (
         <section key={group}>
           <h3 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
-            {GROUP_LABEL[group]}
+            {t.layerStack.groups[group]}
           </h3>
           <ul className="flex flex-col gap-3">
             {LAYERS.filter((l) => l.group === group).map((spec) => {
@@ -39,8 +38,10 @@ export function LayerStack() {
               if (!state) return null;
               const disabled = !state.available;
               const failed = pipelineError(terrain, spec.id);
+              const text = layerText(t, spec.id);
+              const source = layerSource(spec, t);
               // La resolución medida por el pipeline le gana a la nominal.
-              const resolution = terrainLayer(terrain, spec.id)?.resolution ?? spec.source.resolution;
+              const resolution = terrainLayer(terrain, spec.id)?.resolution ?? source.resolution;
               return (
                 <li
                   key={spec.id}
@@ -59,23 +60,23 @@ export function LayerStack() {
                         onChange={() => toggleLayer(spec.id)}
                         className="accent-rust"
                       />
-                      <span>{spec.label}</span>
-                      {spec.unit ? (
-                        <span className="text-xs text-muted">({spec.unit})</span>
+                      <span>{text.label}</span>
+                      {text.unit ? (
+                        <span className="text-xs text-muted">({text.unit})</span>
                       ) : null}
                     </label>
-                    <ProvenanceBadge source={spec.source} />
+                    <ProvenanceBadge source={source} />
                   </div>
 
                   {disabled ? (
                     <p className="mt-1.5 text-xs text-warn" title={failed ?? undefined}>
                       {failed
-                        ? "⚠ El pipeline no pudo generarla. Hay que volver a correr precompute.py."
-                        : "Esperando la salida del pipeline (MAP-9)."}
+                        ? t.layerStack.pipelineFailed
+                        : t.layerStack.waitingPipeline}
                     </p>
                   ) : (
                     <div className="mt-2 flex items-center gap-2">
-                      <span className="text-[10px] text-muted">opacidad</span>
+                      <span className="text-[10px] text-muted">{t.layerStack.opacity}</span>
                       <input
                         type="range"
                         min={0}
@@ -84,7 +85,7 @@ export function LayerStack() {
                         value={state.opacity}
                         onChange={(e) => setOpacity(spec.id, Number(e.target.value))}
                         className="h-1 flex-1 accent-rust"
-                        aria-label={"Opacidad de " + spec.label}
+                        aria-label={t.layerStack.opacityOf(text.label)}
                       />
                       <span className="w-8 text-right text-[10px] text-muted">
                         {Math.round(state.opacity * 100)}%
@@ -97,7 +98,7 @@ export function LayerStack() {
                   <ul
                     className={`mt-2 flex flex-wrap gap-x-3 gap-y-1 ${disabled ? "opacity-60" : ""}`}
                   >
-                    {spec.legend.map((stop) => (
+                    {layerLegend(spec, t).map((stop) => (
                       <li
                         key={stop.label}
                         className="flex items-center gap-1.5 text-[11px] text-muted"

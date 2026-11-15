@@ -8,6 +8,7 @@ import {
   seasonFromLs,
   siteSol,
 } from "../mars/mars24";
+import { useT } from "../i18n";
 
 /**
  * Reloj marciano del sitio: hora solar local y Ls (Mars24, Allison & McEwen).
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export function MarsClock({ lon }: Props) {
+  const t = useT();
   const instant = useStore((s) => s.instant);
   const setInstant = useStore((s) => s.setInstant);
 
@@ -33,22 +35,22 @@ export function MarsClock({ lon }: Props) {
 
   return (
     <dl className="grid grid-cols-2 items-baseline gap-x-3 gap-y-1 text-xs">
-      <dt className="text-muted">Hora solar local (LTST)</dt>
+      <dt className="text-muted">{t.clock.ltst}</dt>
       <dd className="font-mono text-base text-rust">{formatMarsTime(ltst)}</dd>
 
-      <dt className="text-muted">Media local (LMST)</dt>
+      <dt className="text-muted">{t.clock.lmst}</dt>
       <dd className="font-mono">{formatMarsTime(lmst)}</dd>
 
-      <dt className="text-muted">Sol del sitio</dt>
-      <dd className="font-mono">{siteSol(mt.msd, lon).toLocaleString("es-AR")}</dd>
+      <dt className="text-muted">{t.clock.sol}</dt>
+      <dd className="font-mono">{siteSol(mt.msd, lon).toLocaleString(t.locale)}</dd>
 
-      <dt className="text-muted">Ls</dt>
+      <dt className="text-muted">{t.clock.ls}</dt>
       <dd className="font-mono">
-        {mt.ls.toFixed(2)}°{" "}
-        <span className="text-muted">· {seasonFromLs(mt.ls)}</span>
+        {mt.ls.toLocaleString(t.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}°{" "}
+        <span className="text-muted">· {t.clock.seasons[seasonFromLs(mt.ls)]}</span>
       </dd>
 
-      <dt className="text-muted">MTC</dt>
+      <dt className="text-muted">{t.clock.mtc}</dt>
       <dd className="font-mono">{formatMarsTime(mt.mtc)}</dd>
     </dl>
   );

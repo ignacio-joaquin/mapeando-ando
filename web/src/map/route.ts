@@ -4,6 +4,7 @@
  * eso van como hex acá, en un solo lugar.
  */
 import type { LegClass } from "../api/schemas";
+import type { Messages } from "../i18n";
 
 export const LEG_CLASS_COLOR: Record<LegClass, string> = {
   ok: "#5fbf86",
@@ -13,14 +14,7 @@ export const LEG_CLASS_COLOR: Record<LegClass, string> = {
   unknown: "#a39a8f",
 };
 
-/** Texto de la leyenda: nada crítico va solo por color. */
-export const LEG_CLASS_LABEL: Record<LegClass, string> = {
-  ok: "transitable",
-  caution: "con cuidado",
-  limit: "al límite",
-  blocked: "no transitable",
-  unknown: "sin evaluar (falta DTM)",
-};
+// El texto de cada clase está en src/i18n (`legClass`): nada crítico va solo por color.
 
 export type WaypointKind = "origin" | "station" | "destination";
 
@@ -28,8 +22,9 @@ export type WaypointKind = "origin" | "station" | "destination";
 export function waypointLabel(
   index: number,
   total: number,
+  t: Messages,
 ): { readonly kind: WaypointKind; readonly short: string; readonly long: string } {
-  if (index === 0) return { kind: "origin", short: "A", long: "Salida" };
-  if (index === total - 1) return { kind: "destination", short: "B", long: "Llegada" };
-  return { kind: "station", short: String(index), long: `Estación ${index}` };
+  if (index === 0) return { kind: "origin", short: "A", long: t.waypoint.origin };
+  if (index === total - 1) return { kind: "destination", short: "B", long: t.waypoint.destination };
+  return { kind: "station", short: String(index), long: t.waypoint.station(index) };
 }

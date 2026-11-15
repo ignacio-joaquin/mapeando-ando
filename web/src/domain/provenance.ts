@@ -1,7 +1,11 @@
 import { MARS_RADIUS_M } from "../mars/constants";
+import type { Messages } from "../i18n";
 
 /**
  * Formato común de un número visible: valor + unidad + de dónde sale.
+ *
+ * Los textos (fuente, supuestos) salen del idioma activo: por eso las
+ * procedencias del frontend son funciones de `t` (src/i18n).
  *
  * Regla del briefing: todo número que ve el usuario lleva badge de
  * procedencia. Este tipo es lo que consume <Measure> y <ProvenanceBadge>.
@@ -40,43 +44,37 @@ export interface DataValue extends SourceInfo {
   readonly unit: string | null;
 }
 
-export const PROVENANCE_LABEL: Record<Provenance, string> = {
-  OBSERVED: "observado",
-  DERIVED: "derivado",
-  MODELED: "modelado",
-};
-
 /** Texto corto del badge: "MRO HiRISE · DERIVED". */
-export function sourceLabel(s: SourceInfo): string {
+export function sourceLabel(s: SourceInfo, t: Messages): string {
   const who = [s.mission, s.instrument].filter(Boolean).join(" ");
-  return `${who || "cálculo local"} · ${s.provenance}`;
+  return `${who || t.badge.localCalc} · ${s.provenance}`;
 }
 
 const km = (m: number) => (m / 1000).toFixed(m % 1000 === 0 ? 0 : 2);
 
 /** Procedencia de lo que calcula el frontend con geometría esférica. */
-export const LOCAL_GEOMETRY: SourceInfo = {
-  provenance: "DERIVED",
-  mission: null,
-  instrument: "geometría esférica",
-  source: "Cálculo en el navegador (src/mars/geo.ts)",
-  assumptions: [
-    `Esfera IAU Mars 2000 de radio ${km(MARS_RADIUS_M)} km, la misma de los DTM y de la API`,
-    "Distancia sobre la superficie en línea recta, sin relieve",
-  ],
-};
+export function localGeometry(t: Messages): SourceInfo {
+  return {
+    provenance: "DERIVED",
+    mission: null,
+    instrument: t.sources.localGeometryInstrument,
+    source: t.sources.localGeometrySource,
+    assumptions: t.sources.localGeometryAssumptions(km(MARS_RADIUS_M)),
+  };
+}
 
 /** Procedencia del reloj marciano (Mars24, en el cliente). */
-export const MARS24: SourceInfo = {
-  provenance: "MODELED",
-  mission: "NASA GISS",
-  instrument: "Mars24",
-  source: "Algoritmo Mars24 (Allison & McEwen 2000), calculado en el navegador",
-  assumptions: ["Hora del reloj de esta computadora", "Longitud del centro del sitio"],
-};
+export function mars24(t: Messages): SourceInfo {
+  return {
+    provenance: "MODELED",
+    mission: "NASA GISS",
+    instrument: "Mars24",
+    source: t.sources.mars24Source,
+    assumptions: t.sources.mars24Assumptions,
+  };
+}
 
 /** Hora solar local derivada de una hora UTC (Mars24). */
-export const MARS24_LTST: SourceInfo = {
-  ...MARS24,
-  assumptions: ["Hora solar verdadera local en la longitud de cada punto"],
-};
+export function mars24Ltst(t: Messages): SourceInfo {
+  return { ...mars24(t), assumptions: t.sources.mars24LtstAssumptions };
+}

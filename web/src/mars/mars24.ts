@@ -101,12 +101,17 @@ export function formatMarsTime(hours: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-/** Estación en el hemisferio norte marciano, según Ls. */
-export function seasonFromLs(ls: number): string {
-  if (ls < 90) return "primavera norte";
-  if (ls < 180) return "verano norte";
-  if (ls < 270) return "otoño norte";
-  return "invierno norte";
+export type Season = "spring" | "summer" | "autumn" | "winter";
+
+/**
+ * Estación en el hemisferio norte marciano, según Ls. Devuelve una clave: el
+ * texto ("primavera norte", "northern spring") está en src/i18n.
+ */
+export function seasonFromLs(ls: number): Season {
+  if (ls < 90) return "spring";
+  if (ls < 180) return "summer";
+  if (ls < 270) return "autumn";
+  return "winter";
 }
 
 /** LTST (horas, 0–24) en una longitud dada para un instante terrestre. */

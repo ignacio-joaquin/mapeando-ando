@@ -1,6 +1,7 @@
 import type { Profile } from "../../api/schemas";
 import { formatDistance } from "../../mars/geo";
 import { SLOPE_CLASSES, slopeClass } from "../../map/layers";
+import { useT } from "../../i18n";
 
 /**
  * Perfil de elevación de la travesía, coloreado por pendiente.
@@ -19,17 +20,14 @@ interface Props {
 const PAD = { top: 10, right: 8, bottom: 20, left: 44 };
 
 export function ElevationProfile({ profile, height = 140 }: Props) {
+  const t = useT();
   if (!profile || profile.distance_m.length < 2) {
     return (
       <div className="border-t border-line bg-panel/40 px-3 py-2">
         <h2 className="mb-1 text-xs font-semibold tracking-wide text-muted uppercase">
-          Perfil de elevación
+          {t.profile.title}
         </h2>
-        <p className="text-[11px] text-warn">
-          Falta el perfil. Lo devuelve el backend al muestrear el DTM sobre la
-          ruta; mientras la ruta la calcule el planificador de ejemplo, o el DTM
-          no esté descargado, acá no se dibuja nada. No se inventa una curva.
-        </p>
+        <p className="text-[11px] text-warn">{t.profile.missing}</p>
       </div>
     );
   }
@@ -80,17 +78,17 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
     <div className="border-t border-line bg-panel/40 px-3 py-2">
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-          Perfil de elevación
+          {t.profile.title}
         </h2>
         <ul className="flex flex-wrap gap-x-3 gap-y-1">
-          {SLOPE_CLASSES.map((c) => (
-            <li key={c.label} className="flex items-center gap-1.5 text-[10px] text-muted">
+          {SLOPE_CLASSES.map((c, i) => (
+            <li key={c.color} className="flex items-center gap-1.5 text-[10px] text-muted">
               <span
                 aria-hidden
                 className="inline-block h-0.5 w-3 rounded-full"
                 style={{ background: c.color }}
               />
-              {c.label}
+              {t.slopeClasses[i]}
             </li>
           ))}
         </ul>
@@ -100,7 +98,7 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
         viewBox={`0 0 ${w} ${h}`}
         className="h-[140px] w-full"
         role="img"
-        aria-label={`Perfil de elevación de la travesía: ${formatDistance(dMax)} y entre ${Math.round(zMin)} y ${Math.round(zMax)} metros de elevación`}
+        aria-label={t.profile.aria(formatDistance(dMax), Math.round(zMin), Math.round(zMax))}
       >
         {ticksZ.map((z) => (
           <g key={z}>

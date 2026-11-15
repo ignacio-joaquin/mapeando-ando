@@ -14,7 +14,8 @@
  */
 import { marsBearingDeg, marsDistanceM } from "../mars/geo";
 import { ltstAt } from "../mars/mars24";
-import { LOCAL_GEOMETRY, type SourceInfo } from "../domain/provenance";
+import { localGeometry, type SourceInfo } from "../domain/provenance";
+import { getT, type Messages } from "../i18n";
 import type {
   LimitingFactor,
   MeasuredValue,
@@ -36,44 +37,36 @@ export const EXAMPLE_PARAMS = {
 /** Tasa de dosis de base: MSL RAD, Hassler et al. 2014 (0.64 mSv/día terrestre). */
 const RAD_DOSE_MSV_PER_DAY = 0.64;
 
-const EXAMPLE: SourceInfo = {
-  provenance: "MODELED",
-  mission: null,
-  instrument: "parámetro de ejemplo",
-  source: "Planificador de ejemplo del frontend (src/api/routeFixture.ts)",
-  assumptions: [
-    `Caminata a ${EXAMPLE_PARAMS.walkSpeedKmh} km/h constante`,
-    `Autonomía de ${EXAMPLE_PARAMS.o2Hours} h de O2 y ${EXAMPLE_PARAMS.batteryHours} h de batería, consumo lineal`,
-    "Valores elegidos para probar la interfaz, no de un traje real",
-  ],
-};
-
-const DOSE: SourceInfo = {
-  provenance: "MODELED",
-  mission: "MSL",
-  instrument: "RAD",
-  source: "Hassler et al. 2014 (reference/rad_surface_dose.json)",
-  assumptions: [
-    `Tasa de base medida en Gale (${RAD_DOSE_MSV_PER_DAY} mSv/día), igual en todo el recorrido`,
-    "Sin blindaje del terreno ni eventos solares",
-  ],
-};
-
-const STRAIGHT_LINE: SourceInfo = {
-  ...LOCAL_GEOMETRY,
-  assumptions: [
-    ...(LOCAL_GEOMETRY.assumptions ?? []),
-    "Tramo en línea recta: el ejemplo no esquiva obstáculos",
-  ],
-};
-
-const MISSING_DTM: SourceInfo = {
-  provenance: "DERIVED",
-  mission: "MRO",
-  instrument: "HiRISE DTM",
-  resolution: "1 m/px",
-  source: "Falta: requiere el DTM procesado por el pipeline",
-};
+/** Procedencias del ejemplo, con los textos del idioma activo. */
+function exampleSources(t: Messages) {
+  const example: SourceInfo = {
+    provenance: "MODELED",
+    mission: null,
+    instrument: t.example.instrument,
+    source: t.example.source,
+    assumptions: t.example.assumptions(EXAMPLE_PARAMS),
+  };
+  const dose: SourceInfo = {
+    provenance: "MODELED",
+    mission: "MSL",
+    instrument: "RAD",
+    source: "Hassler et al. 2014 (reference/rad_surface_dose.json)",
+    assumptions: t.example.doseAssumptions(RAD_DOSE_MSV_PER_DAY),
+  };
+  const geometry = localGeometry(t);
+  const straightLine: SourceInfo = {
+    ...geometry,
+    assumptions: [...(geometry.assumptions ?? []), t.example.straightLine],
+  };
+  const missingDtm: SourceInfo = {
+    provenance: "DERIVED",
+    mission: "MRO",
+    instrument: "HiRISE DTM",
+    resolution: "1 m/px",
+    source: t.example.missingDtm,
+  };
+  return { example, dose, straightLine, missingDtm };
+}
 
 const mv = (value: number | null, unit: string | null, src: SourceInfo): MeasuredValue => ({
   ...src,
@@ -83,7 +76,13 @@ const mv = (value: number | null, unit: string | null, src: SourceInfo): Measure
 
 const HOUR_MS = 3_600_000;
 
+/**
+ * Los textos (supuestos, veredicto) salen en el idioma activo al momento del
+ * cálculo; el planificador vuelve a calcular cuando cambia el idioma.
+ */
 export function exampleRoute(req: RouteRequest): RouteResponse {
+  const msg = getT();
+  const { example, dose, straightLine, missingDtm } = exampleSources(msg);
   const wps = req.waypoints;
   const t0 = new Date(req.depart_utc).getTime();
   const p = EXAMPLE_PARAMS;
@@ -101,10 +100,10 @@ export function exampleRoute(req: RouteRequest): RouteResponse {
         [b.lon, b.lat],
       ],
       class: "unknown",
-      distance: mv(d, "m", STRAIGHT_LINE),
-      duration: mv((d / 1000 / p.walkSpeedKmh) * 60, "min", EXAMPLE),
-      bearing: mv(marsBearingDeg(a, b), "°", STRAIGHT_LINE),
-      max_slope: mv(null, "°", MISSING_DTM),
+      distance: mv(d, "m", straightLine),
+      duration: mv((d / 1000 / p.walkSpeedKmh) * 60, "min", example),
+      bearing: mv(marsBearingDeg(a, b), "°", straightLine),
+      max_slope: mv(null, "°", missingDtm),
     });
   }
 
@@ -137,10 +136,10 @@ export function exampleRoute(req: RouteRequest): RouteResponse {
       task: wp.task,
       arrive_utc: times[i]?.arrive != null ? new Date(times[i]!.arrive!).toISOString() : null,
       depart_utc: times[i]?.depart != null ? new Date(times[i]!.depart!).toISOString() : null,
-      o2_remaining: mv(p.o2Hours - h, "h", EXAMPLE),
-      battery_remaining: mv(((p.batteryHours - h) / p.batteryHours) * 100, "%", EXAMPLE),
-      dose_accumulated: mv((RAD_DOSE_MSV_PER_DAY / 24) * h, "mSv", DOSE),
-      margin: mv(marginMin, "min", EXAMPLE),
+      o2_remaining: mv(p.o2Hours - h, "h", example),
+      battery_remaining: mv(((p.batteryHours - h) / p.batteryHours) * 100, "%", example),
+      dose_accumulated: mv((RAD_DOSE_MSV_PER_DAY / 24) * h, "mSv", dose),
+      margin: mv(marginMin, "min", example),
     };
   });
 
@@ -161,8 +160,8 @@ export function exampleRoute(req: RouteRequest): RouteResponse {
     verdict = {
       status: "NO_GO",
       limiting_factor: "daylight",
-      summary: `Fuera de la ventana de luz (${p.daylightLtst.from}:00–${p.daylightLtst.to}:00 hora solar local).`,
-      margin: mv(marginMin, "min", EXAMPLE),
+      summary: msg.example.dark(p.daylightLtst.from, p.daylightLtst.to),
+      margin: mv(marginMin, "min", example),
     };
   } else if (marginMin < p.reserveMin) {
     verdict = {
@@ -170,19 +169,17 @@ export function exampleRoute(req: RouteRequest): RouteResponse {
       limiting_factor: limiting,
       summary:
         limiting === "o2"
-          ? `El O2 no deja la reserva mínima de ${p.reserveMin} min al llegar.`
-          : `La batería no deja la reserva mínima de ${p.reserveMin} min al llegar.`,
-      margin: mv(marginMin, "min", EXAMPLE),
+          ? msg.example.noReserveO2(p.reserveMin)
+          : msg.example.noReserveBattery(p.reserveMin),
+      margin: mv(marginMin, "min", example),
     };
   } else {
     verdict = {
       status: "GO",
       limiting_factor: limiting,
       summary:
-        limiting === "o2"
-          ? "Alcanza. Lo que se acaba primero es el O2."
-          : "Alcanza. Lo que se acaba primero es la batería.",
-      margin: mv(marginMin, "min", EXAMPLE),
+        limiting === "o2" ? msg.example.goO2 : msg.example.goBattery,
+      margin: mv(marginMin, "min", example),
     };
   }
 

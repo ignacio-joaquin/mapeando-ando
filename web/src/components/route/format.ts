@@ -1,5 +1,6 @@
 import { ltstAt, formatMarsTime } from "../../mars/mars24";
 import type { SourceInfo } from "../../domain/provenance";
+import type { Messages } from "../../i18n";
 
 /** Hora solar local "HH:MM" en una longitud, para un instante UTC. */
 export function ltstShort(iso: string | Date, lon: number): string {
@@ -7,10 +8,10 @@ export function ltstShort(iso: string | Date, lon: number): string {
   return formatMarsTime(ltstAt(d, lon)).slice(0, 5);
 }
 
-/** Hora terrestre de esta computadora, "HH:MM". */
-export function earthShort(iso: string | Date): string {
+/** Hora terrestre de esta computadora, "HH:MM", en el formato del idioma activo. */
+export function earthShort(iso: string | Date, locale: string): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
 /** Valor para <input type="datetime-local"> en la zona horaria local. */
@@ -30,9 +31,9 @@ export function formatMinutes(min: number): string {
   return `${h} h ${String(r).padStart(2, "0")} min`;
 }
 
-const COMPASS = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"] as const;
-export function formatBearing(deg: number): string {
-  const card = COMPASS[Math.round(deg / 45) % 8] ?? "N";
+/** "045° NE". Los puntos cardinales cambian con el idioma (SO / SW). */
+export function formatBearing(deg: number, t: Messages): string {
+  const card = t.compass[Math.round(deg / 45) % 8] ?? "N";
   return `${String(Math.round(deg)).padStart(3, "0")}° ${card}`;
 }
 

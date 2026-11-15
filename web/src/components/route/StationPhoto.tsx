@@ -5,6 +5,7 @@ import type { SourceInfo } from "../../domain/provenance";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { formatDistanceM } from "./format";
+import { useT, type Messages } from "../../i18n";
 
 /**
  * "Lo que vas a ver al llegar": la foto real del rover más cercana a la
@@ -32,17 +33,18 @@ export function creditFor(camera: string): string {
   return "NASA/JPL-Caltech";
 }
 
-function photoSource(p: RoverPhoto): SourceInfo {
+function photoSource(p: RoverPhoto, t: Messages): SourceInfo {
   return {
     provenance: "OBSERVED",
     mission: p.mission,
     instrument: p.camera,
-    source: `Imagen cruda de ${p.rover}, sol ${p.sol} (mars.nasa.gov)`,
-    assumptions: ["Tomada desde donde estaba el rover, no desde el punto exacto de la estación"],
+    source: t.photo.source(p.rover, p.sol),
+    assumptions: [t.photo.assumption],
   };
 }
 
 export function StationPhoto({ siteId, lat, lon }: Props) {
+  const t = useT();
   const [state, setState] = useState<State>({ kind: "loading" });
   const [shown, setShown] = useState(0);
 
@@ -69,17 +71,17 @@ export function StationPhoto({ siteId, lat, lon }: Props) {
   return (
     <section className="mt-2 border-t border-line pt-2">
       <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted uppercase">
-        Lo que vas a ver al llegar
+        {t.photo.heading}
       </h4>
 
       {state.kind === "loading" ? (
-        <p className="text-xs text-muted">Buscando la foto del rover más cercana…</p>
+        <p className="text-xs text-muted">{t.photo.loading}</p>
       ) : state.kind === "error" ? (
-        <p className="text-xs text-alert">No se pudieron traer las fotos. {state.message}</p>
+        <p className="text-xs text-alert">{t.photo.error(state.message)}</p>
       ) : state.data.photos.length === 0 ? (
         <p className="rounded border border-warn/60 bg-warn/10 p-2 text-[11px] text-fg">
-          <strong className="text-warn">Sin foto.</strong>{" "}
-          {state.data.note ?? "No hay fotos del rover cerca de este punto."}
+          <strong className="text-warn">{t.photo.none}</strong>{" "}
+          {state.data.note ?? t.photo.noneNear}
         </p>
       ) : (
         <Photos photos={state.data.photos} shown={shown} onShow={setShown} />
@@ -97,16 +99,17 @@ function Photos({
   readonly shown: number;
   readonly onShow: (i: number) => void;
 }) {
+  const t = useT();
   const p = photos[shown] ?? photos[0];
   if (!p) return null;
   const credit = p.credit.trim() || creditFor(p.camera);
 
   return (
     <figure className="flex flex-col gap-1.5">
-      <a href={p.url_full ?? p.url} target="_blank" rel="noreferrer" title="Abrir la imagen completa">
+      <a href={p.url_full ?? p.url} target="_blank" rel="noreferrer" title={t.photo.openFull}>
         <img
           src={p.url}
-          alt={`${p.rover}, ${p.camera}, sol ${p.sol}`}
+          alt={t.photo.alt(p.rover, p.camera, p.sol)}
           loading="lazy"
           className="aspect-[4/3] w-full rounded border border-line bg-bg object-cover"
         />
@@ -114,30 +117,30 @@ function Photos({
       <figcaption className="flex flex-col gap-1 text-[11px]">
         <span className="flex flex-wrap items-center justify-between gap-1.5">
           <span>
-            <span className="font-semibold">{p.rover}</span> · {p.camera} · sol{" "}
+            <span className="font-semibold">{p.rover}</span> · {p.camera} · {t.photo.sol}{" "}
             <span className="font-mono">{p.sol}</span>
           </span>
-          <ProvenanceBadge source={photoSource(p)} align="left" />
+          <ProvenanceBadge source={photoSource(p, t)} align="left" />
         </span>
         <span className="flex flex-wrap items-center gap-1.5 text-muted">
-          Tomada a
+          {t.photo.takenBefore}
           <Measure data={{ ...p.distance, unit: null }} format={formatDistanceM} align="left" />
-          de esta estación
+          {t.photo.takenAfter}
         </span>
         <span className="text-muted">
-          Crédito: <span className="text-fg">{credit}</span>
+          {t.photo.credit} <span className="text-fg">{credit}</span>
         </span>
       </figcaption>
 
       {photos.length > 1 ? (
-        <div className="flex gap-1.5" role="group" aria-label="Otras fotos cercanas">
+        <div className="flex gap-1.5" role="group" aria-label={t.photo.others}>
           {photos.slice(0, 4).map((ph, i) => (
             <button
               key={ph.url}
               type="button"
               onClick={() => onShow(i)}
               aria-pressed={i === shown}
-              aria-label={`Foto ${i + 1}: ${ph.camera}, sol ${ph.sol}`}
+              aria-label={t.photo.thumb(i + 1, ph.camera, ph.sol)}
               className={`overflow-hidden rounded border-2 ${i === shown ? "border-rust" : "border-line"}`}
             >
               <img src={ph.url} alt="" loading="lazy" className="size-12 object-cover" />

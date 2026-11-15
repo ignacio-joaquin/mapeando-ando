@@ -1,5 +1,6 @@
 import type { DataValue } from "../domain/provenance";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { useT } from "../i18n";
 
 /**
  * Número visible con su procedencia. Es la forma de mostrar cualquier valor
@@ -18,23 +19,24 @@ interface Props {
   readonly align?: "left" | "right";
 }
 
-const defaultFormat = (v: number) => v.toLocaleString("es-AR", { maximumFractionDigits: 2 });
-
 export function Measure({
   data,
-  format = defaultFormat,
+  format,
   badge = "inline",
   size = "sm",
   align = "right",
 }: Props) {
+  const t = useT();
   const missing = data.value === null;
+  // Por defecto, separador decimal del idioma activo (0,64 / 0.64).
+  const fmt = format ?? ((v: number) => v.toLocaleString(t.locale, { maximumFractionDigits: 2 }));
 
   return (
     <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
       <span
         className={`font-mono ${size === "lg" ? "text-base" : "text-xs"} ${missing ? "text-warn" : ""}`}
       >
-        {data.value === null ? "falta el dato" : format(data.value)}
+        {data.value === null ? t.measure.missing : fmt(data.value)}
         {data.value !== null && data.unit ? (
           <span className="ml-0.5 text-muted">{data.unit}</span>
         ) : null}

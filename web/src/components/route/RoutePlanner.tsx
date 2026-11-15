@@ -2,8 +2,9 @@ import { useEffect, type ReactNode } from "react";
 import { planRoute } from "../../api/client";
 import { EXAMPLE_PARAMS } from "../../api/routeFixture";
 import type { MeasuredValue, RouteLeg, RouteStop } from "../../api/schemas";
-import { MARS24_LTST } from "../../domain/provenance";
-import { LEG_CLASS_COLOR, LEG_CLASS_LABEL, waypointLabel } from "../../map/route";
+import { mars24Ltst } from "../../domain/provenance";
+import { LEG_CLASS_COLOR, waypointLabel } from "../../map/route";
+import { useLang, useT } from "../../i18n";
 import { formatLatLon } from "../../mars/geo";
 import { planKey, useFreshRoute, usePlan, type Waypoint } from "../../state/plan";
 import { useStore } from "../../state/store";
@@ -30,6 +31,10 @@ import {
  * usa el planificador de ejemplo y lo dice.
  */
 export function RoutePlanner() {
+  const t = useT();
+  // El planificador de ejemplo escribe sus textos en el idioma activo: al
+  // cambiarlo, se vuelve a calcular para que el veredicto no quede en el otro.
+  const lang = useLang((s) => s.lang);
   const siteId = useStore((s) => s.activeSiteId);
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
@@ -85,7 +90,7 @@ export function RoutePlanner() {
       clearTimeout(t);
       ctl.abort();
     };
-  }, [waypoints, departAt, siteId, setResult, setStatus]);
+  }, [waypoints, departAt, siteId, lang, setResult, setStatus]);
 
   const route = result?.route ?? null;
   const origin = waypoints[0];
@@ -95,14 +100,14 @@ export function RoutePlanner() {
     <div className="flex flex-col gap-3 text-sm">
       <header className="flex items-center justify-between gap-2">
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-          Planificar travesía
+          {t.planner.title}
         </h2>
-        <div className="flex gap-1" role="group" aria-label="Qué hace un clic en el mapa">
+        <div className="flex gap-1" role="group" aria-label={t.planner.clickModeAria}>
           <ModeButton active={clickMode === "add"} onClick={() => setClickMode("add")}>
-            + puntos
+            {t.planner.addPoints}
           </ModeButton>
           <ModeButton active={clickMode === "inspect"} onClick={() => setClickMode("inspect")}>
-            inspeccionar
+            {t.planner.inspect}
           </ModeButton>
         </div>
       </header>
@@ -110,7 +115,7 @@ export function RoutePlanner() {
       {/* Hora de salida */}
       <section className="rounded border border-line p-2">
         <label className="flex flex-col gap-1 text-xs">
-          <span className="text-muted">Hora de salida (hora de tu computadora)</span>
+          <span className="text-muted">{t.planner.departTime}</span>
           <span className="flex gap-1">
             <input
               type="datetime-local"
@@ -126,16 +131,16 @@ export function RoutePlanner() {
               onClick={() => setDepartAt(new Date())}
               className="rounded border border-line px-2 text-xs text-muted hover:text-fg"
             >
-              ahora
+              {t.planner.now}
             </button>
           </span>
         </label>
         {origin ? (
           <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-muted">En la salida:</span>
+            <span className="text-muted">{t.planner.atDeparture}</span>
             <span className="font-mono text-base text-rust">{ltstShort(departAt, origin.lon)}</span>
             <span className="text-muted">LTST</span>
-            <ProvenanceBadge source={MARS24_LTST} align="left" />
+            <ProvenanceBadge source={mars24Ltst(t)} align="left" />
           </p>
         ) : null}
       </section>
@@ -143,7 +148,7 @@ export function RoutePlanner() {
       {/* Veredicto */}
       {status.kind === "error" ? (
         <p className="rounded border border-alert bg-alert/15 p-2 text-xs text-fg">
-          No se pudo calcular la ruta. {status.message}
+          {t.planner.routeError(status.message)}
         </p>
       ) : route ? (
         <>
@@ -154,20 +159,20 @@ export function RoutePlanner() {
             onClick={() => window.print()}
             className="rounded border border-line px-2 py-1.5 text-xs text-fg hover:border-rust"
           >
-            Imprimir tira de la travesía
+            {t.planner.print}
           </button>
         </>
       ) : waypoints.length === 1 ? (
-        <Hint>Ahora hacé clic donde querés llegar (B).</Hint>
+        <Hint>{t.planner.hintDestination}</Hint>
       ) : waypoints.length === 0 ? (
-        <Hint>Hacé clic en el mapa para poner la salida (A).</Hint>
+        <Hint>{t.planner.hintOrigin}</Hint>
       ) : (
         // Sin veredicto mientras se recalcula: el anterior era de otra ruta.
         <p
           role="status"
           className="rounded border border-line p-2 text-xs text-muted"
         >
-          Recalculando la travesía… El veredicto anterior ya no vale.
+          {t.planner.recalculating}
         </p>
       )}
 
@@ -176,14 +181,14 @@ export function RoutePlanner() {
         <section className="flex flex-col">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
-              Recorrido · {waypoints.length} {waypoints.length === 1 ? "punto" : "puntos"}
+              {t.planner.route(waypoints.length)}
             </h3>
             <span className="flex gap-2 text-[11px]">
               <button type="button" onClick={reverse} className="text-muted hover:text-fg">
-                invertir
+                {t.planner.reverse}
               </button>
               <button type="button" onClick={clear} className="text-rust hover:underline">
-                borrar todo
+                {t.planner.clearAll}
               </button>
             </span>
           </div>
@@ -208,7 +213,7 @@ export function RoutePlanner() {
           </ol>
 
           {waypoints.length >= 2 ? (
-            <Hint>Clic en el mapa agrega una estación antes de la llegada. Los marcadores se pueden arrastrar.</Hint>
+            <Hint>{t.planner.hintStations}</Hint>
           ) : null}
         </section>
       ) : null}
@@ -259,14 +264,12 @@ function Hint({ children }: { readonly children: ReactNode }) {
 }
 
 function ExampleNotice() {
-  const p = EXAMPLE_PARAMS;
+  const t = useT();
   return (
     <p className="rounded border border-warn/60 bg-warn/10 p-2 text-[11px] leading-snug text-fg">
-      <strong className="text-warn">Veredicto de ejemplo.</strong> El server todavía no tiene{" "}
-      <code>/api/route</code>: esto lo calcula el frontend en línea recta, sin terreno, con
-      parámetros supuestos ({p.walkSpeedKmh} km/h, {p.o2Hours} h de O2 y de batería, reserva de{" "}
-      {p.reserveMin} min, luz de {p.daylightLtst.from} a {p.daylightLtst.to} h LTST). No usar para
-      decidir.
+      <strong className="text-warn">{t.planner.exampleTitle}</strong> {t.planner.exampleBefore}{" "}
+      <code>/api/route</code>
+      {t.planner.exampleAfter(EXAMPLE_PARAMS)}
     </p>
   );
 }
@@ -276,21 +279,22 @@ function ExampleNotice() {
  * una vez acá; si una fila difiere, esa fila muestra el suyo (ver StopCard).
  */
 function SourcesRow({ stop, leg }: { readonly stop: RouteStop; readonly leg: RouteLeg | undefined }) {
+  const t = useT();
   const items: [string, MeasuredValue][] = [
-    ["O2", stop.o2_remaining],
-    ["Batería", stop.battery_remaining],
-    ["Dosis", stop.dose_accumulated],
+    [t.planner.o2, stop.o2_remaining],
+    [t.planner.battery, stop.battery_remaining],
+    [t.planner.dose, stop.dose_accumulated],
   ];
   if (leg) {
-    items.push(["Distancia y rumbo", leg.distance], ["Duración", leg.duration]);
+    items.push([t.planner.distanceBearing, leg.distance], [t.planner.duration, leg.duration]);
   }
   return (
     <details className="mb-2 rounded border border-line p-2 text-[11px]">
-      <summary className="cursor-pointer text-muted">De dónde sale cada número</summary>
+      <summary className="cursor-pointer text-muted">{t.planner.sourcesSummary}</summary>
       <ul className="mt-2 flex flex-col gap-1.5">
         <li className="flex items-center justify-between gap-2">
-          <span className="text-muted">Horas (LTST)</span>
-          <ProvenanceBadge source={MARS24_LTST} />
+          <span className="text-muted">{t.planner.hoursLtst}</span>
+          <ProvenanceBadge source={mars24Ltst(t)} />
         </li>
         {items.map(([label, v]) => (
           <li key={label} className="flex items-center justify-between gap-2">
@@ -316,10 +320,11 @@ function StopCard({
   readonly stop: RouteStop | undefined;
   readonly reference: RouteStop | undefined;
 }) {
+  const t = useT();
   const { updatePoint, removePoint, shiftPoint, setOpenStop } = usePlan.getState();
   const open = usePlan((s) => s.openStop === index);
   const siteId = useStore((s) => s.activeSiteId);
-  const label = waypointLabel(index, total);
+  const label = waypointLabel(index, total, t);
   const isStation = label.kind === "station";
 
   const dot =
@@ -341,7 +346,7 @@ function StopCard({
           type="button"
           onClick={() => setOpenStop(open ? null : index)}
           className={`grid size-6 shrink-0 place-items-center rounded-full border-2 border-fg text-[11px] font-bold ${dot}`}
-          aria-label={`${label.long}: ${open ? "cerrar" : "abrir"}`}
+          aria-label={t.planner.toggleStop(label.long, open)}
         >
           {label.short}
         </button>
@@ -349,17 +354,17 @@ function StopCard({
           <div className="flex items-center justify-between gap-2">
             <span className="font-semibold">{label.long}</span>
             <span className="flex gap-1 text-[11px] text-muted">
-              <IconButton label="Subir" disabled={index === 0} onClick={() => shiftPoint(waypoint.id, -1)}>
+              <IconButton label={t.planner.moveUp} disabled={index === 0} onClick={() => shiftPoint(waypoint.id, -1)}>
                 ↑
               </IconButton>
               <IconButton
-                label="Bajar"
+                label={t.planner.moveDown}
                 disabled={index === total - 1}
                 onClick={() => shiftPoint(waypoint.id, 1)}
               >
                 ↓
               </IconButton>
-              <IconButton label="Quitar" onClick={() => removePoint(waypoint.id)}>
+              <IconButton label={t.planner.remove} onClick={() => removePoint(waypoint.id)}>
                 ✕
               </IconButton>
             </span>
@@ -373,8 +378,8 @@ function StopCard({
           type="text"
           value={waypoint.task}
           onChange={(e) => updatePoint(waypoint.id, { task: e.target.value })}
-          placeholder={isStation ? "Tarea (ej. tomar muestra)" : "Tarea (opcional)"}
-          aria-label={`Tarea en ${label.long}`}
+          placeholder={isStation ? t.planner.taskStation : t.planner.taskOptional}
+          aria-label={t.planner.taskAria(label.long)}
           className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-fg placeholder:text-muted/70"
         />
         {isStation ? (
@@ -387,10 +392,10 @@ function StopCard({
               onChange={(e) =>
                 updatePoint(waypoint.id, { dwellMin: Math.max(0, Number(e.target.value) || 0) })
               }
-              aria-label={`Minutos en ${label.long}`}
+              aria-label={t.planner.minutesAria(label.long)}
               className="w-14 rounded border border-line bg-bg px-1.5 py-1 text-right font-mono text-xs text-fg"
             />
-            min
+            {t.planner.min}
           </label>
         ) : null}
       </div>
@@ -399,21 +404,21 @@ function StopCard({
         <dl className="mt-2 grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-xs">
           {stop.arrive_utc ? (
             <>
-              <dt className="text-muted">Llega</dt>
-              <dd className="font-mono" title={`Tu hora: ${earthShort(stop.arrive_utc)}`}>
+              <dt className="text-muted">{t.planner.arrives}</dt>
+              <dd className="font-mono" title={t.planner.yourTime(earthShort(stop.arrive_utc, t.locale))}>
                 {ltstShort(stop.arrive_utc, stop.lon)} <span className="text-muted">LTST</span>
               </dd>
             </>
           ) : null}
           {stop.depart_utc ? (
             <>
-              <dt className="text-muted">Sale</dt>
-              <dd className="font-mono" title={`Tu hora: ${earthShort(stop.depart_utc)}`}>
+              <dt className="text-muted">{t.planner.departs}</dt>
+              <dd className="font-mono" title={t.planner.yourTime(earthShort(stop.depart_utc, t.locale))}>
                 {ltstShort(stop.depart_utc, stop.lon)} <span className="text-muted">LTST</span>
               </dd>
             </>
           ) : null}
-          <dt className="text-muted">O2</dt>
+          <dt className="text-muted">{t.planner.o2}</dt>
           <dd className="text-right">
             <Measure
               data={stop.o2_remaining}
@@ -421,7 +426,7 @@ function StopCard({
               badge={badgeFor(stop.o2_remaining, reference?.o2_remaining)}
             />
           </dd>
-          <dt className="text-muted">Batería</dt>
+          <dt className="text-muted">{t.planner.battery}</dt>
           <dd className="text-right">
             <Measure
               data={stop.battery_remaining}
@@ -429,7 +434,7 @@ function StopCard({
               badge={badgeFor(stop.battery_remaining, reference?.battery_remaining)}
             />
           </dd>
-          <dt className="text-muted">Dosis acumulada</dt>
+          <dt className="text-muted">{t.planner.doseAccumulated}</dt>
           <dd className="text-right">
             <Measure
               data={stop.dose_accumulated}
@@ -448,7 +453,7 @@ function StopCard({
           onClick={() => setOpenStop(index)}
           className="mt-2 text-[11px] text-rust hover:underline"
         >
-          Ver qué hay en este punto
+          {t.planner.seeHere}
         </button>
       )}
     </div>
@@ -456,25 +461,26 @@ function StopCard({
 }
 
 function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference: RouteLeg | undefined }) {
+  const t = useT();
   const color = LEG_CLASS_COLOR[leg.class];
   const same = (v: MeasuredValue, r: MeasuredValue | undefined) => repeatedBadge(v, r);
   return (
     <div className="ml-3 flex gap-3 border-l-4 py-1.5 pl-3 text-[11px]" style={{ borderColor: color }}>
       <div className="flex flex-col gap-0.5">
         <span className="font-semibold" style={{ color }}>
-          {LEG_CLASS_LABEL[leg.class]}
+          {t.legClass[leg.class]}
         </span>
         <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted">
           <Measure data={{ ...leg.distance, unit: null }} format={formatDistanceM} badge={same(leg.distance, reference?.distance)} />
           ·
           <Measure data={{ ...leg.duration, unit: null }} format={formatMinutes} badge={same(leg.duration, reference?.duration)} />
           ·
-          <span>rumbo</span>
-          <Measure data={{ ...leg.bearing, unit: null }} format={formatBearing} badge={same(leg.bearing, reference?.bearing)} />
+          <span>{t.planner.bearing}</span>
+          <Measure data={{ ...leg.bearing, unit: null }} format={(v) => formatBearing(v, t)} badge={same(leg.bearing, reference?.bearing)} />
         </span>
         {/* Measure también cuando falta: el badge dice de dónde tendría que salir. */}
         <span className="flex items-center gap-1">
-          Pendiente máx.
+          {t.planner.maxSlope}
           <Measure data={leg.max_slope} format={(v) => v.toFixed(0)} />
         </span>
       </div>
@@ -483,9 +489,10 @@ function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference
 }
 
 function LegLegend() {
+  const t = useT();
   return (
     <details className="text-[11px]">
-      <summary className="cursor-pointer text-muted">Colores de los tramos</summary>
+      <summary className="cursor-pointer text-muted">{t.planner.legColors}</summary>
       <ul className="mt-1.5 flex flex-col gap-1">
         {(Object.keys(LEG_CLASS_COLOR) as (keyof typeof LEG_CLASS_COLOR)[]).map((k) => (
           <li key={k} className="flex items-center gap-2">
@@ -494,8 +501,8 @@ function LegLegend() {
               className={`inline-block h-1 w-6 rounded ${k === "unknown" ? "opacity-70" : ""}`}
               style={{ background: LEG_CLASS_COLOR[k] }}
             />
-            {LEG_CLASS_LABEL[k]}
-            {k === "unknown" ? <span className="text-muted">(línea punteada)</span> : null}
+            {t.legClass[k]}
+            {k === "unknown" ? <span className="text-muted">{t.planner.dashed}</span> : null}
           </li>
         ))}
       </ul>

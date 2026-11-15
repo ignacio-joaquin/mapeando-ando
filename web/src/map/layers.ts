@@ -7,6 +7,19 @@
 export type LayerGroup = "relieve" | "supervivencia";
 
 import type { SourceInfo } from "../domain/provenance";
+import type { Messages } from "../i18n";
+import type { LayerText } from "../i18n/messages";
+
+/** Ids de capa: CONTRATO (ver arriba). Sus textos están en src/i18n/messages.ts. */
+export type LayerId =
+  | "base-ortho"
+  | "relief-hillshade"
+  | "relief-contours"
+  | "relief-slope"
+  | "survival-hazard"
+  | "survival-shelter"
+  | "survival-dose"
+  | "survival-shadows";
 
 export interface LegendStop {
   readonly color: string;
@@ -16,7 +29,7 @@ export interface LegendStop {
 /**
  * Clases de pendiente: UNA sola definición para la capa del mapa, la leyenda y
  * el perfil de elevación. Si un tramo se ve rojo en el perfil, se ve rojo en el
- * mapa.
+ * mapa. Las etiquetas, en el mismo orden, son `slopeClasses` de los textos.
  *
  * Los mismos cortes están en `RAMPAS["pendiente"]` de `pipeline/tiles.py`, que
  * es quien colorea el PNG. Si se cambian acá, hay que cambiarlos allá.
@@ -25,14 +38,13 @@ export interface SlopeClass {
   /** Límite superior en grados; el último es Infinity. */
   readonly maxDeg: number;
   readonly color: string;
-  readonly label: string;
 }
 
 export const SLOPE_CLASSES: readonly SlopeClass[] = [
-  { maxDeg: 10, color: "#2f7d4f", label: "0–10° transitable" },
-  { maxDeg: 20, color: "#e0a24a", label: "10–20° con cuidado" },
-  { maxDeg: 30, color: "#e07a4a", label: "20–30° límite del rover" },
-  { maxDeg: Infinity, color: "#e0564a", label: "> 30° no transitable" },
+  { maxDeg: 10, color: "#2f7d4f" },
+  { maxDeg: 20, color: "#e0a24a" },
+  { maxDeg: 30, color: "#e07a4a" },
+  { maxDeg: Infinity, color: "#e0564a" },
 ];
 
 /** Clase de una pendiente en grados. Fuera de rango cae en la más severa. */
@@ -43,20 +55,17 @@ export function slopeClass(deg: number): SlopeClass {
   );
 }
 
-const SLOPE_LEGEND: readonly LegendStop[] = SLOPE_CLASSES.map((c) => ({
-  color: c.color,
-  label: c.label,
-}));
-
 export interface LayerSpec {
-  readonly id: string;
-  readonly label: string;
+  readonly id: LayerId;
   readonly group: LayerGroup;
-  /** Unidad del valor que representa, para la leyenda y el inspector. */
-  readonly unit: string | null;
-  /** Procedencia: va en el badge. Sin esto la capa no se muestra. */
-  readonly source: SourceInfo;
-  readonly legend: readonly LegendStop[];
+  /**
+   * Procedencia sin texto traducible (misión e instrumento son nombres
+   * propios). Fuente, resolución y supuestos salen de los textos de la capa.
+   * Sin esto la capa no se muestra.
+   */
+  readonly source: Pick<SourceInfo, "provenance" | "mission" | "instrument">;
+  /** Colores de la leyenda; las etiquetas van en los textos, mismo orden. */
+  readonly legendColors: readonly string[];
   /** Plantilla de tiles, relativa. `{site}` se reemplaza por el id del sitio. */
   readonly tiles: string;
   readonly kind: "raster" | "vector";
@@ -71,75 +80,36 @@ export interface LayerSpec {
 export const LAYERS: readonly LayerSpec[] = [
   {
     id: "base-ortho",
-    label: "Ortoimagen",
     group: "relieve",
-    unit: null,
-    source: {
-      provenance: "OBSERVED",
-      mission: "MRO",
-      instrument: "HiRISE",
-      resolution: "25 cm/px",
-      source: "Ortomosaico HiRISE (USGS)",
-    },
-    legend: [{ color: "#8a7a6a", label: "imagen real, sin realce" }],
+    source: { provenance: "OBSERVED", mission: "MRO", instrument: "HiRISE" },
+    legendColors: ["#8a7a6a"],
     tiles: "/tiles/{site}/ortho/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: true,
   },
   {
     id: "relief-hillshade",
-    label: "Hillshade",
     group: "relieve",
-    unit: null,
-    source: {
-      provenance: "DERIVED",
-      mission: "MRO",
-      instrument: "HiRISE DTM",
-      resolution: "1 m/px",
-      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
-      assumptions: [
-        "Iluminación sintética fija: no es la luz real del momento",
-        "Relieve exagerado x3 en vertical",
-      ],
-    },
-    legend: [
-      { color: "#2a2520", label: "sombra" },
-      { color: "#d8cec2", label: "luz" },
-    ],
+    source: { provenance: "DERIVED", mission: "MRO", instrument: "HiRISE DTM" },
+    legendColors: ["#2a2520", "#d8cec2"],
     tiles: "/tiles/{site}/hillshade/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: true,
   },
   {
     id: "relief-contours",
-    label: "Curvas de nivel",
     group: "relieve",
-    unit: "m",
-    source: {
-      provenance: "DERIVED",
-      mission: "MRO",
-      instrument: "HiRISE DTM",
-      resolution: "1 m/px",
-      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
-    },
-    legend: [{ color: "#e0a24a", label: "equidistancia 10 m" }],
+    source: { provenance: "DERIVED", mission: "MRO", instrument: "HiRISE DTM" },
+    legendColors: ["#e0a24a"],
     tiles: "/tiles/{site}/contours.geojson",
     kind: "vector",
     defaultVisible: false,
   },
   {
     id: "relief-slope",
-    label: "Pendiente",
     group: "relieve",
-    unit: "°",
-    source: {
-      provenance: "DERIVED",
-      mission: "MRO",
-      instrument: "HiRISE DTM",
-      resolution: "1 m/px",
-      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
-    },
-    legend: SLOPE_LEGEND,
+    source: { provenance: "DERIVED", mission: "MRO", instrument: "HiRISE DTM" },
+    legendColors: SLOPE_CLASSES.map((c) => c.color),
     tiles: "/tiles/{site}/slope/{z}/{x}/{y}.png",
     kind: "raster",
     categorical: true,
@@ -147,89 +117,36 @@ export const LAYERS: readonly LayerSpec[] = [
   },
   {
     id: "survival-hazard",
-    label: "Peligro",
     group: "supervivencia",
-    unit: "índice 0–1",
-    source: {
-      provenance: "MODELED",
-      mission: "MRO",
-      instrument: "HiRISE DTM + ortho",
-      resolution: "1 m/px",
-      source: "Índice del pipeline a partir del DTM y la ortoimagen HiRISE",
-      assumptions: ["Índice propio, no una medición: combina terreno con pesos definidos por el equipo"],
-    },
-    legend: [
-      { color: "#2f7d4f", label: "bajo" },
-      { color: "#e0a24a", label: "medio" },
-      { color: "#e0564a", label: "alto" },
-    ],
+    source: { provenance: "MODELED", mission: "MRO", instrument: "HiRISE DTM + ortho" },
+    legendColors: ["#2f7d4f", "#e0a24a", "#e0564a"],
     tiles: "/tiles/{site}/hazard/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: false,
   },
   {
     id: "survival-shelter",
-    label: "Refugio",
     group: "supervivencia",
-    unit: "índice 0–1",
-    source: {
-      provenance: "MODELED",
-      mission: "MRO",
-      instrument: "HiRISE DTM",
-      resolution: "1 m/px",
-      source: "Índice del pipeline a partir del DTM HiRISE",
-      assumptions: ["Índice propio, no una medición"],
-    },
-    legend: [
-      { color: "#5fbf86", label: "protegido" },
-      { color: "#3a342e", label: "expuesto" },
-    ],
+    source: { provenance: "MODELED", mission: "MRO", instrument: "HiRISE DTM" },
+    legendColors: ["#5fbf86", "#3a342e"],
     tiles: "/tiles/{site}/shelter/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: false,
   },
   {
     id: "survival-dose",
-    label: "Dosis",
     group: "supervivencia",
-    unit: "µSv/h",
-    source: {
-      provenance: "MODELED",
-      mission: "MSL",
-      instrument: "RAD",
-      resolution: "derivada, 200 m/px",
-      source: "Base medida por MSL RAD en Gale (Hassler et al. 2014, reference/rad_surface_dose.json)",
-      assumptions: [
-        "Valor de base medido en Gale, 2012–2013; se extrapola al terreno",
-        "Varía con el ciclo solar, la presión estacional y eventos solares",
-      ],
-    },
-    legend: [
-      { color: "#2f7d4f", label: "nominal" },
-      { color: "#e0a24a", label: "elevada" },
-      { color: "#e0564a", label: "limitar exposición" },
-    ],
+    source: { provenance: "MODELED", mission: "MSL", instrument: "RAD" },
+    legendColors: ["#2f7d4f", "#e0a24a", "#e0564a"],
     tiles: "/tiles/{site}/dose/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: false,
   },
   {
     id: "survival-shadows",
-    label: "Sombras",
     group: "supervivencia",
-    unit: "hora solar local",
-    source: {
-      provenance: "MODELED",
-      mission: "MRO",
-      instrument: "HiRISE DTM + SPICE",
-      resolution: "1 m/px",
-      source: "Geometría solar (SPICE) sobre el DTM HiRISE",
-      assumptions: ["Solo geometría: no considera polvo ni atmósfera"],
-    },
-    legend: [
-      { color: "#161412", label: "en sombra" },
-      { color: "#e0a24a", label: "al sol" },
-    ],
+    source: { provenance: "MODELED", mission: "MRO", instrument: "HiRISE DTM + SPICE" },
+    legendColors: ["#161412", "#e0a24a"],
     tiles: "/tiles/{site}/shadows/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: false,
@@ -242,4 +159,26 @@ export function tileUrl(spec: LayerSpec, siteId: string): string {
 
 export function layersByGroup(group: LayerGroup): readonly LayerSpec[] {
   return LAYERS.filter((l) => l.group === group);
+}
+
+/** Textos de una capa en el idioma activo. */
+export function layerText(t: Messages, id: LayerId): LayerText {
+  return t.layers[id];
+}
+
+/** Procedencia completa de una capa (lo que dibuja el badge), en el idioma activo. */
+export function layerSource(spec: LayerSpec, t: Messages): SourceInfo {
+  const text = layerText(t, spec.id);
+  return {
+    ...spec.source,
+    resolution: text.resolution,
+    source: text.source,
+    assumptions: text.assumptions,
+  };
+}
+
+/** Leyenda: cada color con su etiqueta, en el idioma activo. */
+export function layerLegend(spec: LayerSpec, t: Messages): readonly LegendStop[] {
+  const labels = layerText(t, spec.id).legend;
+  return spec.legendColors.map((color, i) => ({ color, label: labels[i] ?? "" }));
 }
