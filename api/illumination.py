@@ -8,15 +8,30 @@ pipeline (tarda minutos y usa GB de RAM). Formato de la salida en docs/illuminat
         index.json          por banda: hora LTST y UTC, Sol; grilla, procedencia y supuestos
 
 Mientras el pipeline corre existe `illumination/_work/`: no es un sol y se ignora.
+
+Reutilización por estación (docs/context.md §5): con la misma hora solar local, la
+geometría del Sol depende solo de su declinación, que sale de Ls. Si el sol de la
+salida no se precomputó, se usa la pila de otro sol de la misma estación (|ΔLs| ≤
+SOL_REUSE_MAX_DLS_DEG, de cualquier año marciano) con sus instantes llevados a la
+fecha pedida. Viaja como MODELED y con el supuesto a la vista.
 """
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from . import mars_time as mt
+
+# Distancia de estación máxima para reutilizar la pila de otro sol. ±2° Ls son ~4 soles
+# y hasta ~0,9° de declinación. El mapa usa el mismo tope (web/src/map/sun.ts): si
+# cambia uno, cambia el otro.
+SOL_REUSE_MAX_DLS_DEG = 2.0
 
 LIT = 1
 SHADOW = 0
@@ -50,6 +65,40 @@ def sol_dirs(data_dir: Path, site_id: str) -> list[Path]:
     )
 
 
+def _num(x: float, fmt: str) -> str:
+    """Número con coma decimal, como se lee en la UI."""
+    return format(x, fmt).replace(".", ",")
+
+
+@dataclass(frozen=True)
+class SolReuse:
+    """La pila de otro sol de la misma estación, llevada a la fecha pedida."""
+    source_tag: str
+    source_ls: float
+    target_ls: float
+    shift_s: float          # cuánto se corrieron los instantes de la pila (target − source)
+
+    @property
+    def dls(self) -> float:
+        return mt.dls_deg(self.source_ls, self.target_ls)
+
+    @property
+    def ddecl(self) -> float:
+        return abs(mt.declination_deg(self.target_ls) - mt.declination_deg(self.source_ls))
+
+    def assumptions(self) -> list[str]:
+        return [
+            f"Sombras del sol {self.source_tag} (Ls {_num(self.source_ls, '.1f')}°) usadas para la fecha "
+            f"pedida (Ls {_num(self.target_ls, '.1f')}°, ΔLs {_num(self.dls, '+.1f')}°, tope "
+            f"±{_num(SOL_REUSE_MAX_DLS_DEG, 'g')}°): misma estación y misma hora solar local, "
+            "de cualquier año marciano",
+            f"A la misma hora solar local solo cambia la declinación del Sol: "
+            f"{_num(self.ddecl, '.2f')}° de diferencia (Mars24). Las sombras con el Sol bajo "
+            "son las que más se apartan",
+            "Amanecer y atardecer: los de ese sol, a la misma hora solar local",
+        ]
+
+
 class ShadowStack:
     """Una carpeta de sol: qué banda corresponde a cada instante y cómo leerla."""
 
@@ -70,9 +119,27 @@ class ShadowStack:
         # Medio paso real entre bandas (un minuto LTST dura ~61.6 s).
         gaps = np.diff([t for _, t, _, _ in self.bands])
         self.half_step_s = float(np.median(gaps)) / 2 if len(gaps) else self.step_min * 30.0
+        # Para reutilizarla en otra fecha: estación del sol y meridiano de su medianoche.
+        # Las pilas viejas sin estos campos solo sirven para su propio sol.
+        self.ls_deg = float(sol["ls_deg"]) if sol.get("ls_deg") is not None else None
+        lon = (self.index.get("site_center") or {}).get("lon")
+        self.center_lon = float(lon) if lon is not None else None
+        self.reuse: SolReuse | None = None
 
     def covers(self, t: float) -> bool:
         return self.start <= t < self.end
+
+    def shifted(self, reuse: SolReuse) -> ShadowStack:
+        """Esta pila con todos sus instantes corridos `reuse.shift_s`: misma hora solar
+        local, otro sol. Las bandas y el tif son los mismos."""
+        s = copy.copy(self)
+        d = reuse.shift_s
+        s.bands = [(b, t + d, ltst, el) for b, t, ltst, el in self.bands]
+        s.start, s.end = self.start + d, self.end + d
+        s.sunrise = None if self.sunrise is None else self.sunrise + d
+        s.sunset = None if self.sunset is None else self.sunset + d
+        s.reuse = reuse
+        return s
 
     def band_at(self, t: float) -> int | None:
         """Banda cuyo instante está más cerca de `t`, o None si `t` cae fuera de este sol."""
@@ -99,7 +166,7 @@ class ShadowStack:
         prov = self.index.get("provenance") or {}
         grid = self.index.get("grid") or {}
         px = grid.get("pixel_ground_m")
-        return {
+        out = {
             "provenance": "DERIVED",
             "mission": "MRO",
             "instrument": "HiRISE DTM + NAIF SPICE",
@@ -107,14 +174,28 @@ class ShadowStack:
             "source": f"pipeline/illumination.py · sol {self.tag} · {prov.get('ephemeris', 'SPICE')}",
             "assumptions": list(self.index.get("assumptions") or []),
         }
+        if self.reuse is not None:
+            # No es el sol pedido: es una estimación con el de la misma estación.
+            out["provenance"] = "MODELED"
+            out["source"] = (f"pipeline/illumination.py · sol {self.tag}, reutilizado por estación · "
+                             f"{prov.get('ephemeris', 'SPICE')}")
+            out["assumptions"] += self.reuse.assumptions()
+        return out
 
 
 def _crossing(c: dict | None) -> float | None:
     return parse_utc(c["utc"]) if c and c.get("utc") else None
 
 
-def stack_for_time(data_dir: Path, site_id: str, t: float) -> ShadowStack | None:
-    """La pila del sol que contiene el instante `t`, o None si no se precomputó."""
+def stack_for_time(data_dir: Path, site_id: str, t: float,
+                   max_dls_deg: float = SOL_REUSE_MAX_DLS_DEG) -> ShadowStack | None:
+    """La pila del sol que contiene el instante `t`.
+
+    Si ese sol no se precomputó, la de otro sol de la misma estación (|ΔLs| ≤
+    `max_dls_deg`, el más cercano), llevada a la fecha pedida y marcada en `reuse`.
+    None si no hay ninguna: la luz queda sin evaluar, nunca se rellena.
+    """
+    stacks: list[ShadowStack] = []
     for d in sol_dirs(data_dir, site_id):
         try:
             s = ShadowStack(d)
@@ -122,7 +203,19 @@ def stack_for_time(data_dir: Path, site_id: str, t: float) -> ShadowStack | None
             continue  # index.json a medio escribir o de otra versión: se ignora
         if s.covers(t):
             return s
-    return None
+        stacks.append(s)
+
+    best: tuple[float, SolReuse, ShadowStack] | None = None
+    for s in stacks:
+        if s.ls_deg is None or s.center_lon is None:
+            continue
+        # Medianoche local del sol pedido, en el mismo meridiano que la de la pila.
+        midnight = mt.local_midnight_before(t, s.center_lon)
+        reuse = SolReuse(s.tag, s.ls_deg, mt.ls_deg(midnight), midnight - s.start)
+        d_ls = abs(reuse.dls)
+        if d_ls <= max_dls_deg and (best is None or d_ls < best[0]):
+            best = (d_ls, reuse, s)
+    return best[2].shifted(best[1]) if best else None
 
 
 def stack_for_tag(data_dir: Path, site_id: str, sol_tag: str | None) -> ShadowStack:

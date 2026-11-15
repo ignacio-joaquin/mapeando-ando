@@ -47,8 +47,8 @@ from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg
                           segment_consumption)
 from .contact import ASSUMPTIONS as CONTACT_ASSUMPTIONS
 from .contact import ContactField
-from .illumination import (NODATA_U8, SHADOW, ShadowStack, apply_affine, parse_utc, sample_on_points,
-                           stack_for_time)
+from .illumination import (NODATA_U8, SHADOW, SOL_REUSE_MAX_DLS_DEG, ShadowStack, apply_affine, parse_utc,
+                           sample_on_points, stack_for_time)
 from .terrain import MARS_LONGLAT, MARS_RADIUS_M, _norm_lon, densify, haversine_m
 
 SPEED_M_S = 0.8          # el mismo default de /api/route/consumables
@@ -708,7 +708,12 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     if slope_path is None:
         caveats.append("sin la pendiente procesada los tramos van en línea recta y el terreno no se evaluó")
     if stack is None:
-        caveats.append("no se evaluó la luz: falta la pila de sombras de ese sol")
+        tope = f"{SOL_REUSE_MAX_DLS_DEG:g}".replace(".", ",")
+        caveats.append("no se evaluó la luz: falta la pila de sombras de ese sol y no hay otra de la misma "
+                       f"estación (±{tope}° Ls)")
+    elif stack.reuse is not None:
+        dls = f"{stack.reuse.dls:+.1f}".replace(".", ",")
+        caveats.append(f"la luz se estimó con las sombras del sol {stack.tag}, de la misma estación (ΔLs {dls}°)")
 
     slope_ds = rasterio.open(slope_path) if slope_path else None
     dtm_ds = rasterio.open(dtm_path) if dtm_path else None

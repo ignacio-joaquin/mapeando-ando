@@ -13,7 +13,7 @@ Procedencia del valor del límite (`limit` en la respuesta):
 - **`ASSUMED`** (badge propio en la UI) cuando el número entero lo eligió el equipo: pendiente, contacto, dosis y calorías.
 - **`MODELED`** cuando sale de un parámetro del traje o de un dato, y la parte del equipo va en `assumptions`:
   - O2 y batería: capacidad del EMU × 0,8, con la reserva del 20 % como supuesto.
-  - Luz: atardecer de la pila de sombras (MRO, HiRISE DTM + SPICE) − 30 min − salida, con el margen de 30 min como supuesto. Sin pila de sombras va `ASSUMED`.
+  - Luz: atardecer de la pila de sombras (MRO, HiRISE DTM + SPICE) − 30 min − salida, con el margen de 30 min como supuesto. Si la pila es de otro sol de la misma estación (|ΔLs| ≤ 2°, ver `docs/context.md` §4) va igual `MODELED` y el supuesto dice de qué sol sale. Sin pila de sombras va `ASSUMED`.
 
 | Id | Límite | Valor | Qué se mide en la ruta | De dónde sale lo medido |
 |---|---|---|---|---|
