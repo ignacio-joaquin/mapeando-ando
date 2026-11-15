@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchRoverPhotos } from "../../api/client";
-import type { RoverPhoto, RoverPhotos } from "../../api/schemas";
-import type { DataValue, SourceInfo } from "../../domain/provenance";
+import type { RoverComposition, RoverPhoto, RoverPhotos } from "../../api/schemas";
+import type { SourceInfo } from "../../domain/provenance";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { formatDistanceM } from "./format";
@@ -42,41 +42,22 @@ function photoSource(p: RoverPhoto): SourceInfo {
   };
 }
 
-function stationGeophysicsFor(siteId: string, _lat: number, _lon: number) {
-  if (siteId.toLowerCase() === "jezero") {
-    const source: DataValue = {
-      provenance: "OBSERVED",
-      mission: "Mars 2020",
-      instrument: "RIMFAX",
-      source: "Falta el corte de radar de subsuelo del backend (PDS / Mars 2020)",
-      value: null,
-      unit: "m",
-    };
-    return {
-      title: "Perfil de subsuelo (RIMFAX)",
-      source,
-      note: "Falta el corte de radar de subsuelo del backend; no se muestra un perfil sintético ni un valor inventado.",
-    };
-  }
-
-  if (siteId.toLowerCase() === "gale") {
-    const source: DataValue = {
-      provenance: "MODELED",
-      mission: "MGS",
-      instrument: "MAG/ER",
-      source: "Falta el dato de campo magnético del backend o del pipeline",
-      value: null,
-      unit: "nT",
-    };
-    return {
-      title: "Campo magnético del sitio",
-      source,
-      note: "El dato de campo magnético aún no está disponible para este sitio; no se rellena con un valor estimado.",
-    };
-  }
-
-  return null;
-}
+/**
+ * Qué dato de subsuelo corresponde a cada sitio, según el brief: el radar
+ * RIMFAX en Jezero y el dato grueso de campo magnético en Gale. Ninguno tiene
+ * backend todavía: la ficha dice que falta y qué fuente se espera, sin badge
+ * de procedencia (no hay dato del que declarar procedencia) y sin rellenar.
+ */
+const SUBSURFACE: Readonly<Record<string, { readonly title: string; readonly expected: string }>> = {
+  jezero: {
+    title: "Subsuelo bajo tus pies (RIMFAX)",
+    expected: "el perfil del radar de subsuelo de Mars 2020 RIMFAX",
+  },
+  gale: {
+    title: "Campo magnético del sitio",
+    expected: "el dato grueso de campo magnético cortical (MGS MAG/ER)",
+  },
+};
 
 export function StationPhoto({ siteId, lat, lon }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
@@ -102,10 +83,6 @@ export function StationPhoto({ siteId, lat, lon }: Props) {
     };
   }, [siteId, lat, lon]);
 
-  const geo = stationGeophysicsFor(siteId, lat, lon);
-  const stationComposition =
-    state.kind === "ok" ? state.data.photos.find((p) => p.composition)?.composition ?? null : null;
-
   return (
     <section className="mt-2 border-t border-line pt-2">
       <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted uppercase">
@@ -125,73 +102,90 @@ export function StationPhoto({ siteId, lat, lon }: Props) {
         <Photos photos={state.data.photos} shown={shown} onShow={setShown} />
       )}
 
-      <div className="mt-2 flex flex-col gap-2">
-        <div className="rounded border border-line bg-panel/40 p-2">
-          <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted uppercase">
-            Ficha de la estación
-          </p>
+      <StationData siteId={siteId} state={state} />
+    </section>
+  );
+}
 
-          {stationComposition ? (
-            <>
-              {stationComposition.summary ? (
-                <p className="mb-2 text-[11px] leading-snug text-muted">{stationComposition.summary}</p>
-              ) : null}
-              <div className="grid grid-cols-2 gap-1.5">
-                {stationComposition.elements.map((el, idx) => (
-                  <div key={`${siteId}-${lat}-${lon}-${el.element}-${idx}`} className="rounded border border-line bg-bg/60 px-1.5 py-1">
-                    <div className="flex items-start justify-between gap-1">
-                      <span className="text-[11px] font-semibold text-fg">{el.element}</span>
-                      <ProvenanceBadge source={el} align="left" />
-                    </div>
-                    <div className="mt-1">
-                      <Measure data={el} badge="none" size="sm" align="left" />
-                    </div>
-                    {el.note ? <div className="mt-1 text-[10px] text-muted">{el.note}</div> : null}
-                  </div>
-                ))}
-              </div>
-              {stationComposition.note ? <p className="mt-2 text-[10px] text-muted">{stationComposition.note}</p> : null}
-            </>
-          ) : (
-            <div className="rounded border border-line bg-bg/40 p-2">
-              <p className="mb-1 text-[11px] text-muted">
-                No hay composición elemental reportada para esta estación.
-              </p>
-              <Measure
-                data={{
-                  provenance: "OBSERVED",
-                  mission: null,
-                  instrument: "composición del rover",
-                  source: "Falta la API de composición elemental del backend",
-                  value: null,
-                  unit: "%",
-                }}
-                badge="none"
-                size="sm"
-                align="left"
-              />
-            </div>
-          )}
-        </div>
+/**
+ * Ficha de la estación: química medida y subsuelo. Son datos de la estación,
+ * no de la foto que se esté mirando, así que se dibujan haya foto o no.
+ */
+function StationData({ siteId, state }: { readonly siteId: string; readonly state: State }) {
+  // Las fotos vienen de la más cercana a la más lejana: la primera con
+  // composición es el waypoint medido más cercano a la estación.
+  const measured =
+    state.kind === "ok" ? (state.data.photos.find((p) => p.composition) ?? null) : null;
+  const subsurface = SUBSURFACE[siteId.toLowerCase()];
 
-        {geo ? (
-          <div className="rounded border border-line bg-panel/40 p-2">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <p className="text-[10px] font-semibold tracking-wide text-muted uppercase">{geo.title}</p>
-              <ProvenanceBadge source={geo.source} align="left" />
-            </div>
-            <div className="mb-1">
-              <Measure data={geo.source} badge="none" size="sm" align="left" />
-            </div>
-            <p className="text-[10px] leading-snug text-muted">{geo.note}</p>
-          </div>
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      <h4 className="text-[11px] font-semibold tracking-wide text-muted uppercase">Ficha de la estación</h4>
+
+      <div className="rounded border border-line bg-panel/40 p-2">
+        <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted uppercase">
+          Composición elemental medida
+        </p>
+        {state.kind === "loading" ? (
+          <p className="text-[11px] text-muted">Buscando mediciones del rover cerca de esta estación…</p>
+        ) : measured?.composition ? (
+          <Composition photo={measured} composition={measured.composition} />
         ) : (
-          <p className="rounded border border-line bg-panel/40 p-2 text-[11px] text-muted">
-            No hay perfil geofísico listo para este sitio.
+          <p className="text-[11px] text-fg">
+            <strong className="text-warn">Falta el dato.</strong> El server todavía no reporta
+            composición elemental medida por el rover cerca de esta estación.
           </p>
         )}
       </div>
-    </section>
+
+      <div className="rounded border border-line bg-panel/40 p-2">
+        <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted uppercase">
+          {subsurface?.title ?? "Subsuelo"}
+        </p>
+        <p className="text-[11px] text-fg">
+          <strong className="text-warn">Falta el dato.</strong>{" "}
+          {subsurface
+            ? `Todavía no hay backend para ${subsurface.expected}; no se muestra un perfil estimado.`
+            : "No hay dato de subsuelo previsto para este sitio."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Composition({
+  photo,
+  composition,
+}: {
+  readonly photo: RoverPhoto;
+  readonly composition: RoverComposition;
+}) {
+  return (
+    <>
+      {composition.summary ? (
+        <p className="mb-2 text-[11px] leading-snug text-muted">{composition.summary}</p>
+      ) : null}
+      <div className="grid grid-cols-2 gap-1.5">
+        {composition.elements.map((el, idx) => (
+          <div key={`${el.element}-${idx}`} className="rounded border border-line bg-bg/60 px-1.5 py-1">
+            <div className="flex items-start justify-between gap-1">
+              <span className="text-[11px] font-semibold text-fg">{el.element}</span>
+              <ProvenanceBadge source={el} align="left" />
+            </div>
+            <div className="mt-1">
+              <Measure data={el} badge="none" size="sm" align="left" />
+            </div>
+            {el.note ? <div className="mt-1 text-[10px] text-muted">{el.note}</div> : null}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
+        Medida en el waypoint del sol <span className="font-mono">{photo.sol}</span>, a
+        <Measure data={{ ...photo.distance, unit: null }} format={formatDistanceM} align="left" />
+        de esta estación
+      </p>
+      {composition.note ? <p className="mt-1 text-[10px] text-muted">{composition.note}</p> : null}
+    </>
   );
 }
 

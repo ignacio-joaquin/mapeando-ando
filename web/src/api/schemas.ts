@@ -246,23 +246,25 @@ export const RouteResponseSchema = z.object({
   profile: ProfileSchema.optional(),
 });
 
-/**
- * GET /api/sites/{site}/photos?lat=&lon= — PROPUESTA de contrato (MAP-33).
- * Fotos reales del rover más cercanas a un punto. El cruce (punto → waypoint
- * MMGIS → sol → fotos) es del backend; el frontend solo dibuja.
- * Documentado en docs/context.md §4.
- */
+/** Un elemento u óxido medido por el rover, ej. "SiO₂" en % en peso. */
 export const RoverElementSchema = MeasuredValueSchema.extend({
   element: z.string(),
   note: z.string().optional(),
 });
 
+/** Composición elemental medida cerca del waypoint de una foto (ficha de estación). */
 export const RoverCompositionSchema = z.object({
   summary: z.string().optional(),
   elements: z.array(RoverElementSchema),
   note: z.string().optional(),
 });
 
+/**
+ * GET /api/sites/{site}/photos?lat=&lon= — PROPUESTA de contrato (MAP-33).
+ * Fotos reales del rover más cercanas a un punto. El cruce (punto → waypoint
+ * MMGIS → sol → fotos) es del backend; el frontend solo dibuja.
+ * Documentado en docs/context.md §4.
+ */
 export const RoverPhotoSchema = z.object({
   /** Imagen para la ficha (tamaño chico o mediano). */
   url: z.string(),
@@ -280,7 +282,7 @@ export const RoverPhotoSchema = z.object({
   lon: z.number(),
   /** Distancia entre el punto pedido y el waypoint de la foto. */
   distance: MeasuredValueSchema,
-  /** Composición elemental medida por el rover en esa zona, si la API la reporta. */
+  /** Composición elemental medida cerca de ese waypoint, si la API la reporta. */
   composition: RoverCompositionSchema.optional(),
 });
 
