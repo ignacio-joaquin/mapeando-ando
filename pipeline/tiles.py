@@ -26,13 +26,13 @@ Los vectores (curvas de nivel) también van teselados, en tiles vectoriales MVT
 navegador lo baja entero aunque la capa esté apagada; los tiles se piden solo
 donde se mira, al zoom que se mira y con la capa prendida.
 
-precompute.py lo llama para la pendiente, el sombreado, el térmico de THEMIS, el peligro
-y la dosis (raster_a_tiles) y para las curvas (vector_a_tiles), y anota el zoom y los límites en terrain.json; a mano
+precompute.py lo llama para la pendiente, el sombreado, el térmico de THEMIS, el peligro,
+la dosis y el agua de SWIM (raster_a_tiles) y para las curvas (vector_a_tiles), y anota el zoom y los límites en terrain.json; a mano
 sirve para cualquier otro raster o vectorial.
 
 El nombre de la carpeta de salida es CONTRATO: tiene que ser el último segmento
 de la plantilla `tiles` de web/src/map/layers.ts (`hillshade/`, `slope/`,
-`thermal/`, `hazard/`, `dose/`, `ortho/`, `dem/`, `contours/`). Si no coincide, el frontend no la encuentra y la
+`thermal/`, `hazard/`, `dose/`, `water/`, `ortho/`, `dem/`, `contours/`). Si no coincide, el frontend no la encuentra y la
 capa queda deshabilitada.
 
 Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr,
@@ -120,9 +120,22 @@ def f32(x: float) -> float:
     (0,85 queda en 0,85000002, y un SVF de ese valor es refugio)."""
     return struct.unpack("f", struct.pack("f", x))[0]
 
+# Consistencia de hielo somero de SWIM 2.0 (ice_consistency.tif, de -1 a +1), divergente con el
+# 0 casi blanco: un indicio débil (+0,1) no se ve como "acá hay hielo". = leyenda de
+# survival-water en web/src/map/layers.ts.
+RAMPAS["agua"] = [
+    (-1.0, -0.5, "140 90 50"),      # en contra del hielo    #8c5a32
+    (-0.5, -0.1, "214 178 140"),    # algo en contra         #d6b28c
+    (-0.1, 0.1, "238 236 230"),     # sin indicio            #eeece6
+    (0.1, 0.5, "150 196 230"),      # indicio débil          #96c4e6
+    (0.5, 1.001, "40 110 190"),     # consistente con hielo  #286ebe
+]
+
 # Rampas de un raster POR CLASES: al reproyectar se usa el vecino más cercano, porque un
 # bilineal entre la clase 0 y la 3 inventa un 1,5 que no existe.
-RAMPAS_POR_CLASES = {"peligro"}
+# El agua no es por clases, pero su píxel es de ~3 km: se dibuja en cuadrados y no se suaviza,
+# para no inventar detalle que SWIM no tiene.
+RAMPAS_POR_CLASES = {"peligro", "agua"}
 
 # Tiles vectoriales: a z14 un tile tiene 4096 unidades de lado y cada una mide ~0,3 m
 # en Marte, más fino que el DTM de 1 m. Más cerca, MapLibre agranda el z14.

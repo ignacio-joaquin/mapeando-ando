@@ -94,7 +94,7 @@ El mapa de cobertura (`/data/output/<sitio>/coverage.geojson`, que escribe `prec
 | Waypoints MMGIS | Tracks del rover (e Ingenuity en Jezero) | ✅ |
 | Mars 2020 rover places | Posición del rover por sol, para cruzar con la química | ✅ `raw/jezero/rover_places/` |
 | NASA DONKI WSA-Enlil | Clima espacial, impactos en Marte | ✅ 1230 simulaciones de nov 2025 a hoy; 191 llegan a Marte. `raw/common/donki/` |
-| SWIM 2.0 | Capa de agua (Could). En Jezero y Gale la consistencia de hielo es ~0. | ✅ `raw/common/swim2/` |
+| SWIM 2.0 | Capa de agua `survival-water` (`pipeline/swim.py`): solo el composite de 0–1 m. Jezero −0,37 a −0,19, Gale −0,01 a +0,17; 1–5 m y > 5 m descartados (`docs/context.md` §5). | ✅ `raw/common/swim2/` |
 | Fotos del rover por estación | Foto real en cada estación | Se buscan por posición cuando el usuario arma la ruta (MAP-14). No se descargan de antemano. |
 | Mars Trek WMTS | Mapa base | Se consume en vivo; es geográfico (EPSG:104905), no Web Mercator. |
 
