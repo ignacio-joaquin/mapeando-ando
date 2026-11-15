@@ -3,6 +3,7 @@
  * cámara, y el registro de intentos. Lo usa EduOverlay; ver docs/educacion.md.
  */
 import { useEffect, useRef } from "react";
+import { cargoKg } from "../domain/equipment";
 import { LAYERS } from "../map/layers";
 import { useEdu, type Attempt } from "../state/edu";
 import { useFreshRoute, usePlan } from "../state/plan";
@@ -31,11 +32,17 @@ export function useRecordAttempts() {
   const siteId = useStore((s) => s.activeSiteId);
   useEffect(() => {
     if (!fresh || fresh.example) return;
-    const { waypoints, departAt, roundTrip } = usePlan.getState();
+    const { waypoints, departAt, roundTrip, kit, extraKg } = usePlan.getState();
     const v = fresh.route.verdict;
     const attempt: Attempt = {
-      // Con o sin vuelta al hábitat son rutas distintas: entra en la geometría.
-      geometryKey: JSON.stringify([siteId, roundTrip, waypoints.map((w) => [w.lat, w.lon, w.dwellMin])]),
+      // Con o sin vuelta al hábitat, o con otra carga, son rutas distintas: entra
+      // en la clave. Si no, comparar dos horas mezclaría el efecto de la carga.
+      geometryKey: JSON.stringify([
+        siteId,
+        roundTrip,
+        cargoKg(kit, extraKg),
+        waypoints.map((w) => [w.lat, w.lon, w.dwellMin]),
+      ]),
       departMs: departAt.getTime(),
       status: v.status,
       limiting: v.limiting_factor,
@@ -160,10 +167,16 @@ export function usePlanSandbox(keepRoute: boolean) {
       departAt: before.departAt,
       clickMode: before.clickMode,
       roundTrip: before.roundTrip,
+      kit: before.kit,
+      extraKg: before.extraKg,
     };
     before.clear();
     // Ida y vuelta, como en una salida de verdad: volver con reserva es parte de la regla.
     before.setRoundTrip(true);
+    // Sin carga: los escenarios y su `expect` se eligieron con cargo_kg 0, y el
+    // selector de carga está oculto en la lección. Si no, un taladro elegido
+    // antes de entrar cambiaría el veredicto sin que el alumno lo vea.
+    usePlan.setState({ kit: [], extraKg: 0 });
     // El selector de modo se esconde en la lección: si quedó en "inspeccionar",
     // un clic en el mapa no sumaría puntos y el alumno no tendría cómo salir.
     before.setClickMode("add");
@@ -171,6 +184,8 @@ export function usePlanSandbox(keepRoute: boolean) {
       const now = usePlan.getState();
       now.setClickMode(saved.clickMode);
       now.setRoundTrip(saved.roundTrip);
+      // La carga es del usuario, no de la travesía: vuelve siempre, aun con keepRoute.
+      usePlan.setState({ kit: saved.kit, extraKg: saved.extraKg });
       if (keepRoute && now.waypoints.length >= 2) return;
       // Si cambió de sitio, los puntos guardados son de otro lugar: no se devuelven.
       if (now.siteId !== saved.siteId) return;
@@ -200,6 +215,8 @@ export function applyPreset(preset: Preset): string | null {
   const plan = usePlan.getState();
   plan.clear();
   plan.setRoundTrip(true);
+  // El `expect` del escenario se midió sin carga.
+  usePlan.setState({ kit: [], extraKg: 0 });
   plan.addPoint({ lat: habitat.lat, lon: habitat.lon }, habitat.id);
   plan.addPoint({ lat: destination.lat, lon: destination.lon }, destination.id);
   const dest = usePlan.getState().waypoints[1];

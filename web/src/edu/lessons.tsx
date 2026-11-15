@@ -42,6 +42,8 @@ export const EDU_TARGET = {
   INSPECTOR: "inspector",
   SHARE: "share",
   TOOLS: "tools",
+  /** Selector de carga del equipo. Ninguna lección lo muestra todavía: corren con cargo_kg 0. */
+  CARGO: "cargo",
 } as const;
 export type EduTarget = (typeof EDU_TARGET)[keyof typeof EDU_TARGET];
 

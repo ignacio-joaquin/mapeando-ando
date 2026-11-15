@@ -9,12 +9,17 @@
  * al hábitat: una EVA termina adentro, y un GO que solo alcanza para ir no
  * sirve para decidir. La vuelta no es un punto más de la lista: se agrega al
  * armar el pedido (ver routeWaypoints).
+ *
+ * La carga (equipo elegido + kilos a mano) es de la EVA, no de un punto: no
+ * se borra al cambiar de sitio ni con "borrar todo". Va a /api/route como
+ * `cargo_kg` y entra a Pandolf (MAP-50).
  */
 import { create } from "zustand";
 import type { RouteParams } from "../api/schemas";
 import { countOverrides, useSettings } from "./settings";
 import type { LatLon } from "../mars/geo";
 import type { PlannedRoute } from "../api/client";
+import { cargoKg, clampExtraKg } from "../domain/equipment";
 import { useStore } from "./store";
 import { planFromUrl } from "./share";
 
@@ -42,6 +47,10 @@ interface PlanState {
   readonly departAt: Date;
   /** Calcular también la vuelta del destino al hábitat. */
   readonly roundTrip: boolean;
+  /** Equipo elegido (ids de domain/equipment.ts), en el orden del catálogo no importa. */
+  readonly kit: readonly string[];
+  /** Carga libre a mano (muestras juntadas, otro equipo), en kg. */
+  readonly extraKg: number;
   readonly clickMode: ClickMode;
   readonly result: PlannedRoute | null;
   /** Huella (planKey) del pedido que generó `result`. */
@@ -72,6 +81,8 @@ interface PlanState {
   clear: () => void;
   setDepartAt: (d: Date) => void;
   setRoundTrip: (on: boolean) => void;
+  toggleEquipment: (id: string) => void;
+  setExtraKg: (kg: number) => void;
   setClickMode: (m: ClickMode) => void;
   setResult: (r: PlannedRoute | null, key?: string | null) => void;
   setStatus: (s: Status) => void;
@@ -119,6 +130,8 @@ export const usePlan = create<PlanState>((set) => ({
   waypoints: (shared?.points ?? []).map((p) => point(p, p.placeId, p.dwellMin)),
   departAt: shared?.departAt ?? new Date(),
   roundTrip: shared?.roundTrip ?? true,
+  kit: shared?.kit ?? [],
+  extraKg: shared?.extraKg ?? 0,
   clickMode: "add",
   result: null,
   resultKey: null,
@@ -189,6 +202,9 @@ export const usePlan = create<PlanState>((set) => ({
     }),
   setDepartAt: (departAt) => set({ departAt }),
   setRoundTrip: (roundTrip) => set({ roundTrip }),
+  toggleEquipment: (id) =>
+    set((s) => ({ kit: s.kit.includes(id) ? s.kit.filter((k) => k !== id) : [...s.kit, id] })),
+  setExtraKg: (kg) => set({ extraKg: clampExtraKg(kg) }),
   setClickMode: (clickMode) => set({ clickMode }),
   // Una ruta nueva trae otras indicaciones: la resaltada ya no corresponde.
   setResult: (result, key = null) => set({ result, resultKey: result ? key : null, activeStep: null }),
@@ -262,8 +278,8 @@ export function routeWaypoints(waypoints: readonly Waypoint[], roundTrip: boolea
 }
 
 /**
- * Huella de lo que cambia el cálculo: sitio, hora de salida, ida y vuelta, y
- * posición y permanencia de cada punto, en orden. El texto de la tarea no
+ * Huella de lo que cambia el cálculo: sitio, hora de salida, ida y vuelta,
+ * carga, y posición y permanencia de cada punto, en orden. El texto de la tarea no
  * entra: no cambia tiempos ni consumos, y el veredicto no tiene que parpadear
  * por tecla.
  */
@@ -272,12 +288,14 @@ export function planKey(
   departAt: Date,
   waypoints: readonly Waypoint[],
   roundTrip: boolean,
+  cargo: number,
   params: RouteParams | undefined,
 ): string {
   return JSON.stringify([
     siteId,
     departAt.getTime(),
     roundTrip,
+    cargo,
     waypoints.map((w) => [w.lat, w.lon, w.dwellMin]),
     params ?? null,
   ]);
@@ -295,7 +313,8 @@ export function useFreshRoute(): PlannedRoute | null {
   const siteId = useStore((s) => s.activeSiteId);
   const params = useRouteParams();
   return usePlan((s) =>
-    s.result !== null && s.resultKey === planKey(siteId, s.departAt, s.waypoints, s.roundTrip, params)
+    s.result !== null &&
+    s.resultKey === planKey(siteId, s.departAt, s.waypoints, s.roundTrip, cargoKg(s.kit, s.extraKg), params)
       ? s.result : null,
   );
 }

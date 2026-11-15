@@ -92,13 +92,52 @@ export const MeasuredValueSchema = z.object({
 });
 
 /**
+ * GET /api/sites/{site}/conditions — PROPUESTA de contrato (docs/context.md §4).
+ * Última observación atmosférica del rover y alertas de clima espacial (DONKI).
+ * Mientras no haya paso del pipeline que las baje, cada valor viene con
+ * `value: null` y `when: null`: la franja dice que falta, nunca muestra ejemplos.
+ */
+export const CurrentConditionsObservationSchema = z.object({
+  id: z.string(),
+  /** Texto en español para la UI. */
+  label: z.string(),
+  value: MeasuredValueSchema,
+  /** Fecha y sol de la medición; null = todavía no hay medición. */
+  when: z
+    .object({
+      utc: z.string(),
+      sol: z.number(),
+      ltst: z.string(),
+    })
+    .nullable(),
+});
+
+export const CurrentConditionsAlertSchema = z.object({
+  severity: z.enum(["bajo", "moderado", "alto"]),
+  summary: z.string(),
+  when: z.string(),
+});
+
+export const CurrentConditionsSchema = z.object({
+  site: z.string(),
+  observations: z.array(CurrentConditionsObservationSchema),
+  alerts: z.array(CurrentConditionsAlertSchema),
+  /** `missing`: todavía no se bajan las alertas; `alerts: []` no quiere decir "sin alertas". */
+  alerts_status: z.enum(["ok", "missing", "error"]),
+  note: z.string().optional(),
+});
+
+export type CurrentConditionsData = z.infer<typeof CurrentConditionsSchema>;
+
+/**
  * /api/route — PROPUESTA de contrato (ticket del planificador). El modelo de
  * costo es decisión abierta del equipo (docs/context.md §5); esto fija solo
  * qué entra y qué sale. Documentado en docs/context.md §4.
  *
  * Request (POST, JSON):
- *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }], params? }
+ *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }], cargo_kg?, params? }
  *   waypoints[0] = salida, el último = llegada, el resto = estaciones en orden.
+ *   cargo_kg = equipo encima además del traje (kg, 0 si falta); entra a Pandolf.
  *   params = ajustes del algoritmo (ver RouteParams); sin él, los defaults del server.
  */
 export interface RouteRequest {
@@ -110,6 +149,7 @@ export interface RouteRequest {
     readonly task: string | null;
     readonly dwell_min: number;
   }[];
+  readonly cargo_kg?: number;
   readonly params?: RouteParams;
 }
 
@@ -482,9 +522,10 @@ export const TileSetSchema = z.discriminatedUnion("status", [
 ]);
 
 /**
- * Cómo viene la altura escondida en el RGB de los tiles de relieve 3D
- * (`relief-dem`): h = R·red + G·green + B·blue − base. Lo decide
- * pipeline/tiles.py (DEM_ENCODING) y se le pasa tal cual a MapLibre.
+ * Cómo viene la altura escondida en el RGB de los tiles de relieve
+ * (`relief-dem` y `relief-far`): h = R·red + G·green + B·blue − base. Lo decide
+ * pipeline/tiles.py (DEM_ENCODING); el mapa se lo pasa tal cual a MapLibre y
+ * el horizonte (src/horizon/) lo decodifica igual.
  */
 export const DemEncodingSchema = z.object({
   red_factor: z.number(),
@@ -503,9 +544,9 @@ export const TerrainLayerSchema = z.object({
   instrument: z.string().nullable().optional(),
   error: z.string().optional(),
   tiles: TileSetSchema.optional(),
-  /** Solo `relief-dem`: altura (m) que corresponde al 0 de los tiles, el punto más bajo del DTM. */
+  /** Solo `relief-dem` y `relief-far`: altura (m) que corresponde al 0 de los tiles, el punto más bajo del raster. */
   datum_m: z.number().optional(),
-  /** Solo `relief-dem`: codificación de la altura en los PNG. */
+  /** Solo `relief-dem` y `relief-far`: codificación de la altura en los PNG. */
   encoding: DemEncodingSchema.optional(),
   assumptions: z.array(z.string()).optional(),
 });
@@ -681,6 +722,33 @@ export const SolTilesSchema = z.object({
   bands: z.array(ShadowBandSchema),
 });
 
+/**
+ * POST /api/illumination/window (api/illumination.py, read_window): sol o
+ * sombra precomputados en el rectángulo entre dos puntos, para una banda de la
+ * pila. El horizonte en primera persona lo pide con p1 = p2 (un solo punto)
+ * para decir si hay luz directa con el mismo dato que el veredicto.
+ *
+ * `values[fila][col]`: true al sol, false en sombra, null sin dato (nunca se
+ * rellena). La procedencia es la de la pila pedida por `sol_tag`: si el cliente
+ * la reutiliza para otra fecha, la pasa a MODELED él.
+ */
+export const IlluminationWindowSchema = z.object({
+  sol_tag: z.string(),
+  band: z.number().int(),
+  ltst: z.string(),
+  utc: z.string(),
+  sun_el_deg: z.number().optional(),
+  values: z.array(z.array(z.boolean().nullable())),
+  cell_ground_m: z.tuple([z.number(), z.number()]).nullable().optional(),
+  provenance: ProvenanceSchema,
+  mission: z.string().nullable(),
+  instrument: z.string().nullable(),
+  resolution: z.string().nullable().optional(),
+  source: z.string().optional(),
+  assumptions: z.array(z.string()).readonly().optional(),
+});
+
+export type IlluminationWindow = z.infer<typeof IlluminationWindowSchema>;
 export type Sites = z.infer<typeof SitesSchema>;
 export type Place = z.infer<typeof PlaceSchema>;
 export type PlaceKind = z.infer<typeof PlaceKindSchema>;

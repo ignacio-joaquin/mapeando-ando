@@ -2,12 +2,14 @@
 
 Expone el estado del servidor, el inventario de datos por sitio, la point query,
 la zona con contacto al hábitat (/api/sites/{site}/viewshed),
+las condiciones actuales (/api/sites/{site}/conditions),
 /api/route (planificador 4D, api/planner.py), /api/route/consumables (consumibles
 del traje sobre una ruta ya armada) y /api/illumination/window (sol/sombra precomputados).
 """
 import json
 import math
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -72,6 +74,70 @@ def site(site_id: str):
     if m is None or site_id not in m["sites"]:
         raise HTTPException(404, "Sitio desconocido o datos todavía no descargados")
     return m["sites"][site_id]
+
+
+# ---------------------------------------------- /api/sites/{site}/conditions
+
+# Qué instrumento mide cada condición en cada rover. Sirve para decir de dónde
+# va a salir el dato aunque todavía falte; no es un valor.
+_CONDITION_SOURCES = {
+    "Perseverance": {"mission": "Mars 2020", "temperature": "MEDA", "pressure": "MEDA",
+                     "dust_opacity": "MEDA RDS"},
+    "Curiosity": {"mission": "MSL", "temperature": "REMS", "pressure": "REMS",
+                  "dust_opacity": "Mastcam"},
+}
+
+_CONDITIONS = (
+    ("temperature", "Temperatura del aire", "°C"),
+    ("pressure", "Presión", "Pa"),
+    ("dust_opacity", "Opacidad de polvo (τ)", None),
+)
+
+
+def _site_config(site_id: str) -> Optional[dict]:
+    """sites/<id>.json del repo, o None si no es un sitio. Solo lee."""
+    if not re.fullmatch(r"[a-z0-9_-]+", site_id) or site_id == "common":
+        return None
+    p = REPO_DIR / "sites" / f"{site_id}.json"
+    if not p.is_file():
+        return None
+    return json.loads(p.read_text())
+
+
+@app.get("/api/sites/{site_id}/conditions")
+def site_conditions(site_id: str):
+    """Condiciones actuales: última observación atmosférica del rover y alertas
+    de clima espacial (DONKI).
+
+    Todavía no hay paso del pipeline que baje MEDA/REMS ni DONKI: cada valor
+    sale con `value: null` y `when: null`, y `note` dice qué falta. Nunca se
+    rellena con un valor de ejemplo.
+    """
+    cfg = _site_config(site_id)
+    if cfg is None:
+        raise HTTPException(404, "Sitio desconocido")
+    rover = str(cfg.get("rover") or "")
+    src = next((v for k, v in _CONDITION_SOURCES.items() if rover.startswith(k)), None)
+    observations = []
+    for cid, label, unit in _CONDITIONS:
+        observations.append({
+            "id": cid,
+            "label": label,
+            "value": {
+                "value": None, "unit": unit, "provenance": "OBSERVED",
+                "mission": src and src["mission"], "instrument": src and src[cid],
+                "source": "Falta el paso del pipeline que baje la última observación",
+            },
+            "when": None,
+        })
+    return {
+        "site": site_id,
+        "observations": observations,
+        "alerts": [],
+        "alerts_status": "missing",
+        "note": "Todavía no se bajan las observaciones del rover ni las alertas de DONKI: "
+                "los valores faltan y no se reemplazan por ejemplos.",
+    }
 
 
 # ---------------------------------------------------- /api/route/consumables
@@ -463,11 +529,10 @@ class WeightsSettings(BaseModel):
 
 
 class SuitSettings(BaseModel):
-    """Supuestos del traje y de la carga (EMU de la ISS por defecto)."""
-    model_config = ConfigDict(extra="forbid", title="Traje y carga")
+    """Supuestos del traje (EMU de la ISS por defecto). La carga no va acá: es `cargo_kg`."""
+    model_config = ConfigDict(extra="forbid", title="Traje")
     astronaut_kg: float = _knob(_DEFAULTS.astronaut_kg, "Astronauta", "kg", 1, "Masa sin traje.", gt=0, le=300)
     suit_kg: float = _knob(_DEFAULTS.suit_kg, "Traje", "kg", 1, "EMU completo con mochila (PLSS).", ge=0, le=500)
-    cargo_kg: float = _knob(_DEFAULTS.cargo_kg, "Carga", "kg", 1, "Herramientas y muestras.", ge=0, le=500)
     terrain_factor: float = _knob(_DEFAULTS.terrain_factor, "Factor de terreno", None, 0.1,
                                   "η de Pandolf: 1 = pavimento, 1,1 = regolito compacto, más = suelto.",
                                   ge=1.0, le=3.0)
@@ -507,6 +572,8 @@ class PlannerRequest(BaseModel):
     site: str = Field(min_length=1, max_length=64)
     depart_utc: str = Field(description="ISO 8601 en UTC, por ejemplo 2026-11-15T12:00:00.000Z")
     waypoints: list[PlannerWaypoint] = Field(min_length=2, max_length=20)
+    cargo_kg: float = Field(_DEFAULTS.cargo_kg, ge=0, le=500,
+                            description="Equipo que se lleva encima además del traje (kg, masa en la Tierra)")
     params: Optional[PlannerParams] = Field(None, description="Ajustes del algoritmo; sin esto, los defaults")
 
     @model_validator(mode="before")
@@ -561,16 +628,17 @@ def route(req: PlannerRequest):
     except ValueError:
         raise HTTPException(422, "depart_utc tiene que ser una fecha ISO 8601, por ejemplo 2026-11-15T12:00:00Z")
     try:
+        # La carga va aparte (cargo_kg, el selector de equipo); el resto del traje, en params.
+        suit = req.params.suit.model_dump() if req.params is not None else {}
         kw = {}
         if req.params is not None:
             kw = {
-                "params": SuitParams(**req.params.suit.model_dump()),
                 "weights": CostWeights(**req.params.weights.model_dump()),
                 "limits": Limits(**req.params.limits.model_dump()),
                 "custom": req.params.changed(),
             }
         out = plan_route(req.site, req.depart_utc, [w.model_dump() for w in req.waypoints], DATA_DIR, REPO_DIR,
-                         **kw)
+                         params=SuitParams(cargo_kg=req.cargo_kg, **suit), **kw)
     except OSError as e:
         raise HTTPException(503, f"No se pudo leer un raster del sitio: {e}")
     inputs = out.pop("_profile_inputs", None)

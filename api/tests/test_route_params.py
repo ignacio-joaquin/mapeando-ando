@@ -79,5 +79,10 @@ class TestRouteWithParams:
 
 
 def test_changed_describe_solo_lo_que_cambia():
-    p = main.PlannerParams(limits={"dose_budget_msv": 1.0}, suit={"cargo_kg": 10})
-    assert p.changed() == ["Presupuesto de dosis 1 mSv", "Carga 10 kg"]
+    p = main.PlannerParams(limits={"dose_budget_msv": 1.0}, suit={"suit_kg": 100})
+    assert p.changed() == ["Presupuesto de dosis 1 mSv", "Traje 100 kg"]
+
+
+def test_la_carga_no_es_un_ajuste_del_traje():
+    """La carga tiene su propio campo (cargo_kg): no puede entrar por dos lados."""
+    assert "cargo_kg" not in main.SuitSettings.model_fields

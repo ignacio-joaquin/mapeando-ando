@@ -135,7 +135,8 @@ body[data-edu-ui]:not([data-edu-show~="profile"]) [data-edu="profile"],
 body[data-edu-ui]:not([data-edu-show~="clock"]) [data-edu="clock"],
 body[data-edu-ui]:not([data-edu-show~="inspector"]) [data-edu="inspector"],
 body[data-edu-ui]:not([data-edu-show~="share"]) [data-edu="share"],
-body[data-edu-ui]:not([data-edu-show~="tools"]) [data-edu="tools"] {
+body[data-edu-ui]:not([data-edu-show~="tools"]) [data-edu="tools"],
+body[data-edu-ui]:not([data-edu-show~="cargo"]) [data-edu="cargo"] {
   display: none !important;
 }
 body[data-edu-ui]:not([data-edu-show~="clock"]):not([data-edu-show~="inspector"]):not([data-edu-show~="layers"]) [data-edu="right"] {

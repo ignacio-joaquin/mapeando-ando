@@ -20,7 +20,7 @@ Estado: **Confirmado** (verificado contra una fuente), **A verificar** (valor pu
 |---|---|---|---|---|
 | `astronaut_kg` | Masa del astronauta sin traje | 80 kg | Adulto promedio | A verificar |
 | `suit_kg` | Masa del traje con la mochila de soporte vital (PLSS) | 127 kg | EMU de la ISS, ~280 lb | A verificar |
-| `cargo_kg` | Carga extra (herramientas, muestras) | 0 kg | Lo define la feature de carga (M2) | Supuesto propio |
+| `cargo_kg` | Carga extra (herramientas, muestras) | 0 kg | Lo elige el usuario en el planificador (ver [Carga del equipo](#carga-del-equipo)) | Dato del usuario |
 | `gravity_g` | Gravedad relativa a la Tierra | 0.38 | 3.71 / 9.81 m/s² | Confirmado |
 | `terrain_factor` | Factor de terreno de Pandolf (η) | 1.1 | Tabla de Pandolf: 1.0 asfalto, 1.1 camino de tierra, 1.2 arbustos bajos, 2.1 arena suelta. Tomamos regolito compacto ≈ camino de tierra | Supuesto propio |
 | `speed_m_s` | Velocidad de caminata | 0.8 m/s (~2.9 km/h) | Caminata con traje | Supuesto propio |
@@ -78,10 +78,44 @@ Los dos primeros también salen en la respuesta (`warnings` y `model_notes`).
 - **Fuera del alcance.** No hay paradas en estaciones, reserva para la vuelta ni velocidad que cambie con la pendiente.
 - Es un prototipo educativo: los números sirven como orden de magnitud, no reemplazan un análisis de EVA.
 
+## Carga del equipo
+
+El usuario elige qué lleva en el panel del planificador ("Carga del equipo") y puede sumar kilos a mano (muestras juntadas, otro equipo). El total viaja como `cargo_kg` en `POST /api/route` y entra a Pandolf como parte de `L`. Catálogo: [`web/src/domain/equipment.ts`](../web/src/domain/equipment.ts).
+
+No hay herramientas de EVA marciana que hayan volado, así que las masas son las de Apollo, pesadas para el vuelo. Van con badge **OBSERVED** (son pesos medidos), y en el tooltip queda declarado el supuesto de que un kit para Marte pesaría lo mismo. La carga a mano va como **ASSUMED**: es un dato del usuario.
+
+| Equipo | Masa | Qué suma | Fuente |
+|---|---|---|---|
+| Taladro de núcleo | 13,4 kg | Apollo Lunar Surface Drill, total de sus 4 componentes | Allton 1989, JSC-23454, ficha del taladro |
+| Cámara | 3,08 kg | Hasselblad eléctrica (3,1 lb) + lente de 60 mm (1,7 lb) + empuñadura (0,6 lb) + un cargador (1,4 lb) | *Working on the Moon* (ALSJ), Imagery Weight Totals, Apollo 17 |
+| Kit de muestras | 3,04 kg | Pala grande ajustable 590 g + pinzas de 32" 454 g + mango largo 816 g (Apollo 17) + bolsa de recolección 742,7 g + dispensador de 20 bolsas 440,4 g (Apollo 16) | Allton 1989, JSC-23454, tablas de Apollo 16 y 17 |
+| Rastrillo | 1,50 kg | 1497 g | Allton 1989, tabla de Apollo 17 |
+| Martillo geológico | 1,32 kg | Martillo pesado, 1315 g | Allton 1989, tabla de Apollo 17 |
+| Tubos de núcleo | 0,62 kg | Par de tubos de 4 cm: 316,6 g + 299,1 g | Allton 1989, tabla de Apollo 17 |
+| Gnomon | 0,27 kg | 272 g | Allton 1989, tabla de Apollo 17 |
+
+Allton, J. H. (1989). *Catalog of Apollo Lunar Surface Geological Sampling Tools and Containers*, JSC-23454, NASA Johnson Space Center.
+
+**Qué mueve y qué no.** Con los supuestos de arriba, en plano a 0,8 m/s:
+
+| Carga | Gasto caminando | Gasto parado | El O2 primario alcanza para |
+|---|---|---|---|
+| 0 kg | 600 W | 516 W | 3,6 h |
+| 3 kg (kit de muestras) | 626 W | 542 W | 3,4 h |
+| 13,4 kg (taladro) | 724 W | 636 W | 3,0 h |
+| 23,2 kg (todo el catálogo) | 829 W | 737 W | 2,6 h |
+
+- Sube el O2, caminando y en cada parada: el término de carga de Pandolf no depende de la velocidad.
+- **No** cambia los tiempos: la velocidad es fija (0,8 m/s). Un modelo de velocidad que baje con la carga no está validado y no lo inventamos.
+- **No** cambia la batería: el PLSS gasta lo mismo haga lo que haga el astronauta.
+- El modo entrenamiento corre sin carga y devuelve la del usuario al salir (ver `docs/educacion.md`). La tira impresa dice con qué carga se calculó el O2.
+- Con L/W ≈ 1,6 ya con el traje solo, el término de carga probablemente sobreestima (ver [Límites](#límites)). El efecto de cada kilo extra puede estar inflado.
+
 ## Pendientes
 
 - [ ] Confirmar con una fuente oficial de NASA la masa del EMU (127 kg), el O2 primario (0.55 kg) y la batería (16.8 V × 26.6 Ah).
 - [ ] Decidir si usamos el EMU de la ISS o un traje de superficie más liviano para Marte.
 - [ ] Revisar el consumo fijo (55 W) y la eficiencia (0.9), que elegimos nosotros.
 - [ ] Acordar el factor de terreno para regolito (hoy 1.1) y la velocidad de caminata (hoy 0.8 m/s).
-- [ ] Definir el rango de `cargo_kg` con la feature de carga (M2).
+- [x] Definir el rango de `cargo_kg` con la feature de carga (MAP-50): 0–500 kg en la API, hasta 100 kg a mano en el panel.
+- [ ] Envolvente de regreso (MAP-47): no existe todavía; cuando exista, tiene que usar la misma carga.

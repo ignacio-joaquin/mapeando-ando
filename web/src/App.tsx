@@ -6,6 +6,7 @@ import { CursorReadout, Inspector } from "./components/Inspector";
 import { ScaleBar } from "./components/ScaleBar";
 import { FixtureBanner } from "./components/FixtureBanner";
 import { TopBar } from "./components/TopBar";
+import { CurrentConditions } from "./components/CurrentConditions";
 import { ClickModeToggle, PlannerPanel } from "./components/route/PlannerPanel";
 import { ElevationProfile } from "./components/route/ElevationProfile";
 import { CuffChecklist } from "./components/route/CuffChecklist";
@@ -160,6 +161,7 @@ export function App() {
             mapa (así el mapa no cambia de tamaño). */}
         <div className="relative flex min-h-0 flex-1 md:flex-row">
           <main className="relative flex min-h-0 min-w-0 flex-1 flex-col pb-12 md:order-2 md:pb-0">
+            {site ? <CurrentConditions siteId={site.id} /> : null}
             <div data-edu="map" className="relative min-h-0 flex-1">
               {site ? (
                 <>

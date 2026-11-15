@@ -8,7 +8,7 @@ import type { LimitingFactor, RouteResponse } from "../api/schemas";
 
 /** Una evaluación del planificador mientras hay una lección abierta. */
 export interface Attempt {
-  /** Puntos y permanencias, sin la hora: dos intentos con la misma geometría comparan la hora. */
+  /** Puntos, permanencias, ida y vuelta y carga, sin la hora: dos intentos con la misma geometría comparan la hora. */
   readonly geometryKey: string;
   readonly departMs: number;
   readonly status: "GO" | "CAUTION" | "NO_GO";

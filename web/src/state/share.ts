@@ -5,8 +5,11 @@
  *
  * Cada punto es `lat,lon,minutos[,id de lugar]`, en orden: hábitat, paradas,
  * destino. `ret=0` = solo ida; sin `ret`, la travesía vuelve al hábitat. El texto de las tareas no viaja (alarga el enlace y no cambia el
- * cálculo). Este módulo no importa los stores: store.ts lo usa al arrancar.
+ * cálculo). La carga sí: `kit=drill,camera` (ids de domain/equipment.ts) y
+ * `kg=5` (carga libre), también sin puntos: la carga es de la EVA, no de la
+ * travesía. Este módulo no importa los stores: store.ts lo usa al arrancar.
  */
+import { clampExtraKg, isEquipmentId } from "../domain/equipment";
 import type { LatLon } from "../mars/geo";
 
 export interface SharedPoint extends LatLon {
@@ -18,6 +21,14 @@ export interface SharedPlan {
   readonly departAt: Date | null;
   readonly roundTrip: boolean;
   readonly points: readonly SharedPoint[];
+  /** Equipo elegido (ids de EQUIPMENT) y carga libre en kg. */
+  readonly kit: readonly string[];
+  readonly extraKg: number;
+}
+
+export interface SharedCargo {
+  readonly kit: readonly string[];
+  readonly extraKg: number;
 }
 
 /** Tope de puntos que se aceptan de un enlace: más que esto no es una EVA. */
@@ -42,9 +53,11 @@ export function encodePlan(
   departAt: Date,
   points: readonly SharedPoint[],
   roundTrip: boolean,
+  cargo: SharedCargo = { kit: [], extraKg: 0 },
 ): string {
   const q = new URLSearchParams({ site: siteId, depart: departAt.toISOString() });
   if (!roundTrip) q.set("ret", "0");
+  setCargo(q, cargo);
   if (points.length > 0) {
     q.set(
       "pts",
@@ -57,6 +70,21 @@ export function encodePlan(
     );
   }
   return `?${q.toString()}`;
+}
+
+/**
+ * Enlace sin travesía: solo el sitio y la carga. Sin `depart`, para que
+ * recargar no deje fija una hora vieja.
+ */
+export function encodeSite(siteId: string, cargo: SharedCargo = { kit: [], extraKg: 0 }): string {
+  const q = new URLSearchParams({ site: siteId });
+  setCargo(q, cargo);
+  return `?${q.toString()}`;
+}
+
+function setCargo(q: URLSearchParams, cargo: SharedCargo): void {
+  if (cargo.kit.length > 0) q.set("kit", cargo.kit.join(","));
+  if (cargo.extraKg > 0) q.set("kg", String(cargo.extraKg));
 }
 
 /** Lee la travesía de un query string. Lo que no se entiende se descarta, no se adivina. */
@@ -77,16 +105,20 @@ export function decodePlan(qs: string): SharedPlan {
       placeId: placeId && PLACE_ID.test(placeId) ? placeId : null,
     });
   }
+  const kit = [...new Set((q.get("kit") ?? "").split(",").filter(isEquipmentId))];
+  const kg = Number(q.get("kg") ?? 0);
   return {
     departAt: d && !Number.isNaN(d.getTime()) ? d : null,
     roundTrip: q.get("ret") !== "0",
     points,
+    kit,
+    extraKg: clampExtraKg(kg),
   };
 }
 
 export function planFromUrl(): SharedPlan | null {
   const q = search();
-  if (!q?.has("pts") && !q?.has("depart")) return null;
+  if (!q || !["pts", "depart", "kit", "kg"].some((k) => q.has(k))) return null;
   return decodePlan(q.toString());
 }
 

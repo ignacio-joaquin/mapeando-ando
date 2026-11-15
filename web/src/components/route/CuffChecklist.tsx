@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import type { Direction, MeasuredValue } from "../../api/schemas";
+import { cargoKg, EQUIPMENT } from "../../domain/equipment";
 import { LANDMARK_CATALOG_LABEL, isFallback } from "../../domain/landmarks";
 import { MARS24_LTST, sourceLabel, type SourceInfo } from "../../domain/provenance";
 import { useFreshRoute, usePlan } from "../../state/plan";
@@ -23,6 +24,8 @@ export function CuffChecklist() {
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
   const roundTrip = usePlan((s) => s.roundTrip);
+  const kit = usePlan((s) => s.kit);
+  const extraKg = usePlan((s) => s.extraKg);
   const siteId = useStore((s) => s.activeSiteId);
   if (!result) {
     // Ctrl+P sin travesía: que el papel lo diga en vez de salir en blanco.
@@ -80,6 +83,8 @@ export function CuffChecklist() {
           Reserva al llegar:{" "}
           {route.verdict.margin.value === null ? "falta el dato" : formatMinutes(route.verdict.margin.value)}
         </div>
+        {/* El O2 de la tabla depende de la carga: en papel tiene que decir con cuánta se calculó. */}
+        <div>Carga del equipo: {cargoLine(kit, extraKg, example)}</div>
         {example ? (
           <div className="mt-1 border-2 border-black p-1 font-bold">
             EJEMPLO — calculado sin /api/route, en línea recta y con parámetros supuestos. NO USAR PARA DECIDIR.
@@ -195,4 +200,15 @@ function collectSources(
     for (const v of values) if (!uniq.some((u) => sameSource(u, v))) uniq.push(v);
     return [col, uniq.map(sourceLabel)];
   });
+}
+
+
+/** "13,4 kg (Taladro de núcleo, Cámara + 5 kg a mano)", o "ninguna". */
+function cargoLine(kit: readonly string[], extraKg: number, example: boolean): string {
+  const total = cargoKg(kit, extraKg);
+  if (total <= 0) return "ninguna";
+  const names = EQUIPMENT.filter((e) => kit.includes(e.id)).map((e) => e.name);
+  if (extraKg > 0) names.push(`${extraKg.toLocaleString("es-AR")} kg a mano`);
+  const kg = total.toLocaleString("es-AR", { maximumFractionDigits: 1 });
+  return `${kg} kg (${names.join(", ")})${example ? " — el ejemplo no la usa" : ""}`;
 }
