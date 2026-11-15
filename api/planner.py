@@ -871,6 +871,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     out = {"site": site_id, "depart_utc": depart_utc, "legs": legs, "stops": stops, "verdict": verdict,
            "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None)}
     if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
+        # Las pendientes por paso son las del veredicto (máxima de la celda): el perfil
+        # se colorea con ellas para que muestre el tramo que bloquea, no lo contradiga.
         out["_profile_inputs"] = ([plan.steps for plan in legs_plan], [legs_plan[0].elev[0]]
-                                  + [plan.elev[-1] for plan in legs_plan])
+                                  + [plan.elev[-1] for plan in legs_plan],
+                                  [plan.slopes for plan in legs_plan])
     return out

@@ -16,7 +16,9 @@ interface Props {
   readonly height?: number;
 }
 
-const PAD = { top: 10, right: 8, bottom: 20, left: 44 };
+// `top` deja lugar arriba para la unidad del eje Y: con menos, la "m" se pisa
+// con la etiqueta de la elevación máxima.
+const PAD = { top: 18, right: 8, bottom: 20, left: 44 };
 
 export function ElevationProfile({ profile, height = 140 }: Props) {
   if (!profile || profile.distance_m.length < 2) {
@@ -170,7 +172,7 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
         </text>
         <text
           x={PAD.left - 6}
-          y={PAD.top - 2}
+          y={PAD.top - 9}
           textAnchor="end"
           className="fill-current text-muted"
           style={{ fontSize: 9 }}
