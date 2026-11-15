@@ -205,6 +205,13 @@ Una pila reutilizada viaja como `MODELED`, con el sol de origen, ΔLs y la difer
 - Sin fotos cerca: `photos: []` y una `note`. Nunca una foto de ejemplo.
 - Mientras el server responda 404/405/501, la ficha dice que falta el endpoint.
 
+**`GET /api/sites/{site}/conditions` (propuesta, lo consume la franja "Condiciones actuales" de `web/`).** Última observación atmosférica del rover del sitio y alertas de clima espacial de DONKI. Lo valida `CurrentConditionsSchema` en `web/src/api/schemas.ts`.
+
+- Sale: `{ site, observations, alerts, alerts_status, note? }`. `observations[]`: `id` (`temperature` | `pressure` | `dust_opacity`), `label` (texto en español), `value` como valor con procedencia (OBSERVED; `mission`/`instrument` según el rover: Mars 2020 MEDA en Jezero, MSL REMS y Mastcam en Gale) y `when` (`{ utc, sol, ltst }` de la medición, o `null`).
+- `alerts[]`: `severity` (`bajo` | `moderado` | `alto`), `summary` y `when`. `alerts_status` (`ok` | `missing` | `error`) dice si `alerts: []` significa "sin alertas" (`ok`) o "no se bajaron" (`missing`).
+- **Hoy no hay paso del pipeline que baje MEDA/REMS ni DONKI**: todos los valores van con `value: null`, `when: null`, `alerts_status: "missing"` y una `note`. Nunca se rellenan con valores de ejemplo. Falta decidir de dónde salen (fuente, frecuencia de descarga y criterio de severidad de DONKI, ver MAP-17); cuando exista, lo baja el pipeline a `/data` y la API solo lo lee.
+- Sitio desconocido (no hay `sites/<id>.json`): 404. Si la API no responde, la franja dice que no pudo leer las condiciones.
+
 **`GET /api/sites/{site}/viewshed?lat=&lon=` (lo calcula `api/viewshed.py`, lo dibuja la capa `habitat-contact` de `web/`).** Desde dónde hay línea de vista por radio con un hábitat puesto en (lat, lon): la misma geometría que el límite "minutos seguidos sin contacto" del planificador (`api/contact.py`), en una grilla de ~25 m hasta 3 km del hábitat. Lo valida `ViewshedSchema` en `web/src/api/schemas.ts`.
 
 - No se precomputa: depende de dónde marca el hábitat el usuario. Lee `dtm.tif` (COG, usa sus overviews) y tira ~45 000 rayos: ~0,4 s.

@@ -20,7 +20,10 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import json
+import os
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -230,6 +233,45 @@ def stack_for_tag(data_dir: Path, site_id: str, sol_tag: str | None) -> ShadowSt
             f"La pila de sombras de {site_id}" + (f" para el sol {sol_tag}" if sol_tag else "")
             + " todavía no está: la genera pipeline/illumination.py.")
     return ShadowStack(dirs[-1])
+
+
+def _pipeline_python(repo_dir: Path | None) -> Path:
+    """Python del pipeline: venv del repo si existe, sino el intérprete actual."""
+    if repo_dir is not None:
+        venv = repo_dir / ".venv-pipeline" / "bin" / "python"
+        if venv.exists():
+            return venv
+    return Path(sys.executable)
+
+
+def ensure_illumination_for_time(data_dir: Path, site_id: str, t: float,
+                                repo_dir: Path | None = None) -> ShadowStack | None:
+    """Genera la pila y tiles de iluminación si faltan, antes de pedir la ruta.
+
+    Lo hace solo cuando la API necesita la luz para ese sitio y momento. Si la corrida del
+    pipeline falla o los binarios no están, devuelve None para que la ruta siga degradando
+    sin romper la API (ver `plan_route`).
+    """
+    stack = stack_for_time(data_dir, site_id, t)
+    if stack is not None:
+        return stack
+    if repo_dir is None:
+        return None
+    start_utc = dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    py = _pipeline_python(repo_dir)
+    env = os.environ.copy()
+    env["DATA_DIR"] = str(data_dir)
+    cmds = [
+        [str(py), str(repo_dir / "pipeline" / "illumination.py"), "--site", site_id,
+         "--start", start_utc, "--sols", "1"],
+        [str(py), str(repo_dir / "pipeline" / "shadow_tiles.py"), "--site", site_id],
+    ]
+    try:
+        for cmd in cmds:
+            subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
+    except (FileNotFoundError, OSError, subprocess.CalledProcessError):
+        return None
+    return stack_for_time(data_dir, site_id, t)
 
 
 def apply_affine(t, xs, ys):

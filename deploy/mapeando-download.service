@@ -1,11 +1,13 @@
 [Unit]
-Description=Mapa Marciano: descarga de datos de todos los sitios y sync a S3
-After=network-online.target
-Wants=network-online.target
+Description=Descarga y precomputación del pipeline de Mapa Marciano
+After=network.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/mapeando.env
 WorkingDirectory=/opt/mapeando-ando
-ExecStart=/opt/mapeando-ando/.venv-pipeline/bin/python pipeline/download.py --sync
-TimeoutStartSec=infinity
+EnvironmentFile=/etc/mapeando.env
+ExecStart=/usr/bin/env bash /opt/mapeando-ando/deploy/run-pipeline.sh
+User=root
+
+[Install]
+WantedBy=multi-user.target

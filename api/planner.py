@@ -48,8 +48,8 @@ from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg
                           segment_consumption)
 from .contact import ASSUMPTIONS as CONTACT_ASSUMPTIONS
 from .contact import ContactField
-from .illumination import (NODATA_U8, SHADOW, SOL_REUSE_MAX_DLS_DEG, ShadowStack, apply_affine, parse_utc,
-                           sample_on_points, stack_for_time)
+from .illumination import (NODATA_U8, SHADOW, SOL_REUSE_MAX_DLS_DEG, ShadowStack, apply_affine, ensure_illumination_for_time,
+                           parse_utc, sample_on_points)
 from .terrain import MARS_LONGLAT, MARS_RADIUS_M, _norm_lon, densify, haversine_m
 
 SPEED_M_S = 0.8          # el mismo default de /api/route/consumables
@@ -757,7 +757,7 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     t_depart = parse_utc(depart_utc)
     pts = [(float(w["lat"]), float(w["lon"])) for w in waypoints]
     slope_path, dtm_path, slope_meta = _terrain_inputs(data_dir, site_id)
-    stack = stack_for_time(data_dir, site_id, t_depart)
+    stack = ensure_illumination_for_time(data_dir, site_id, t_depart, repo_dir)
     caveats: list[str] = []
     if slope_path is None:
         caveats.append("sin la pendiente procesada los tramos van en línea recta y el terreno no se evaluó")

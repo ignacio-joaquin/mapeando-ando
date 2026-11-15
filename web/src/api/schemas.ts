@@ -92,6 +92,44 @@ export const MeasuredValueSchema = z.object({
 });
 
 /**
+ * GET /api/sites/{site}/conditions — PROPUESTA de contrato (docs/context.md §4).
+ * Última observación atmosférica del rover y alertas de clima espacial (DONKI).
+ * Mientras no haya paso del pipeline que las baje, cada valor viene con
+ * `value: null` y `when: null`: la franja dice que falta, nunca muestra ejemplos.
+ */
+export const CurrentConditionsObservationSchema = z.object({
+  id: z.string(),
+  /** Texto en español para la UI. */
+  label: z.string(),
+  value: MeasuredValueSchema,
+  /** Fecha y sol de la medición; null = todavía no hay medición. */
+  when: z
+    .object({
+      utc: z.string(),
+      sol: z.number(),
+      ltst: z.string(),
+    })
+    .nullable(),
+});
+
+export const CurrentConditionsAlertSchema = z.object({
+  severity: z.enum(["bajo", "moderado", "alto"]),
+  summary: z.string(),
+  when: z.string(),
+});
+
+export const CurrentConditionsSchema = z.object({
+  site: z.string(),
+  observations: z.array(CurrentConditionsObservationSchema),
+  alerts: z.array(CurrentConditionsAlertSchema),
+  /** `missing`: todavía no se bajan las alertas; `alerts: []` no quiere decir "sin alertas". */
+  alerts_status: z.enum(["ok", "missing", "error"]),
+  note: z.string().optional(),
+});
+
+export type CurrentConditionsData = z.infer<typeof CurrentConditionsSchema>;
+
+/**
  * /api/route — PROPUESTA de contrato (ticket del planificador). El modelo de
  * costo es decisión abierta del equipo (docs/context.md §5); esto fija solo
  * qué entra y qué sale. Documentado en docs/context.md §4.
