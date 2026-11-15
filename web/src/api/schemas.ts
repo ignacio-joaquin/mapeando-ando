@@ -318,6 +318,18 @@ export const TileSetSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("error"), error: z.string() }),
 ]);
 
+/**
+ * Cómo viene la altura escondida en el RGB de los tiles de relieve 3D
+ * (`relief-dem`): h = R·red + G·green + B·blue − base. Lo decide
+ * pipeline/tiles.py (DEM_ENCODING) y se le pasa tal cual a MapLibre.
+ */
+export const DemEncodingSchema = z.object({
+  red_factor: z.number(),
+  green_factor: z.number(),
+  blue_factor: z.number(),
+  base_shift: z.number(),
+});
+
 export const TerrainLayerSchema = z.object({
   file: z.string(),
   status: z.enum(["ok", "error"]),
@@ -325,6 +337,11 @@ export const TerrainLayerSchema = z.object({
   resolution: z.string().optional(),
   error: z.string().optional(),
   tiles: TileSetSchema.optional(),
+  /** Solo `relief-dem`: altura (m) que corresponde al 0 de los tiles, el punto más bajo del DTM. */
+  datum_m: z.number().optional(),
+  /** Solo `relief-dem`: codificación de la altura en los PNG. */
+  encoding: DemEncodingSchema.optional(),
+  assumptions: z.array(z.string()).optional(),
 });
 
 export const TerrainIndexSchema = z.object({

@@ -35,7 +35,9 @@ interface AppState {
   /** Instante del planificador. Entrada del reloj y del deslizador. */
   readonly instant: Date;
   /** Vista actual del mapa (zoom y latitud del centro), para la barra de escala. */
-  readonly view: { readonly zoom: number; readonly lat: number } | null;
+  readonly view: { readonly zoom: number; readonly lat: number; readonly pitch: number } | null;
+  /** Relieve 3D prendido. Solo tiene efecto si terrain.json trae `relief-dem` listo. */
+  readonly view3d: boolean;
   setActiveSite: (id: string) => void;
   toggleLayer: (id: string) => void;
   setOpacity: (id: string, opacity: number) => void;
@@ -48,7 +50,8 @@ interface AppState {
   setCursor: (p: LatLon | null) => void;
   setPicked: (p: LatLon | null) => void;
   setInstant: (d: Date) => void;
-  setView: (v: { zoom: number; lat: number }) => void;
+  setView: (v: { zoom: number; lat: number; pitch: number }) => void;
+  setView3d: (on: boolean) => void;
 }
 
 const initialLayers: Record<string, LayerState> = Object.fromEntries(
@@ -68,6 +71,7 @@ export const useStore = create<AppState>((set) => ({
   picked: null,
   instant: new Date(),
   view: null,
+  view3d: false,
   setActiveSite: (id) => set({ activeSiteId: id, picked: null }),
   toggleLayer: (id) =>
     set((s) => {
@@ -100,4 +104,5 @@ export const useStore = create<AppState>((set) => ({
   setPicked: (picked) => set({ picked }),
   setInstant: (instant) => set({ instant }),
   setView: (view) => set({ view }),
+  setView3d: (view3d) => set({ view3d }),
 }));
