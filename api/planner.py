@@ -389,6 +389,16 @@ MODEL = {"provenance": "MODELED", "mission": None, "instrument": None, "source":
                          "Supuestos del EMU de la ISS (docs/consumibles del traje.md)"]}
 
 
+def _model_src(p: SuitParams) -> dict:
+    """Procedencia de lo que sale de Pandolf, con la carga declarada si la hay: el mismo
+    número de O2 no significa lo mismo con 0 que con 20 kg de equipo encima."""
+    if p.cargo_kg <= 0:
+        return MODEL
+    return {**MODEL, "assumptions": list(MODEL["assumptions"]) + [
+        f"Carga de {p.cargo_kg:g} kg además del traje: entra a Pandolf y sube el O2. "
+        "A velocidad fija no cambia los tiempos, y la batería no depende del esfuerzo"]}
+
+
 @dataclass
 class LegPlan:
     latlon: list[tuple[float, float]]
@@ -601,7 +611,8 @@ ASSUMED = {"provenance": "ASSUMED", "mission": None, "instrument": None, "source
 LIMIT_ROUND = {"terrain": 1, "o2": 3, "battery": 1, "daylight": 1, "contact": 1, "dose": 3, "calories": 0}
 
 
-def _limit_sources(slope_src: dict, dose_src: dict, contact: ContactField | None) -> dict[str, dict]:
+def _limit_sources(slope_src: dict, dose_src: dict, contact: ContactField | None,
+                   model: dict = MODEL) -> dict[str, dict]:
     contact_src = {"provenance": "MODELED", "mission": "MRO", "instrument": "HiRISE DTM",
                    "source": "Línea de vista al hábitat sobre el DTM (api/contact.py) y tiempos de caminata",
                    "assumptions": CONTACT_ASSUMPTIONS + ["La salida es el hábitat"]}
@@ -612,8 +623,8 @@ def _limit_sources(slope_src: dict, dose_src: dict, contact: ContactField | None
             "Peor celda pisada, con la pendiente que no se puede esquivar dentro de cada celda de trabajo "
             "(la f-ésima más alta de f × f píxeles de slope.tif)",
             "La pendiente de slope.tif es por píxel: no ve escalones más chicos que el píxel"]},
-        "o2": MODEL, "battery": MODEL, "calories": MODEL,
-        "daylight": {**MODEL, "assumptions": list(MODEL["assumptions"]) + [
+        "o2": model, "battery": model, "calories": model,
+        "daylight": {**model, "assumptions": list(model["assumptions"]) + [
             "Atardecer sobre horizonte plano, del index.json de la pila de sombras"]},
         "contact": contact_src, "dose": dose_src,
     }
@@ -703,6 +714,7 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     import rasterio
 
     p = params or SuitParams()
+    model = _model_src(p)
     t_depart = parse_utc(depart_utc)
     pts = [(float(w["lat"]), float(w["lon"])) for w in waypoints]
     slope_path, dtm_path, slope_meta = _terrain_inputs(data_dir, site_id)
@@ -776,7 +788,7 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     o2_margin = o2_left / o2_rate / 60.0 if o2_rate > 0 else math.inf
     bat_margin = bat_left / bat_rate_wh_s / 60.0 if bat_rate_wh_s > 0 else math.inf
     margin = min(o2_margin, bat_margin)
-    margin_mv = _mv(round(margin, 1), "min", MODEL, ["Reserva al ritmo de consumo medio de la travesía"])
+    margin_mv = _mv(round(margin, 1), "min", model, ["Reserva al ritmo de consumo medio de la travesía"])
 
     # ---- tramos
     slope_src = {"provenance": "DERIVED", "mission": slope_meta.get("mission") or "MRO",
@@ -798,7 +810,7 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             "coordinates": [[round(lo, 7), round(la, 7)] for la, lo in plan.latlon],
             "class": plan.cls,
             "distance": _mv(round(dist, 1), "m", path_src, extra),
-            "duration": _mv(round(dur_s / 60.0, 1), "min", MODEL, extra),
+            "duration": _mv(round(dur_s / 60.0, 1), "min", model, extra),
             "bearing": _mv(round(bearing_deg(a[0], a[1], b[0], b[1]), 1), "°", GEOMETRY,
                            ["Rumbo inicial de la estación de salida a la de llegada del tramo"]),
             "max_slope": _mv(None if plan.max_slope is None else round(plan.max_slope, 1), "°",
@@ -833,8 +845,8 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             "index": i, "lat": pts[i][0], "lon": pts[i][1], "task": w.get("task"),
             "arrive_utc": _iso(arrivals[i]) if arrivals[i] is not None else None,
             "depart_utc": _iso(departures[i]) if departures[i] is not None else None,
-            "o2_remaining": _mv(round(100 * (1 - o2_i / p.o2_capacity_kg), 1), "%", MODEL),
-            "battery_remaining": _mv(round(100 * (1 - bat_i / p.battery_capacity_wh), 1), "%", MODEL),
+            "o2_remaining": _mv(round(100 * (1 - o2_i / p.o2_capacity_kg), 1), "%", model),
+            "battery_remaining": _mv(round(100 * (1 - bat_i / p.battery_capacity_wh), 1), "%", model),
             "dose_accumulated": _mv(None if dose_rate is None else round(dose_rate * el_i / 3600.0, 4),
                                     "mSv", dose_src),
             "margin": margin_mv,
@@ -870,7 +882,7 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     if caveats:
         summary += " Ojo: " + "; ".join(caveats) + "."
 
-    used_src = _limit_sources(slope_src, dose_src, contact)
+    used_src = _limit_sources(slope_src, dose_src, contact, model)
     limit_src = _limit_bound_sources(stack, limits)
     verdict = {
         "status": assessment.status, "limiting_factor": factor, "summary": summary, "margin": margin_mv,

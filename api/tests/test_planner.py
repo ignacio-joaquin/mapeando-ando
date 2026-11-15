@@ -319,6 +319,54 @@ class TestVeredictoPorReserva:
                                                   "dose", "calories"}
 
 
+class TestCargaDelEquipo:
+    """MAP-50: el equipo que se lleva entra a Pandolf y mueve el O2 y el veredicto."""
+
+    def plan(self, site, cargo_kg=0.0, **suit):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        wps = [{"lat": la, "lon": lo, "task": None, "dwell_min": 0} for la, lo in (A, B)]
+        params = planner.SuitParams(cargo_kg=cargo_kg, **suit)
+        return planner.plan_route("jezero", iso(band_time(13)), wps, site,
+                                  Path(__file__).resolve().parents[2], params=params)
+
+    def test_la_carga_sube_el_o2_y_no_toca_tiempos_ni_bateria(self, site):
+        sin, con = self.plan(site)["stops"][-1], self.plan(site, cargo_kg=20)["stops"][-1]
+        assert con["o2_remaining"]["value"] < sin["o2_remaining"]["value"]
+        assert con["arrive_utc"] == sin["arrive_utc"]
+        assert con["battery_remaining"]["value"] == sin["battery_remaining"]["value"]
+
+    def test_la_carga_queda_declarada_en_la_procedencia(self, site):
+        con = self.plan(site, cargo_kg=13.4)["stops"][-1]["o2_remaining"]
+        assert any("13.4 kg" in a for a in con["assumptions"])
+        sin = self.plan(site)["stops"][-1]["o2_remaining"]
+        assert not any("Carga" in a for a in sin["assumptions"])
+
+    def test_sumar_equipo_pasa_de_go_a_no_go_por_o2(self, site):
+        # O2 justo para la travesía sin carga con un 40 % de sobra: GO por O2. Con 30 kg
+        # más el gasto en plano sube ~45 % y se come la reserva del 20 %.
+        left_pct = self.plan(site)["stops"][-1]["o2_remaining"]["value"]
+        used = planner.SuitParams().o2_capacity_kg * (1 - left_pct / 100)
+        suit = {"o2_capacity_kg": used / 0.6, "battery_capacity_wh": 1e9}
+        sin = self.plan(site, **suit)["verdict"]
+        con = self.plan(site, cargo_kg=30, **suit)["verdict"]
+        o2_sin = next(r for r in sin["limits"] if r["id"] == "o2")
+        assert o2_sin["status"] != "broken"
+        assert sin["status"] != "NO_GO"
+        assert (con["status"], con["limiting_factor"]) == ("NO_GO", "o2")
+
+    def test_la_api_pasa_la_carga_al_modelo(self, client, site):
+        write_terrain(site, flat())
+        sin = client.post("/api/route", json=request(band_time(13))).json()
+        con = client.post("/api/route", json=request(band_time(13)) | {"cargo_kg": 20}).json()
+        assert con["stops"][-1]["o2_remaining"]["value"] < sin["stops"][-1]["o2_remaining"]["value"]
+
+    @pytest.mark.parametrize("cargo", [-1, 501])
+    def test_carga_fuera_de_rango_responde_422(self, client, site, cargo):
+        body = request(band_time(13)) | {"cargo_kg": cargo}
+        assert client.post("/api/route", json=body).status_code == 422
+
+
 def _costs(grid: Grid, weights: planner.CostWeights, max_slope: float):
     r_slope, r_contact, passable = planner.cell_terms(grid, max_slope)
     fac = 1.0 + weights.slope * r_slope + weights.contact * r_contact

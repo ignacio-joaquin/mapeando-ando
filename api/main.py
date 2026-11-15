@@ -390,6 +390,8 @@ class PlannerRequest(BaseModel):
     site: str = Field(min_length=1, max_length=64)
     depart_utc: str = Field(description="ISO 8601 en UTC, por ejemplo 2026-11-15T12:00:00.000Z")
     waypoints: list[PlannerWaypoint] = Field(min_length=2, max_length=20)
+    cargo_kg: float = Field(_DEFAULTS.cargo_kg, ge=0, le=500,
+                            description="Equipo que se lleva encima además del traje (kg, masa en la Tierra)")
 
     @model_validator(mode="before")
     @classmethod
@@ -416,7 +418,8 @@ def route(req: PlannerRequest):
     except ValueError:
         raise HTTPException(422, "depart_utc tiene que ser una fecha ISO 8601, por ejemplo 2026-11-15T12:00:00Z")
     try:
-        out = plan_route(req.site, req.depart_utc, [w.model_dump() for w in req.waypoints], DATA_DIR, REPO_DIR)
+        out = plan_route(req.site, req.depart_utc, [w.model_dump() for w in req.waypoints], DATA_DIR, REPO_DIR,
+                         params=SuitParams(cargo_kg=req.cargo_kg))
     except OSError as e:
         raise HTTPException(503, f"No se pudo leer un raster del sitio: {e}")
     inputs = out.pop("_profile_inputs", None)
