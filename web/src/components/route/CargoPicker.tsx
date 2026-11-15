@@ -27,7 +27,7 @@ export function CargoPicker() {
   const total = cargoKg(kit, extraKg);
 
   return (
-    <section className="rounded border border-line p-2">
+    <section data-edu="cargo" className="rounded border border-line p-2">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -86,7 +86,10 @@ export function CargoPicker() {
               min={0}
               max={MAX_EXTRA_KG}
               step={0.5}
-              value={extraKg}
+              // Vacío en vez de "0": si no, al borrar el campo vuelve un 0 y al
+              // tipear queda "05".
+              placeholder="0"
+              value={extraKg > 0 ? extraKg : ""}
               onChange={(ev) => setExtraKg(ev.target.valueAsNumber)}
               className="w-20 rounded border border-line bg-bg px-2 py-1 text-right font-mono text-xs text-fg"
             />
