@@ -11,11 +11,16 @@
  *   salen de ningún traje real. Están todos juntos abajo para que se vean.
  * - Pendiente y clase de terreno: no se calculan (falta el DTM). El tramo queda
  *   `unknown` y la pendiente en null; no se inventan.
+ * - Indicaciones: sin catálogo de landmarks ni línea de vista no hay landmark
+ *   que nombrar. Cada tramo lleva solo el respaldo por rumbo (geometría real de
+ *   la línea recta), marcado como respaldo. Nunca un landmark de ejemplo.
  */
 import { marsBearingDeg, marsDistanceM } from "../mars/geo";
 import { ltstAt } from "../mars/mars24";
 import { LOCAL_GEOMETRY, type SourceInfo } from "../domain/provenance";
+import { formatBearing, formatDistanceM } from "../components/route/format";
 import type {
+  Direction,
   LimitingFactor,
   MeasuredValue,
   RouteLeg,
@@ -75,6 +80,25 @@ const MISSING_DTM: SourceInfo = {
   source: "Falta: requiere el DTM procesado por el pipeline",
 };
 
+const MISSING_LANDMARKS: SourceInfo = {
+  provenance: "DERIVED",
+  mission: null,
+  instrument: "línea de vista",
+  source: "Falta: requiere el catálogo de landmarks del pipeline y la línea de vista de /api/route",
+};
+
+/** Respaldo por rumbo de un tramo recto: lo único honesto sin landmarks. */
+function bearingFallback(distanceM: number, bearingDeg: number): Direction {
+  return {
+    kind: "fallback_bearing",
+    text: `Sin referencia visible: mantené el rumbo ${formatBearing(bearingDeg)} durante ${formatDistanceM(distanceM)}.`,
+    landmark: null,
+    distance: mv(distanceM, "m", STRAIGHT_LINE),
+    relative_bearing_deg: null,
+    visible_fraction: mv(null, null, MISSING_LANDMARKS),
+  };
+}
+
 const mv = (value: number | null, unit: string | null, src: SourceInfo): MeasuredValue => ({
   ...src,
   value,
@@ -93,6 +117,7 @@ export function exampleRoute(req: RouteRequest): RouteResponse {
     const a = wps[i]!;
     const b = wps[i + 1]!;
     const d = marsDistanceM(a, b);
+    const bearing = marsBearingDeg(a, b);
     legs.push({
       from: i,
       to: i + 1,
@@ -103,8 +128,9 @@ export function exampleRoute(req: RouteRequest): RouteResponse {
       class: "unknown",
       distance: mv(d, "m", STRAIGHT_LINE),
       duration: mv((d / 1000 / p.walkSpeedKmh) * 60, "min", EXAMPLE),
-      bearing: mv(marsBearingDeg(a, b), "°", STRAIGHT_LINE),
+      bearing: mv(bearing, "°", STRAIGHT_LINE),
       max_slope: mv(null, "°", MISSING_DTM),
+      directions: [bearingFallback(d, bearing)],
     });
   }
 
