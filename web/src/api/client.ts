@@ -127,14 +127,46 @@ export async function fetchPoint(
 }
 
 /**
- * Índice de las capas de relieve del sitio (pipeline/precompute.py). null =
- * el pipeline todavía no corrió para este sitio: las capas quedan esperando.
- * `no-cache` porque nginx manda `expires 1h` en /tiles/ y, después de volver a
- * correr el pipeline, el navegador seguiría con el índice viejo.
+ * Índice de las capas del sitio que ya generó el pipeline. Junta dos archivos
+ * con el mismo formato: terrain.json (relieve, pipeline/precompute.py) y
+ * shelter.json (refugios, pipeline/shelter.py). null = no corrió ninguno: las
+ * capas quedan esperando.
+ *
+ * Si uno de los dos falla (500, JSON roto o no pasa el schema), las capas del
+ * otro siguen andando y el problema va a `warnings`: un índice roto no apaga
+ * las capas del otro. Solo si fallan los dos (o falla uno y el otro no existe)
+ * no hay nada que dibujar y se tira el error.
  */
 export async function fetchTerrain(siteId: string): Promise<TerrainIndex | null> {
   if (usingFixtures) return null;
-  const path = `/tiles/${siteId}/terrain.json`;
+  const asError = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  const [relief, shelter] = await Promise.all(
+    ["terrain.json", "shelter.json"].map((file) => fetchLayerIndex(siteId, file).catch(asError)),
+  );
+  const errors = [relief, shelter].filter((r): r is string => typeof r === "string");
+  const indexes = [relief, shelter].filter((r): r is TerrainIndex => r !== null && typeof r !== "string");
+  const [base] = indexes;
+  if (!base) {
+    if (errors.length) throw new Error(errors.join(" · "));
+    return null;
+  }
+  return {
+    ...base,
+    // MapView rearma las fuentes cuando cambia: tiene que cambiar si corre cualquiera de los dos.
+    generated_at: indexes.map((i) => i.generated_at).join(" + "),
+    // Los ids no se repiten entre los dos archivos (shelter.py usa los suyos).
+    layers: indexes.reduce<TerrainIndex["layers"]>((all, i) => ({ ...all, ...i.layers }), {}),
+    warnings: [...indexes.flatMap((i) => i.warnings), ...errors],
+  };
+}
+
+/**
+ * Un índice del pipeline. `no-cache` porque nginx manda `expires 1h` en
+ * /tiles/ y, después de volver a correr el pipeline, el navegador seguiría con
+ * el índice viejo.
+ */
+async function fetchLayerIndex(siteId: string, file: string): Promise<TerrainIndex | null> {
+  const path = `/tiles/${siteId}/${file}`;
   const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${path} respondió ${res.status}`);

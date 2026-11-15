@@ -1,8 +1,10 @@
-import type { MeasuredValue } from "../../api/schemas";
+import { Fragment } from "react";
+import type { Direction, MeasuredValue } from "../../api/schemas";
+import { LANDMARK_CATALOG_LABEL, isFallback } from "../../domain/landmarks";
 import { MARS24_LTST, sourceLabel, type SourceInfo } from "../../domain/provenance";
 import { useFreshRoute, usePlan } from "../../state/plan";
 import { useStore } from "../../state/store";
-import { waypointLabel } from "../../map/route";
+import { stopLabel } from "../../map/route";
 import { earthShort, formatBearing, formatDistanceM, formatMinutes, ltstShort, sameSource } from "./format";
 
 /**
@@ -20,6 +22,7 @@ export function CuffChecklist() {
   const result = useFreshRoute();
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
+  const roundTrip = usePlan((s) => s.roundTrip);
   const siteId = useStore((s) => s.activeSiteId);
   if (!result) {
     // Ctrl+P sin travesía: que el papel lo diga en vez de salir en blanco.
@@ -61,7 +64,7 @@ export function CuffChecklist() {
             {departAt.toLocaleDateString("es-AR")})
           </span>
           <span>
-            {route.stops.length} PUNTOS · {totalDistance(route.legs.map((l) => l.distance))}
+            {route.stops.length} PUNTOS{roundTrip ? " (IDA Y VUELTA)" : " (SOLO IDA)"} · {totalDistance(route.legs.map((l) => l.distance))}
           </span>
         </div>
         <div className="mt-1.5 border-t-2 border-black pt-1.5 text-[13pt] font-bold">
@@ -99,24 +102,42 @@ export function CuffChecklist() {
         </thead>
         <tbody>
           {route.stops.map((s, i) => {
-            const label = waypointLabel(i, route.stops.length);
+            const label = stopLabel(i, route.stops.length, roundTrip);
             const next = route.legs[i];
             const wp = waypoints[i];
+            const directions = next?.directions ?? [];
             return (
-              <tr key={s.index} className="break-inside-avoid border-b border-black align-top">
-                <td className="font-bold">{label.short}</td>
-                <td>{s.arrive_utc ? ltstShort(s.arrive_utc, s.lon) : "—"}</td>
-                <td>{s.depart_utc ? ltstShort(s.depart_utc, s.lon) : "—"}</td>
-                <td>{next ? value(next.bearing, formatBearing) : "—"}</td>
-                <td>{next ? value(next.distance, formatDistanceM) : "—"}</td>
-                <td className="font-sans">
-                  {/* La tarea de ahora: editarla no recalcula la ruta (ver planKey). */}
-                  {wp?.task.trim() || s.task || label.long}
-                  {label.kind === "station" && wp ? ` (${wp.dwellMin} min)` : ""}
-                </td>
-                <td className="text-right">{value(s.o2_remaining, (v) => v.toFixed(1))}</td>
-                <td className="text-right">{value(s.margin, formatMinutes)}</td>
-              </tr>
+              <Fragment key={s.index}>
+                <tr className={`break-inside-avoid align-top ${directions.length ? "" : "border-b border-black"}`}>
+                  <td className="font-bold">{label.short}</td>
+                  <td>{s.arrive_utc ? ltstShort(s.arrive_utc, s.lon) : "—"}</td>
+                  <td>{s.depart_utc ? ltstShort(s.depart_utc, s.lon) : "—"}</td>
+                  <td>{next ? value(next.bearing, formatBearing) : "—"}</td>
+                  <td>{next ? value(next.distance, formatDistanceM) : "—"}</td>
+                  <td className="font-sans">
+                    {/* La tarea de ahora: editarla no recalcula la ruta (ver planKey). */}
+                    {wp?.task.trim() || s.task || label.long}
+                    {(label.kind === "station" || (roundTrip && label.kind === "destination")) && wp
+                      ? ` (${wp.dwellMin} min)`
+                      : ""}
+                  </td>
+                  <td className="text-right">{value(s.o2_remaining, (v) => v.toFixed(1))}</td>
+                  <td className="text-right">{value(s.margin, formatMinutes)}</td>
+                </tr>
+                {directions.length ? (
+                  // Lo que se sigue con el casco puesto: la indicación hacia el punto siguiente.
+                  <tr className="break-inside-avoid border-b border-black">
+                    <td />
+                    <td colSpan={7} className="pb-1 font-sans text-[10.5pt] leading-snug">
+                      {directions.map((d, k) => (
+                        <div key={k}>
+                          → {d.text} <span className="text-[8pt]">({directionNote(d)})</span>
+                        </div>
+                      ))}
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             );
           })}
         </tbody>
@@ -138,6 +159,14 @@ export function CuffChecklist() {
       </footer>
     </article>
   );
+}
+
+/** Al pie de cada indicación: de dónde sale el landmark y cuánto se ve, o que es respaldo. */
+function directionNote(d: Direction): string {
+  if (isFallback(d.kind) || !d.landmark) return "RESPALDO: sin referencia visible";
+  const vis = d.visible_fraction.value;
+  const seen = vis === null ? "visibilidad: falta el dato" : `visible ${Math.round(vis * 100)} % del tramo`;
+  return `${LANDMARK_CATALOG_LABEL[d.landmark.source]} · ${seen}`;
 }
 
 function value(v: MeasuredValue, fmt: (n: number) => string): string {

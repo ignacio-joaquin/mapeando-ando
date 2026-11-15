@@ -170,7 +170,8 @@ def route_consumables(req: ConsumablesRequest):
     return result
 
 
-def _profile(segments: list[list[Step]], vertex_elev: list[float]) -> dict:
+def _profile(segments: list[list[Step]], vertex_elev: list[float],
+             step_slopes: list[list[float | None]] | None = None) -> dict:
     """Perfil de elevación de la ruta: la serie que ya se muestreó, expuesta.
 
     `_segments_from_request` densifica cada tramo cada `sample_step_m` y lee el
@@ -180,17 +181,28 @@ def _profile(segments: list[list[Step]], vertex_elev: list[float]) -> dict:
     Por muestra: distancia acumulada desde la salida, elevación y pendiente del
     sub-paso que termina ahí. La pendiente del primer punto es la del primer
     sub-paso, para que la serie tenga el mismo largo que las otras dos.
+
+    `step_slopes` (lo pasa el planificador 4D): la pendiente de cada sub-paso tal
+    como la juzga el veredicto, la máxima de la celda (`grid.peak`). Si viene, el
+    perfil se colorea con ella y no con el desnivel entre muestras: un escalón de
+    2 m a 30° dentro de una celda bloquea el paso, pero promediado entre muestras
+    da 5° y se pintaba verde, y el gráfico contradecía al NO-GO. Sin ese dato
+    (consumibles, o una celda sin pendiente), queda el desnivel entre muestras.
     """
     dist = [0.0]
     elev = [vertex_elev[0] if vertex_elev else 0.0]
     slope = []
     acumulada = 0.0
-    for seg in segments:
-        for s in seg:
+    for i, seg in enumerate(segments):
+        pendientes = step_slopes[i] if step_slopes is not None else [None] * len(seg)
+        for s, celda in zip(seg, pendientes):
             acumulada += s.dx_m
             dist.append(acumulada)
             elev.append(elev[-1] + s.dz_m)
-            slope.append(math.degrees(math.atan2(s.dz_m, s.dx_m)) if s.dx_m else 0.0)
+            if celda is not None:
+                slope.append(celda)
+            else:
+                slope.append(math.degrees(math.atan2(s.dz_m, s.dx_m)) if s.dx_m else 0.0)
     slope.insert(0, slope[0] if slope else 0.0)
 
     # Dónde empieza cada tramo dentro de la serie, para marcar las estaciones.
@@ -259,6 +271,45 @@ def _slope_deg(dtm_path: Path, lat: float, lon: float) -> float:
     return math.degrees(math.atan(math.hypot(dz_dx, dz_dy)))
 
 
+# Capas de refugio (pipeline/shelter.py) que el inspector muestrea en un punto:
+# id de capa (web/src/map/layers.ts), etiqueta, unidad y decimales.
+SHELTER_POINT_LAYERS = (
+    ("survival-shelter-minutes", "Minutos al refugio", "min", 1),
+    ("survival-shelter-strong-minutes", "Minutos al refugio fuerte", "min", 1),
+    ("survival-shelter-skyview", "Cielo visible", "fracción", 3),
+)
+
+
+def _shelter_layers(site_id: str, lat: float, lon: float) -> list:
+    """Minutos al refugio y cielo visible en el punto, de los COG de shelter.py.
+
+    Lista vacía si el pipeline todavía no corrió; `value: null` si el punto cae
+    fuera de la capa o en su nodata (p. ej. el borde del DTM, sin horizonte completo).
+    """
+    index_path = DATA_DIR / "output" / site_id / "shelter.json"
+    try:
+        index = json.loads(index_path.read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    for layer_id, label, unit, decimals in SHELTER_POINT_LAYERS:
+        layer = index.get("layers", {}).get(layer_id)
+        if not layer or layer.get("status") != "ok":
+            continue
+        try:
+            value = round(sample_dtm(index_path.parent / layer["file"], [(lat, lon)])[0], decimals)
+        except TerrainError:
+            value = None
+        except (OSError, ValueError):
+            continue
+        out.append({"id": layer_id, "label": label, **_value(
+            value, unit, layer.get("provenance", "DERIVED"),
+            mission=layer.get("mission"), instrument=layer.get("instrument"),
+            resolution=layer.get("resolution"), source=layer.get("method"),
+            assumptions=layer.get("assumptions"))})
+    return out
+
+
 @app.get("/api/sites/{site_id}/point")
 def point(site_id: str, lat: float, lon: float):
     """Qué hay en un punto: elevación y pendiente, cada una con su procedencia.
@@ -318,9 +369,9 @@ def point(site_id: str, lat: float, lon: float):
                 "El valor depende de ese largo: a mayor distancia, pendiente más suave",
             ] + ([] if slope is not None else ["El punto está en el borde del DTM"]),
         ),
-        # Peligro, refugio, dosis y sombras se suman acá cuando el pipeline las
-        # precompute: se muestrean de su COG igual que la elevación.
-        "layers": [],
+        # Refugio sale de pipeline/shelter.py. Peligro, dosis y sombras se suman acá
+        # cuando el pipeline las precompute: se muestrean de su COG igual que la elevación.
+        "layers": _shelter_layers(site_id, lat, lon),
     }
 
 

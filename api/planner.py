@@ -10,8 +10,9 @@ Modelo de costo (docs/seguridad.md, decisión en docs/context.md §5):
     r_sombra         = banda de shadow_hourly.tif más cercana a la hora de llegada a
                        la celda: en sombra 1; al sol o sin dato 0
     r_contacto       = sin línea de vista al hábitat 1 (sin dato también); con vista 0
-    rugosidad, suelo suelto y radiación por terreno tienen peso pero todavía no tienen
-    capa: quedan inactivos y la respuesta lo dice
+    rugosidad y suelo suelto ya tienen capa (roughness.tif, loose_soil.tif) pero el A*
+    todavía no las lee, y la radiación por terreno va al presupuesto de dosis: los tres
+    quedan inactivos y la respuesta dice por qué
 
 El "1 +" es el tiempo puro: como cada paso cuesta al menos Δt, la distancia octile /
 velocidad nunca sobreestima lo que falta; la heurística es admisible y consistente, y
@@ -75,8 +76,10 @@ COST_FACTORS: tuple[tuple[str, str, str | None], ...] = (
     ("slope", "Pendiente", None),
     ("shadow", "Sombra / frío", None),
     ("contact", "Sin contacto con el hábitat", None),
-    ("roughness", "Rugosidad", "Falta la capa de rugosidad en el pipeline."),
-    ("loose_soil", "Suelo suelto (THEMIS)", "Falta la inercia térmica de THEMIS procesada."),
+    ("roughness", "Rugosidad", "La capa existe (roughness.tif) pero el A* todavía no la lee."),
+    ("loose_soil", "Suelo suelto (THEMIS)",
+     "La capa existe (loose_soil.tif, THEMIS de noche) pero el A* todavía no la lee: hoy solo "
+     "refuerza el peligro de terreno del mapa."),
     ("radiation", "Radiación por terreno",
      "La dosis por celda (survival-dose) varía menos que la incertidumbre de RAD: entra en el "
      "presupuesto de dosis de la travesía, no en el costo del A*."),
@@ -868,6 +871,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     out = {"site": site_id, "depart_utc": depart_utc, "legs": legs, "stops": stops, "verdict": verdict,
            "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None)}
     if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
+        # Las pendientes por paso son las del veredicto (máxima de la celda): el perfil
+        # se colorea con ellas para que muestre el tramo que bloquea, no lo contradiga.
         out["_profile_inputs"] = ([plan.steps for plan in legs_plan], [legs_plan[0].elev[0]]
-                                  + [plan.elev[-1] for plan in legs_plan])
+                                  + [plan.elev[-1] for plan in legs_plan],
+                                  [plan.slopes for plan in legs_plan])
     return out

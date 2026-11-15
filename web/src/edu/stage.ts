@@ -29,10 +29,11 @@ export function useRecordAttempts() {
   const siteId = useStore((s) => s.activeSiteId);
   useEffect(() => {
     if (!fresh || fresh.example) return;
-    const { waypoints, departAt } = usePlan.getState();
+    const { waypoints, departAt, roundTrip } = usePlan.getState();
     const v = fresh.route.verdict;
     const attempt: Attempt = {
-      geometryKey: JSON.stringify([siteId, waypoints.map((w) => [w.lat, w.lon, w.dwellMin])]),
+      // Con o sin vuelta al hábitat son rutas distintas: entra en la geometría.
+      geometryKey: JSON.stringify([siteId, roundTrip, waypoints.map((w) => [w.lat, w.lon, w.dwellMin])]),
       departMs: departAt.getTime(),
       status: v.status,
       limiting: v.limiting_factor,
@@ -156,14 +157,18 @@ export function usePlanSandbox(keepRoute: boolean) {
       waypoints: before.waypoints,
       departAt: before.departAt,
       clickMode: before.clickMode,
+      roundTrip: before.roundTrip,
     };
     before.clear();
+    // Ida y vuelta, como en una salida de verdad: volver con reserva es parte de la regla.
+    before.setRoundTrip(true);
     // El selector de modo se esconde en la lección: si quedó en "inspeccionar",
     // un clic en el mapa no sumaría puntos y el alumno no tendría cómo salir.
     before.setClickMode("add");
     return () => {
       const now = usePlan.getState();
       now.setClickMode(saved.clickMode);
+      now.setRoundTrip(saved.roundTrip);
       if (keepRoute && now.waypoints.length >= 2) return;
       // Si cambió de sitio, los puntos guardados son de otro lugar: no se devuelven.
       if (now.siteId !== saved.siteId) return;

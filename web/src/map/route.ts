@@ -22,7 +22,7 @@ export const LEG_CLASS_LABEL: Record<LegClass, string> = {
   unknown: "sin evaluar (falta DTM)",
 };
 
-export type WaypointKind = "origin" | "station" | "destination";
+export type WaypointKind = "origin" | "station" | "destination" | "return";
 
 /** A = hábitat (salida), B = destino, 1, 2… = paradas. Con un solo punto, es el hábitat. */
 export function waypointLabel(
@@ -32,4 +32,19 @@ export function waypointLabel(
   if (index === 0) return { kind: "origin", short: "A", long: "Hábitat (salida)" };
   if (index === total - 1) return { kind: "destination", short: "B", long: "Destino" };
   return { kind: "station", short: String(index), long: `Parada ${index}` };
+}
+
+/**
+ * Etiqueta de una parada de la RESPUESTA. Con ida y vuelta, la última es el
+ * hábitat otra vez (A, "vuelta") y el destino queda anteúltimo.
+ */
+export function stopLabel(
+  index: number,
+  stops: number,
+  roundTrip: boolean,
+): { readonly kind: WaypointKind; readonly short: string; readonly long: string } {
+  if (roundTrip && stops > 2 && index === stops - 1) {
+    return { kind: "return", short: "A", long: "Hábitat (vuelta)" };
+  }
+  return waypointLabel(index, roundTrip ? stops - 1 : stops);
 }
