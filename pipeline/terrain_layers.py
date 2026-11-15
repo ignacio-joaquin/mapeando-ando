@@ -1,35 +1,30 @@
 #!/usr/bin/env python3
-"""Capas de terreno para EVA: entradas de Pandolf + máscara de no transitable.
+"""Peligro de terreno para EVA: pendiente + rugosidad a 1 m.
 
-Script independiente: lee las salidas de precompute.py (dtm.tif, slope.tif) de un
-sitio y escribe, en la misma carpeta, capas separadas y documentadas para que se
-puedan combinar después con otras fuentes de datos:
+Lo llama precompute.py como un paso más (escritura atómica, registro en terrain.json y
+tiles). También se puede correr solo sobre una carpeta que ya tenga dtm.tif y slope.tif,
+para experimentar:
 
-  roughness.tif         rugosidad pura (m): desvío estándar de los residuos del DTM
-                        en una ventana de 5 m, tras restar la tendencia local (15 m).
-                        Es la medida física, sin umbrales.
-  terrain_factor.tif    factor de terreno η de Pandolf (adimensional, 1.1 a 1.8),
-                        SOLO por rugosidad. La pendiente NO está incluida: en Pandolf
-                        entra aparte como el grado G, que se calcula sobre la ruta
-                        (depende de la dirección de marcha) usando dtm.tif.
-  impassable.tif        máscara 0/1: 1 = no transitable a pie (pendiente o rugosidad
-                        por encima del umbral). Pandolf no modela lo imposible.
-  terrain_layers.json   metadatos: unidades, umbrales, método, leyenda, badge, fuentes.
+  python pipeline/terrain_layers.py --dir /data/prueba/jezero
 
-No incluye gravedad ni traje (eso se aplica en otra etapa).
-Se procesa por bloques, así que funciona con DTMs grandes (Gale) sin llenar la memoria.
+Salidas (misma grilla que el DTM):
+  roughness.tif       rugosidad σ (m): desvío estándar, en una ventana de 5 m, del residuo
+                      del DTM tras restar el promedio local en 15 m. En una ladera lisa
+                      da ~0: no repite la pendiente.
+  terrain_factor.tif  factor de terreno η de Pandolf (1.1 a 1.8), solo por rugosidad.
+                      La pendiente entra en Pandolf aparte, como el grado G de la ruta.
+  hazard.tif          clase de peligro (uint8): 0 bajo, 1 medio, 2 alto, 3 no transitable,
+                      255 sin dato. Manda la peor entre la clase de pendiente y la de rugosidad.
 
-Uso:
-  python pipeline/terrain_layers.py --site jezero                     # /data/output/jezero
-  python pipeline/terrain_layers.py --dir ~/output/jezero_prueba      # cualquier carpeta
-
-Como módulo (para combinar con otros datos):
-  from terrain_layers import rugosidad_pura, factor_terreno, no_transitable
+Solo geometría del terreno: no incluye gravedad, traje ni carga.
+Se procesa por bloques con borde extra, así que anda con DTMs grandes (Gale) sin costuras.
 """
+from __future__ import annotations
+
 import argparse
-import json
 import os
-import time
+import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -37,200 +32,156 @@ import rasterio
 from rasterio.windows import Window
 from scipy.ndimage import uniform_filter
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+# --- Parámetros (documentados en el README) ---
+TREND_WINDOW_M = 15        # escala de la "forma general" del terreno, que se resta
+ROUGHNESS_WINDOW_M = 5     # ~ resolución horizontal real de un DTM HiRISE (3-5 px)
 
-# --- Parámetros (documentados en el README y en terrain_layers.json) ---
-VENTANA_TENDENCIA_M = 15        # escala de la "forma general" del terreno (se resta)
-VENTANA_RUGOSIDAD_M = 5         # escala de bloques; ~resolución horizontal real del DTM HiRISE
+# Cortes de pendiente: los MISMOS que SLOPE_CLASSES (web/src/map/layers.ts),
+# RAMPAS["pendiente"] (pipeline/tiles.py) y SLOPE_CUTS (api/planner.py). El último es el
+# límite duro de api/safety.py (Limits.max_slope_deg): lo que se pinta "no transitable" es
+# lo que el planificador no pisa. Convención "≥": 25° exactos ya es no transitable.
+# Un test (test_terrain_layers.py) compara estos cortes con los del planificador.
+SLOPE_CUTS_DEG = (10.0, 20.0, 25.0)
 
-# Rugosidad pura (m) -> η de Pandolf. Interpolación lineal entre anclas; fuera de rango se satura.
-RUGOSIDAD_ANCLAS_M = [0.1, 0.3, 0.5, 1.0]
-ETA_VALORES = [1.1, 1.2, 1.5, 1.8]   # tierra, matorral liviano, matorral denso, pantano
+# Cortes de rugosidad σ (m). σ es un desvío estándar: en un campo denso de bloques de
+# altura h da σ ≈ h/2, así que los cortes equivalen a escalones de ~0,3, ~0,5 y ~0,8-1 m.
+ROUGHNESS_CUTS_M = (0.15, 0.25, 0.40)
 
-# No transitable a pie
-NO_TRANSITABLE_PENDIENTE_DEG = 30.0
-NO_TRANSITABLE_RUGOSIDAD_M = 1.0
+# Rugosidad σ (m) -> η de Pandolf. Interpolación lineal; fuera de rango se satura.
+ETA_ANCHORS_M = (0.05, 0.15, 0.25, 0.40)
+ETA_VALUES = (1.1, 1.2, 1.5, 1.8)   # camino de tierra, matorral liviano, matorral denso, pantano
 
-BLOQUE = 2048                   # tamaño de bloque de procesamiento (px)
-NODATA_MASCARA = 255
+HAZARD_CLASSES = ("bajo", "medio", "alto", "no transitable")
+HAZARD_NODATA = 255
+BAD_Z_M = 1e5              # mismo valor que precompute.py: los DTM marcan nodata con ±3,4e38
+BLOCK = 2048               # tamaño de bloque de procesamiento (px)
 
 
-# ---------------------------------------------------------------------------
-# Funciones de cálculo (reutilizables desde otros scripts)
-# ---------------------------------------------------------------------------
-def impar(n):
+class MissingInput(Exception):
+    """Falta dtm.tif o slope.tif."""
+
+
+# ------------------------------------------------------------------ cálculos
+
+def odd(n):
     n = max(int(round(n)), 1)
     return n if n % 2 == 1 else n + 1
 
 
-def media_movil(a, validos, tam):
-    """Promedio en ventana de tam x tam usando solo las celdas válidas.
+def moving_mean(a, valid, size):
+    """Promedio en ventana size x size usando solo celdas válidas.
     (uniform_filter con NaN contagiaría filas enteras: por eso se promedia con pesos.)"""
-    num = uniform_filter(np.where(validos, a, 0.0), size=tam, mode="nearest")
-    den = uniform_filter(validos.astype("float64"), size=tam, mode="nearest")
+    num = uniform_filter(np.where(valid, a, 0.0), size=size, mode="nearest")
+    den = uniform_filter(valid.astype("float64"), size=size, mode="nearest")
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.where(den > 1e-9, num / den, np.nan)
 
 
-def rugosidad_pura(z, tam_tendencia_px, tam_rugosidad_px):
-    """Desvío estándar móvil de (z - promedio local). z en metros, NaN = sin dato."""
-    validos = ~np.isnan(z)
-    if not validos.any():
+def roughness(z, trend_px, window_px):
+    """σ móvil de (z - promedio local). z en metros, NaN = sin dato."""
+    valid = ~np.isnan(z)
+    if not valid.any():
         return np.full(z.shape, np.nan)
-    # Centrar en la media del bloque mejora la precisión numérica (alturas ~ -2500 m)
-    z0 = z - np.nanmean(z)
-    r = z0 - media_movil(z0, validos, tam_tendencia_px)
-    m = media_movil(r, validos, tam_rugosidad_px)
-    m2 = media_movil(r * r, validos, tam_rugosidad_px)
-    rug = np.sqrt(np.clip(m2 - m * m, 0, None))
-    return np.where(validos, rug, np.nan)
+    z0 = z - np.nanmean(z)              # centrar mejora la precisión (alturas ~ -2500 m)
+    r = z0 - moving_mean(z0, valid, trend_px)
+    m = moving_mean(r, valid, window_px)
+    m2 = moving_mean(r * r, valid, window_px)
+    return np.where(valid, np.sqrt(np.clip(m2 - m * m, 0, None)), np.nan)
 
 
-def factor_terreno(rugosidad_m):
-    """η de Pandolf a partir de la rugosidad pura (m). NaN se mantiene NaN."""
-    eta = np.interp(rugosidad_m, RUGOSIDAD_ANCLAS_M, ETA_VALORES)
-    return np.where(np.isnan(rugosidad_m), np.nan, eta)
+def terrain_factor(rough_m):
+    """η de Pandolf a partir de σ (m). NaN se mantiene NaN."""
+    eta = np.interp(rough_m, ETA_ANCHORS_M, ETA_VALUES)
+    return np.where(np.isnan(rough_m), np.nan, eta)
 
 
-def no_transitable(pendiente_deg, rugosidad_m):
-    """1 = no transitable, 0 = transitable, 255 = sin dato."""
-    sin_dato = np.isnan(pendiente_deg) | np.isnan(rugosidad_m)
-    malo = (np.nan_to_num(pendiente_deg) > NO_TRANSITABLE_PENDIENTE_DEG) | \
-           (np.nan_to_num(rugosidad_m) > NO_TRANSITABLE_RUGOSIDAD_M)
-    return np.where(sin_dato, NODATA_MASCARA, malo).astype("uint8")
+def hazard_class(slope_deg, rough_m):
+    """Clase 0-3 = max(clase de pendiente, clase de rugosidad); 255 si falta alguno."""
+    missing = np.isnan(slope_deg) | np.isnan(rough_m)
+    c_slope = np.searchsorted(SLOPE_CUTS_DEG, np.nan_to_num(slope_deg), side="right")
+    c_rough = np.searchsorted(ROUGHNESS_CUTS_M, np.nan_to_num(rough_m), side="right")
+    return np.where(missing, HAZARD_NODATA, np.maximum(c_slope, c_rough)).astype("uint8")
 
 
-# ---------------------------------------------------------------------------
-# Procesamiento por bloques
-# ---------------------------------------------------------------------------
-def leer(src, ventana):
-    return src.read(1, window=ventana, masked=True).astype("float64").filled(np.nan)
+# ------------------------------------------------------------------ por bloques
+
+def read(src, window):
+    z = src.read(1, window=window, masked=True).astype("float64").filled(np.nan)
+    return np.where(np.isfinite(z) & (np.abs(z) < BAD_Z_M), z, np.nan)
 
 
-def procesar(carpeta):
-    dtm_path, slope_path = carpeta / "dtm.tif", carpeta / "slope.tif"
+def compute(dtm_path, slope_path, out_dir):
+    """Escribe roughness.tif, terrain_factor.tif y hazard.tif en out_dir (GTiff en bloques).
+
+    Devuelve un resumen con el % del terreno en cada clase.
+    """
+    dtm_path, slope_path, out_dir = Path(dtm_path), Path(slope_path), Path(out_dir)
     for p in (dtm_path, slope_path):
         if not p.exists():
-            raise SystemExit(f"Falta {p}. Corré antes pipeline/precompute.py para ese sitio.")
+            raise MissingInput(f"Falta {p}. Corré antes pipeline/precompute.py para ese sitio.")
 
-    t0 = time.time()
     with rasterio.open(dtm_path) as dsrc, rasterio.open(slope_path) as ssrc:
         if (dsrc.width, dsrc.height) != (ssrc.width, ssrc.height):
-            raise SystemExit("dtm.tif y slope.tif no tienen la misma grilla")
-        px = abs(dsrc.transform.a)                      # tamaño de píxel en metros
-        nt = impar(VENTANA_TENDENCIA_M / px)
-        nr = impar(VENTANA_RUGOSIDAD_M / px)
-        halo = nt // 2 + nr // 2 + 1                    # borde extra para que no haya costuras
+            raise MissingInput("dtm.tif y slope.tif no tienen la misma grilla")
+        # Tamaño de píxel en metros de la proyección. En eqc con lat_ts=0, a 18,5° N el píxel
+        # E-O mide 0,948 m sobre el suelo: con ventanas de 15 y 5 px no cambia nada.
+        px = abs(dsrc.transform.a)
+        n_trend, n_win = odd(TREND_WINDOW_M / px), odd(ROUGHNESS_WINDOW_M / px)
+        halo = n_trend // 2 + n_win // 2 + 1        # borde extra: sin costuras entre bloques
         W, H = dsrc.width, dsrc.height
-        print(f"DTM {W}x{H} px de {px:.2f} m | ventanas: tendencia {nt} px, rugosidad {nr} px", flush=True)
 
-        base = dsrc.profile.copy()
-        base.update(driver="GTiff", tiled=True, blockxsize=512, blockysize=512,
-                    compress="deflate", BIGTIFF="IF_SAFER")
-        perfil_f = {**base, "dtype": "float32", "nodata": np.nan, "predictor": 3}
-        perfil_m = {**base, "dtype": "uint8", "nodata": NODATA_MASCARA, "predictor": 2}
+        base = dict(driver="GTiff", width=W, height=H, count=1, crs=dsrc.crs, transform=dsrc.transform,
+                    tiled=True, blockxsize=512, blockysize=512, compress="deflate", BIGTIFF="IF_SAFER")
+        prof_f = {**base, "dtype": "float32", "nodata": np.nan, "predictor": 3}
+        prof_c = {**base, "dtype": "uint8", "nodata": HAZARD_NODATA, "predictor": 2}
 
-        n_validos = n_imp = 0
-        cortes = [1.1, 1.2, 1.5, 1.8]
-        conteo_eta = np.zeros(len(cortes), dtype=np.int64)   # η en [1.1,1.2), [1.2,1.5), [1.5,1.8), =1.8
-        total_bloques = ((H + BLOQUE - 1) // BLOQUE) * ((W + BLOQUE - 1) // BLOQUE)
-        hechos = 0
+        counts = np.zeros(len(HAZARD_CLASSES), dtype=np.int64)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(out_dir / "roughness.tif", "w", **prof_f) as o_r, \
+             rasterio.open(out_dir / "terrain_factor.tif", "w", **prof_f) as o_e, \
+             rasterio.open(out_dir / "hazard.tif", "w", **prof_c) as o_h:
+            for row in range(0, H, BLOCK):
+                for col in range(0, W, BLOCK):
+                    h, w = min(BLOCK, H - row), min(BLOCK, W - col)
+                    win = Window(col, row, w, h)
+                    r0, c0 = max(row - halo, 0), max(col - halo, 0)
+                    r1, c1 = min(row + h + halo, H), min(col + w + halo, W)
+                    z = read(dsrc, Window(c0, r0, c1 - c0, r1 - r0))
+                    rough = roughness(z, n_trend, n_win)[row - r0:row - r0 + h, col - c0:col - c0 + w]
+                    slope = read(ssrc, win)
+                    cls = hazard_class(slope, rough)
+                    o_r.write(rough.astype("float32"), 1, window=win)
+                    o_e.write(terrain_factor(rough).astype("float32"), 1, window=win)
+                    o_h.write(cls, 1, window=win)
+                    counts += np.bincount(cls[cls != HAZARD_NODATA], minlength=len(HAZARD_CLASSES))
 
-        with rasterio.open(carpeta / "roughness.tif", "w", **perfil_f) as o_rug, \
-             rasterio.open(carpeta / "terrain_factor.tif", "w", **perfil_f) as o_eta, \
-             rasterio.open(carpeta / "impassable.tif", "w", **perfil_m) as o_imp:
-            for fila in range(0, H, BLOQUE):
-                for col in range(0, W, BLOQUE):
-                    h, w = min(BLOQUE, H - fila), min(BLOQUE, W - col)
-                    v = Window(col, fila, w, h)
-                    r0, c0 = max(fila - halo, 0), max(col - halo, 0)
-                    r1, c1 = min(fila + h + halo, H), min(col + w + halo, W)
-                    z = leer(dsrc, Window(c0, r0, c1 - c0, r1 - r0))
-
-                    rug = rugosidad_pura(z, nt, nr)[fila - r0:fila - r0 + h, col - c0:col - c0 + w]
-                    pend = leer(ssrc, v)
-                    eta = factor_terreno(rug)
-                    imp = no_transitable(pend, rug)
-
-                    o_rug.write(rug.astype("float32"), 1, window=v)
-                    o_eta.write(eta.astype("float32"), 1, window=v)
-                    o_imp.write(imp, 1, window=v)
-
-                    ok = imp != NODATA_MASCARA
-                    n_validos += int(ok.sum())
-                    n_imp += int((imp == 1).sum())
-                    e = eta[ok & ~np.isnan(eta)]
-                    conteo_eta += np.array([((e >= 1.1) & (e < 1.2)).sum(), ((e >= 1.2) & (e < 1.5)).sum(),
-                                            ((e >= 1.5) & (e < 1.8)).sum(), (e >= 1.8).sum()])
-                    hechos += 1
-                    if hechos % 20 == 0 or hechos == total_bloques:
-                        print(f"  bloques {hechos}/{total_bloques}", flush=True)
-
-    resumen = {
-        "pixeles_validos": n_validos,
-        "pct_no_transitable": round(100 * n_imp / max(n_validos, 1), 2),
-        "pct_eta": {k: round(100 * int(c) / max(n_validos, 1), 2) for k, c in
-                    zip(["1.1-1.2", "1.2-1.5", "1.5-1.8", "1.8"], conteo_eta)},
-    }
-    escribir_metadatos(carpeta, px, resumen)
-    print(f"Listo en {(time.time() - t0) / 60:.1f} min -> {carpeta}")
-    print(f"  No transitable: {resumen['pct_no_transitable']} % del terreno")
-    for k, val in resumen["pct_eta"].items():
-        print(f"  η {k:8s}: {val:6.2f} %")
+    total = max(int(counts.sum()), 1)
+    return {"pct_by_class": {name: round(100 * int(c) / total, 2) for name, c in zip(HAZARD_CLASSES, counts)}}
 
 
-def escribir_metadatos(carpeta, px, resumen):
-    meta = {
-        "badge": "MRO HiRISE · DERIVED",
-        "fuente": "DTM HiRISE (MRO) del sitio, vía pipeline/precompute.py",
-        "pixel_m": px,
-        "notas": [
-            "Solo geometría del terreno: no incluye gravedad, traje ni carga.",
-            "La pendiente NO está en terrain_factor: en Pandolf entra como el grado G, que se calcula sobre la ruta con dtm.tif (G = 100·Δz/Δd, con signo).",
-            "La rugosidad por debajo de ~0.1-0.3 m está en el nivel de ruido del DTM (precisión vertical de decenas de cm).",
-            "El DTM no distingue el material (roca firme vs arena suelta): η mide solo irregularidad geométrica.",
-            "Cerca de zonas sin dato, las ventanas usan solo las celdas válidas (menos muestras, algo menos confiable).",
-        ],
-        "capas": {
-            "roughness": {
-                "archivo": "roughness.tif", "unidad": "m", "tipo": "float32", "nodata": "NaN",
-                "metodo": f"desvío estándar en ventana de {VENTANA_RUGOSIDAD_M} m de (z - promedio en ventana de {VENTANA_TENDENCIA_M} m)",
-            },
-            "terrain_factor": {
-                "archivo": "terrain_factor.tif", "unidad": "adimensional (η de Pandolf)", "tipo": "float32", "nodata": "NaN",
-                "metodo": "interpolación lineal de la rugosidad entre anclas, saturada en los extremos",
-                "anclas_rugosidad_m": RUGOSIDAD_ANCLAS_M, "valores_eta": ETA_VALORES,
-                "equivalente_pandolf": ["camino de tierra", "matorral liviano", "matorral denso", "pantano"],
-                "leyenda": [
-                    {"valor": 1.1, "color": "#1a9850", "etiqueta": "Liso (≈ camino de tierra)"},
-                    {"valor": 1.2, "color": "#a6d96a", "etiqueta": "Algo irregular"},
-                    {"valor": 1.5, "color": "#fdae61", "etiqueta": "Irregular, esquivar obstáculos"},
-                    {"valor": 1.8, "color": "#d73027", "etiqueta": "Bloques / escalones ~1 m"},
-                ],
-            },
-            "impassable": {
-                "archivo": "impassable.tif", "unidad": "0/1", "tipo": "uint8", "nodata": NODATA_MASCARA,
-                "regla": f"1 si pendiente > {NO_TRANSITABLE_PENDIENTE_DEG}° o rugosidad > {NO_TRANSITABLE_RUGOSIDAD_M} m",
-                "leyenda": [
-                    {"valor": 0, "color": "#00000000", "etiqueta": "Transitable"},
-                    {"valor": 1, "color": "#7f0000", "etiqueta": "No transitable a pie"},
-                ],
-            },
-        },
-        "resumen": resumen,
-    }
-    (carpeta / "terrain_layers.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+# ------------------------------------------------------------------ uso suelto
 
-
-def main():
-    ap = argparse.ArgumentParser(description="Capas de terreno para EVA (entradas de Pandolf)")
-    g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--site", help="id del sitio: usa /data/output/<site>/")
-    g.add_argument("--dir", help="carpeta con dtm.tif y slope.tif (también recibe las salidas)")
-    args = ap.parse_args()
-    carpeta = Path(args.dir).expanduser() if args.dir else DATA_DIR / "output" / args.site
-    procesar(carpeta)
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Peligro de terreno (pendiente + rugosidad) sobre una carpeta")
+    ap.add_argument("--dir", required=True, help="carpeta con dtm.tif y slope.tif; recibe las salidas")
+    args = ap.parse_args(argv)
+    folder = Path(args.dir).expanduser()
+    work = folder / ".terrain_layers.work"
+    shutil.rmtree(work, ignore_errors=True)
+    try:
+        summary = compute(folder / "dtm.tif", folder / "slope.tif", work)
+    except MissingInput as e:
+        print(f"Faltan datos: {e}", file=sys.stderr)
+        shutil.rmtree(work, ignore_errors=True)
+        return 2
+    for name in ("roughness.tif", "terrain_factor.tif", "hazard.tif"):
+        os.replace(work / name, folder / name)      # escritura atómica
+    shutil.rmtree(work, ignore_errors=True)
+    print(f"Listo -> {folder}")
+    for name, pct in summary["pct_by_class"].items():
+        print(f"  {name:15s} {pct:6.2f} %")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

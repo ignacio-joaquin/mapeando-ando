@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapa Marciano</title>
+<style>
+  :root { --bg:#f6f3ef; --fg:#1d1a17; --muted:#6d655c; --line:#ddd5cb; --ok:#2f7d4f; --warn:#b26b00; --rust:#b5562a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161412; --fg:#ece6de; --muted:#a39a8f; --line:#3a342e; --ok:#5fbf86; --warn:#e0a24a; --rust:#e07a4a; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px max(16px, env(safe-area-inset-left)); }
+  h1 { margin:0 0 4px; font-size: 28px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  .row { display:flex; gap:12px; align-items:baseline; border-top:1px solid var(--line); padding:12px 0; flex-wrap:wrap; }
+  .name { font-weight:600; min-width: 180px; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); }
+  code { font-size: 13px; color: var(--muted); }
+  .disclaimer { margin-top:32px; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mapa Marciano</h1>
+  <p class="sub">Servidor de NASA Space Apps 2026. El mapa todavía no está acá: esta página muestra el estado del servidor y de los datos.</p>
+  <div class="row"><span class="name">Servidor</span><span id="health">consultando…</span></div>
+  <div id="sites"></div>
+  <p class="disclaimer">Prototipo educativo, no software de vuelo.</p>
+</main>
+<script>
+  async function load() {
+    const h = document.getElementById('health');
+    try {
+      const r = await fetch('/api/health'); const j = await r.json();
+      h.textContent = `OK · commit ${j.commit || '?'} · datos ${j.data_ready ? 'listos' : 'descargándose'}`;
+      h.className = j.data_ready ? 'ok' : 'warn';
+      const s = await (await fetch('/api/sites')).json();
+      const box = document.getElementById('sites'); box.replaceChildren();
+      for (const site of s.sites) {
+        const row = document.createElement('div'); row.className = 'row';
+        const n = document.createElement('span'); n.className = 'name'; n.textContent = site.name;
+        const v = document.createElement('span');
+        v.textContent = `${site.rover} · ${site.files_ok}/${site.files_total} archivos`;
+        v.className = site.files_ok === site.files_total ? 'ok' : 'warn';
+        row.append(n, v); box.append(row);
+      }
+    } catch (e) { h.textContent = 'La API no responde todavía'; h.className = 'warn'; }
+  }
+  load(); setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -24,5 +24,9 @@ fi
 if echo "$CHANGED" | grep -q '^pipeline/requirements.txt'; then
   "$REPO_DIR/.venv-pipeline/bin/pip" install -q -r pipeline/requirements.txt
 fi
+if echo "$CHANGED" | grep -q '^web/'; then
+  bash "$REPO_DIR/deploy/build-web.sh" >> /var/log/mapeando-deploy.log 2>&1 \
+    || echo "$(date -u +%FT%TZ) AVISO: falló el build de web/; queda la versión anterior" >> /var/log/mapeando-deploy.log
+fi
 systemctl restart mapeando-api.service
 systemctl reload nginx
