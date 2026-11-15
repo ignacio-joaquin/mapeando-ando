@@ -503,10 +503,14 @@ def _knob(default: float, title: str, unit: str | None, step: float, help: str, 
 
 
 class LimitsSettings(BaseModel):
-    """Límites duros: si uno se rompe, la ruta es NO-GO."""
+    """Límites duros: si uno se rompe, la ruta es NO-GO.
+
+    La pendiente máxima no está acá a propósito: es el corte único de 25° (docs/context.md
+    §5) que comparten el A*, la clase del tramo (planner.SLOPE_CUTS), la leyenda, los tiles
+    de pendiente y peligro y los refugios. Si el usuario la moviera, el veredicto y el mapa
+    dirían cosas distintas. Mandarla en `params` es 422 (extra="forbid").
+    """
     model_config = ConfigDict(extra="forbid", title="Límites del veredicto")
-    max_slope_deg: float = _knob(_LIMITS.max_slope_deg, "Pendiente máxima", "°", 1,
-                                 "Más empinado que esto, el tramo queda bloqueado.", gt=0, le=45)
     reserve_fraction: float = _knob(_LIMITS.reserve_fraction, "Reserva al volver", "fracción", 0.05,
                                     "O2 y batería que tienen que sobrar al terminar (0,2 = 20 %).", ge=0, le=0.9)
     sunset_margin_min: float = _knob(_LIMITS.sunset_margin_min, "Margen antes del atardecer", "min", 5,

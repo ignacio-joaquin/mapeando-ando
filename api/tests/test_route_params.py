@@ -19,7 +19,7 @@ class TestParamsEndpoint:
 
     def test_los_defaults_salen_de_las_dataclasses(self, client, data_dir):
         groups = {g["id"]: {f["id"]: f for f in g["fields"]} for g in client.get("/api/route/params").json()["groups"]}
-        assert groups["limits"]["max_slope_deg"]["default"] == Limits().max_slope_deg
+        assert groups["limits"]["dose_budget_msv"]["default"] == Limits().dose_budget_msv
         assert groups["weights"]["slope"]["default"] == CostWeights().slope
         assert groups["suit"]["o2_capacity_kg"]["default"] == SuitParams().o2_capacity_kg
 
@@ -40,17 +40,17 @@ class TestRouteWithParams:
 
     def test_un_limite_cambiado_llega_al_veredicto_y_se_declara(self, client, site):  # noqa: F811
         req = route_request((-300, 0), (300, 0))
-        req["params"] = {"limits": {"max_slope_deg": 12}}
+        req["params"] = {"limits": {"dose_budget_msv": 0.3}}
         res = client.post("/api/route", json=req)
         assert res.status_code == 200
         body = res.json()
-        assert _limit(body, "terrain")["limit"]["value"] == 12
+        assert _limit(body, "dose")["limit"]["value"] == 0.3
         assert "ajustes del usuario" in body["verdict"]["summary"]
-        assert "Pendiente máxima 12" in body["verdict"]["summary"]
+        assert "Presupuesto de dosis 0.3 mSv" in body["verdict"]["summary"]
 
     def test_params_iguales_al_default_no_se_declaran(self, client, site):  # noqa: F811
         req = route_request((-300, 0), (300, 0))
-        req["params"] = {"limits": {"max_slope_deg": Limits().max_slope_deg}, "weights": {}, "suit": {}}
+        req["params"] = {"limits": {"dose_budget_msv": Limits().dose_budget_msv}, "weights": {}, "suit": {}}
         res = client.post("/api/route", json=req)
         assert res.status_code == 200
         assert "ajustes del usuario" not in res.json()["verdict"]["summary"]
@@ -64,8 +64,22 @@ class TestRouteWithParams:
 
     def test_valor_fuera_de_rango_es_422(self, client, site):  # noqa: F811
         req = route_request((-300, 0), (300, 0))
-        req["params"] = {"limits": {"max_slope_deg": 90}}
+        req["params"] = {"limits": {"dose_budget_msv": 100}}
         assert client.post("/api/route", json=req).status_code == 422
+
+    def test_la_pendiente_maxima_no_se_ajusta(self, client, site):  # noqa: F811
+        """Corte único de 25° (docs/context.md §5): A*, clase del tramo, leyenda y tiles."""
+        groups = {g["id"]: g for g in client.get("/api/route/params").json()["groups"]}
+        assert "max_slope_deg" not in {f["id"] for f in groups["limits"]["fields"]}
+        req = route_request((-300, 0), (300, 0))
+        req["params"] = {"limits": {"max_slope_deg": 40}}
+        assert client.post("/api/route", json=req).status_code == 422
+
+    def test_con_otros_ajustes_la_pendiente_sigue_en_25(self, client, site):  # noqa: F811
+        req = route_request((-300, 0), (300, 0))
+        req["params"] = {"limits": {"dose_budget_msv": 0.3}, "weights": {"slope": 0}}
+        body = client.post("/api/route", json=req).json()
+        assert _limit(body, "terrain")["limit"]["value"] == Limits().max_slope_deg == 25
 
     def test_ajuste_desconocido_es_422(self, client, site):  # noqa: F811
         req = route_request((-300, 0), (300, 0))
@@ -74,7 +88,7 @@ class TestRouteWithParams:
 
     def test_con_params_y_sin_manifest_sigue_siendo_404(self, client, data_dir):
         req = route_request((-300, 0), (300, 0))
-        req["params"] = {"limits": {"max_slope_deg": 12}}
+        req["params"] = {"limits": {"dose_budget_msv": 0.3}}
         assert client.post("/api/route", json=req).status_code == 404
 
 
