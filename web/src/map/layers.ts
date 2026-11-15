@@ -142,7 +142,7 @@ export const LAYERS: readonly LayerSpec[] = [
     ],
     tiles: "/tiles/{site}/hillshade/{z}/{x}/{y}.png",
     kind: "raster",
-    defaultVisible: true,
+    defaultVisible: false,
   },
   {
     id: "relief-contours",

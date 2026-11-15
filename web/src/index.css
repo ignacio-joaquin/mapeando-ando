@@ -27,6 +27,30 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Scrollbars finos y oscuros en los paneles (Firefox y Chromium). */
+* { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
+
+/* Controles de MapLibre (zoom, brújula, atribución) en la paleta del panel:
+   los de fábrica son blancos y se comían la vista. */
+.maplibregl-ctrl-group {
+  background: color-mix(in srgb, var(--color-panel) 95%, transparent);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.4) !important;
+  overflow: hidden;
+}
+.maplibregl-ctrl-group button { width: 36px; height: 36px; }
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--color-line); }
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.9); }
+.maplibregl-ctrl-group button:not(:disabled):hover { background: var(--color-line); }
+.maplibregl-ctrl-attrib {
+  background: color-mix(in srgb, var(--color-bg) 80%, transparent) !important;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+.maplibregl-ctrl-attrib a { color: var(--color-muted); }
+.maplibregl-ctrl-attrib-button { filter: invert(0.9); background-color: transparent !important; }
+
 /* Ficha de un pin sobre el mapa (PlacePopup): el globo de MapLibre viene
    blanco; lo pasamos al panel oscuro, con borde para que se recorte del terreno. */
 .maplibregl-popup-content {

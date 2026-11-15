@@ -772,8 +772,12 @@ def _cost_out(legs_plan: list[LegPlan], w: CostWeights, has_contact: bool, has_s
 
 def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: Path, repo_dir: Path,
                params: SuitParams | None = None, weights: CostWeights = CostWeights(),
-               limits: safety.Limits = safety.Limits()) -> dict:
-    """Arma la respuesta de POST /api/route (contrato en docs/context.md §4)."""
+               limits: safety.Limits = safety.Limits(), custom: list[str] | None = None) -> dict:
+    """Arma la respuesta de POST /api/route (contrato en docs/context.md §4).
+
+    `custom`: ajustes del usuario que se apartan del default, en palabras. Si
+    hay, el resumen del veredicto lo dice: no es la ruta con los valores del equipo.
+    """
     import rasterio
 
     p = params or SuitParams()
@@ -786,6 +790,8 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     # la ruta sale igual, sin la sombra en el costo y con la luz sin evaluar.
     stack = stack_for_time(data_dir, site_id, t_depart)
     caveats: list[str] = []
+    if custom:
+        caveats.append("calculada con ajustes del usuario (" + ", ".join(custom) + ")")
     if slope_path is None:
         caveats.append("sin la pendiente procesada los tramos van en línea recta y el terreno no se evaluó")
 

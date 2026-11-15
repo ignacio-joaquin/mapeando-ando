@@ -8,7 +8,8 @@ import { Measure } from "./Measure";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 
 /**
- * Inspector de punto. Hoy muestra coordenadas y distancia al centro del sitio,
+ * Inspector de punto, flotando sobre el mapa mientras haya un punto fijado
+ * (modo «inspeccionar»). Muestra coordenadas y distancia al centro del sitio,
  * calculadas en el cliente con el radio marciano (badge DERIVED, cálculo local).
  *
  * Elevacion, pendiente y el valor de cada capa necesitan el point query de
@@ -21,7 +22,6 @@ interface Props {
 }
 
 export function Inspector({ center, siteId }: Props) {
-  const cursor = useStore((s) => s.cursor);
   const picked = useStore((s) => s.picked);
   const setPicked = useStore((s) => s.setPicked);
   const [point, setPoint] = useState<PointInfo | null>(null);
@@ -41,110 +41,97 @@ export function Inspector({ center, siteId }: Props) {
     return () => ctrl.abort();
   }, [picked, siteId]);
 
+  if (!picked) return null;
+
+  const row = "flex items-center justify-between gap-3 py-1";
+  const pending = (
+    <span className="font-mono text-xs text-muted">{cargando ? "consultando…" : "—"}</span>
+  );
+
   return (
-    <div className="flex flex-col gap-3 text-sm">
-      <div>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Cursor
-          </h3>
-          <ProvenanceBadge source={LOCAL_GEOMETRY} />
+    <section
+      aria-label="Punto inspeccionado"
+      data-edu="inspector"
+      className="pointer-events-auto w-full rounded-lg border border-line bg-panel/95 p-3 text-sm shadow-2xl backdrop-blur sm:w-[26rem]"
+    >
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h2 className="text-[11px] font-semibold tracking-wider text-muted uppercase">Punto inspeccionado</h2>
+        <button
+          type="button"
+          onClick={() => setPicked(null)}
+          aria-label="Cerrar el inspector"
+          className="grid size-7 place-items-center rounded text-muted hover:bg-line hover:text-fg"
+        >
+          ✕
+        </button>
+      </div>
+      <dl className="flex flex-col divide-y divide-line/60 text-xs">
+        <div className={row}>
+          <dt className="text-muted">Coordenadas</dt>
+          <dd className="flex flex-wrap items-center justify-end gap-1.5">
+            <span className="font-mono">{formatLatLon(picked)}</span>
+            <ProvenanceBadge source={LOCAL_GEOMETRY} />
+          </dd>
         </div>
-        <p className="font-mono text-xs">
-          {cursor ? formatLatLon(cursor) : "— fuera del mapa —"}
+        <div className={row}>
+          <dt className="text-muted">Al centro del sitio</dt>
+          <dd>
+            <Measure
+              data={{
+                ...LOCAL_GEOMETRY,
+                value: marsDistanceM(picked, { lat: center.lat, lon: center.lon }),
+                unit: null,
+              }}
+              format={formatDistance}
+            />
+          </dd>
+        </div>
+        <div className={row}>
+          <dt className="text-muted">Elevación</dt>
+          <dd>{point ? <Measure data={point.elevation} /> : pending}</dd>
+        </div>
+        <div className={row}>
+          <dt className="text-muted">Pendiente</dt>
+          <dd>{point ? <Measure data={point.slope} /> : pending}</dd>
+        </div>
+        {point?.layers.map((capa) => (
+          <div key={capa.id} className={row}>
+            <dt className="text-muted">{capa.label}</dt>
+            <dd>
+              <Measure data={capa} />
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      {/* Por qué falta el dato, siempre explicado. Nunca un valor inventado. */}
+      {point?.note ? <p className="mt-2 text-[11px] text-warn">{point.note}</p> : null}
+      {!point && !cargando ? (
+        <p className="mt-2 text-[11px] text-warn">
+          Sin backend conectado: no hay de dónde leer la elevación. No se muestra ningún valor
+          estimado.
         </p>
-      </div>
+      ) : null}
+    </section>
+  );
+}
 
-      <div>
-        <div className="mb-1 flex items-center justify-between">
-          <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Punto fijado
-          </h3>
-          {picked ? (
-            <button
-              type="button"
-              onClick={() => setPicked(null)}
-              className="text-[11px] text-rust hover:underline"
-            >
-              limpiar
-            </button>
-          ) : null}
-        </div>
-        {picked ? (
-          <dl className="flex flex-col gap-1 text-xs">
-            <div className="flex justify-between gap-2">
-              <dt className="text-muted">Coordenadas</dt>
-              <dd className="flex flex-wrap items-center justify-end gap-1.5">
-                <span className="font-mono">{formatLatLon(picked)}</span>
-                <ProvenanceBadge source={LOCAL_GEOMETRY} />
-              </dd>
-            </div>
-            <div className="flex justify-between gap-2">
-              <dt className="text-muted">Distancia al centro</dt>
-              <dd>
-                <Measure
-                  data={{
-                    ...LOCAL_GEOMETRY,
-                    value: marsDistanceM(picked, { lat: center.lat, lon: center.lon }),
-                    unit: null,
-                  }}
-                  format={formatDistance}
-                />
-              </dd>
-            </div>
-            <div className="flex justify-between gap-2">
-              <dt className="text-muted">Elevación</dt>
-              <dd>
-                {point ? (
-                  <Measure data={point.elevation} />
-                ) : (
-                  <span className="font-mono text-xs text-muted">
-                    {cargando ? "consultando…" : "—"}
-                  </span>
-                )}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-2">
-              <dt className="text-muted">Pendiente</dt>
-              <dd>
-                {point ? (
-                  <Measure data={point.slope} />
-                ) : (
-                  <span className="font-mono text-xs text-muted">
-                    {cargando ? "consultando…" : "—"}
-                  </span>
-                )}
-              </dd>
-            </div>
-
-            {point?.layers.map((capa) => (
-              <div key={capa.id} className="flex justify-between gap-2">
-                <dt className="text-muted">{capa.label}</dt>
-                <dd>
-                  <Measure data={capa} />
-                </dd>
-              </div>
-            ))}
-
-            {/* Por qué falta el dato, siempre explicado. Nunca un valor inventado. */}
-            {point?.note ? (
-              <p className="mt-1 rounded border border-line bg-panel/60 p-2 text-[11px] text-warn">
-                {point.note}
-              </p>
-            ) : null}
-            {!point && !cargando ? (
-              <p className="mt-1 rounded border border-line bg-panel/60 p-2 text-[11px] text-warn">
-                Sin backend conectado: no hay de dónde leer la elevación. No se
-                muestra ningún valor estimado.
-              </p>
-            ) : null}
-          </dl>
-        ) : (
-          <p className="text-xs text-muted">
-            Con el modo «inspeccionar» del planificador, clic en el mapa para fijar un punto.
-          </p>
-        )}
-      </div>
-    </div>
+/**
+ * Coordenadas bajo el cursor, para la franja de abajo del mapa. Cálculo local,
+ * con la misma procedencia que la barra de escala.
+ */
+export function CursorReadout({ badge }: { readonly badge: boolean }) {
+  const cursor = useStore((s) => s.cursor);
+  if (!cursor) return null;
+  return (
+    <span className="flex items-center gap-1.5 font-mono text-[11px] text-fg/90">
+      {formatLatLon(cursor)}
+      {/* Con la barra de escala a la vista, su badge ya cubre este cálculo. */}
+      {badge ? (
+        <span className="pointer-events-auto font-sans">
+          <ProvenanceBadge source={LOCAL_GEOMETRY} align="left" side="top" />
+        </span>
+      ) : null}
+    </span>
   );
 }

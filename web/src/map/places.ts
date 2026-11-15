@@ -24,15 +24,17 @@ export interface PlaceKindStyle {
   readonly defaultVisible: boolean;
 }
 
+// Todos apagados de entrada: el mapa abre solo con el ortomosaico, y cada
+// tipo se prende desde el panel de capas.
 export const PLACE_KIND_STYLE: Record<PlaceKind, PlaceKindStyle> = {
-  iau: { color: "#f2d36b", glyph: "★", rank: 0, defaultVisible: true },
-  sample: { color: "#e08cc0", glyph: "◆", rank: 1, defaultVisible: true },
-  target: { color: "#6cb8e0", glyph: "◎", rank: 2, defaultVisible: true },
-  heli: { color: "#5fbf86", glyph: "H", rank: 3, defaultVisible: true },
+  iau: { color: "#f2d36b", glyph: "★", rank: 0, defaultVisible: false },
+  sample: { color: "#e08cc0", glyph: "◆", rank: 1, defaultVisible: false },
+  target: { color: "#6cb8e0", glyph: "◎", rank: 2, defaultVisible: false },
+  heli: { color: "#5fbf86", glyph: "H", rank: 3, defaultVisible: false },
   // Cerros sin nombre sacados del DTM: cubren todo el sitio, no solo el camino del rover.
-  landmark: { color: "#c9a27a", glyph: "▲", rank: 4, defaultVisible: true },
-  // Puntos sin nombre y numerosos: apagados de entrada. Las señales de CRISM son indicios desde
-  // órbita; las hondonadas, posibles cráteres; el recorrido del rover y los cráteres de Robbins, miles.
+  landmark: { color: "#c9a27a", glyph: "▲", rank: 4, defaultVisible: false },
+  // Puntos sin nombre y numerosos. Las señales de CRISM son indicios desde órbita; las
+  // hondonadas, posibles cráteres; el recorrido del rover y los cráteres de Robbins, miles.
   orbital: { color: "#b48ce0", glyph: "◈", rank: 5, defaultVisible: false },
   rover: { color: "#e07a4a", glyph: "R", rank: 6, defaultVisible: false },
   depression: { color: "#8fa3b8", glyph: "▼", rank: 7, defaultVisible: false },

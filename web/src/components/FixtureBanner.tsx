@@ -9,14 +9,14 @@ export function FixtureBanner() {
   return (
     <div
       role="status"
-      className="flex items-center gap-2 border-b border-alert/60 bg-alert/15 px-3 py-1.5 text-xs text-fg"
+      className="flex items-center gap-2 bg-alert px-3 py-1 text-xs text-bg"
     >
       <span aria-hidden>▲</span>
-      <strong className="font-semibold">Datos de ejemplo.</strong>
-      <span className="text-muted">
-        No hay backend conectado: ningún valor de esta pantalla es una medición.
-        Para datos reales, copiá <code className="text-fg/90">web/.env.example</code> a{" "}
-        <code className="text-fg/90">web/.env.local</code> con la IP del server.
+      <strong className="shrink-0 font-bold whitespace-nowrap">Datos de ejemplo:</strong>
+      <span>no hay backend conectado, ningún valor de esta pantalla es una medición.</span>
+      <span className="hidden opacity-80 lg:inline">
+        Para datos reales, copiá <code>web/.env.example</code> a <code>web/.env.local</code> con la
+        IP del server.
       </span>
     </div>
   );

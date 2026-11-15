@@ -15,6 +15,8 @@
  * `cargo_kg` y entra a Pandolf (MAP-50).
  */
 import { create } from "zustand";
+import type { RouteParams } from "../api/schemas";
+import { countOverrides, useSettings } from "./settings";
 import type { LatLon } from "../mars/geo";
 import type { PlannedRoute } from "../api/client";
 import { cargoKg, clampExtraKg } from "../domain/equipment";
@@ -287,6 +289,7 @@ export function planKey(
   waypoints: readonly Waypoint[],
   roundTrip: boolean,
   cargo: number,
+  params: RouteParams | undefined,
 ): string {
   return JSON.stringify([
     siteId,
@@ -294,6 +297,7 @@ export function planKey(
     roundTrip,
     cargo,
     waypoints.map((w) => [w.lat, w.lon, w.dwellMin]),
+    params ?? null,
   ]);
 }
 
@@ -307,9 +311,21 @@ export function planKey(
  */
 export function useFreshRoute(): PlannedRoute | null {
   const siteId = useStore((s) => s.activeSiteId);
+  const params = useRouteParams();
   return usePlan((s) =>
     s.result !== null &&
-    s.resultKey === planKey(siteId, s.departAt, s.waypoints, s.roundTrip, cargoKg(s.kit, s.extraKg))
+    s.resultKey === planKey(siteId, s.departAt, s.waypoints, s.roundTrip, cargoKg(s.kit, s.extraKg), params)
       ? s.result : null,
   );
+}
+
+/**
+ * Los ajustes que viajan en el pedido: solo si el server publicó cuáles acepta
+ * (GET /api/route/params) y el usuario cambió alguno. Un server sin ese
+ * endpoint rechazaría el campo con 422.
+ */
+export function useRouteParams(): RouteParams | undefined {
+  const overrides = useSettings((s) => s.overrides);
+  const ready = useSettings((s) => s.schemaState === "ready");
+  return ready && countOverrides(overrides) > 0 ? overrides : undefined;
 }

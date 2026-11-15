@@ -1001,7 +1001,7 @@ export function MapView({ center, bbox, siteId }: Props) {
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
-      <div className="absolute right-3 bottom-3 flex flex-col items-end gap-1">
+      <div className="absolute right-3 bottom-8 flex flex-col items-end gap-1">
         <button
           type="button"
           aria-pressed={view3d && demReady}
@@ -1012,16 +1012,16 @@ export function MapView({ center, bbox, siteId }: Props) {
               ? "Relieve a escala real. Arrastrá con el botón derecho (o Ctrl + arrastrar) para girar e inclinar."
               : "El relieve 3D espera al pipeline (relief-dem en terrain.json)."
           }
-          className="min-h-11 min-w-16 rounded border-2 border-fg/70 bg-bg/90 px-3 text-sm font-bold text-fg shadow-lg hover:bg-panel disabled:cursor-not-allowed disabled:border-line disabled:text-muted aria-pressed:border-rust aria-pressed:bg-rust/20"
+          className="min-h-10 min-w-16 rounded-lg border border-line bg-panel/95 px-3 text-sm font-semibold text-fg shadow-lg backdrop-blur hover:border-muted disabled:cursor-not-allowed disabled:text-muted aria-pressed:border-rust aria-pressed:bg-rust aria-pressed:text-bg"
         >
-          {view3d && demReady ? "Ver en 2D" : "Ver en 3D"}
+          {view3d && demReady ? "✓ 3D" : "3D"}
         </button>
         {!demReady ? (
-          <span className="rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+          <span className="hidden rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted sm:inline">
             3D: esperando el pipeline
           </span>
         ) : view3d ? (
-          <span className="flex items-center gap-1.5 rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+          <span className="flex max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-end gap-1.5 rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
             relieve a escala real · ×{TERRAIN_TRUE_SCALE.toFixed(2)} por el radio
             <ProvenanceBadge
               source={{
