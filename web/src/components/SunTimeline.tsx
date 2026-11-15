@@ -154,7 +154,7 @@ export function SunTimeline({ siteId, lat, lon }: Props) {
   }, [playing, dayKey]);
 
   return (
-    <section aria-label="Deslizador de tiempo del sol" className="border-t border-line bg-panel/40 px-3 py-2">
+    <section data-edu="sun-timeline" aria-label="Deslizador de tiempo del sol" className="border-t border-line bg-panel/40 px-3 py-2">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
           Sol y sombra

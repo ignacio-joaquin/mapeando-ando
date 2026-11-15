@@ -92,13 +92,52 @@ export const MeasuredValueSchema = z.object({
 });
 
 /**
+ * GET /api/sites/{site}/conditions — PROPUESTA de contrato (docs/context.md §4).
+ * Última observación atmosférica del rover y alertas de clima espacial (DONKI).
+ * Mientras no haya paso del pipeline que las baje, cada valor viene con
+ * `value: null` y `when: null`: la franja dice que falta, nunca muestra ejemplos.
+ */
+export const CurrentConditionsObservationSchema = z.object({
+  id: z.string(),
+  /** Texto en español para la UI. */
+  label: z.string(),
+  value: MeasuredValueSchema,
+  /** Fecha y sol de la medición; null = todavía no hay medición. */
+  when: z
+    .object({
+      utc: z.string(),
+      sol: z.number(),
+      ltst: z.string(),
+    })
+    .nullable(),
+});
+
+export const CurrentConditionsAlertSchema = z.object({
+  severity: z.enum(["bajo", "moderado", "alto"]),
+  summary: z.string(),
+  when: z.string(),
+});
+
+export const CurrentConditionsSchema = z.object({
+  site: z.string(),
+  observations: z.array(CurrentConditionsObservationSchema),
+  alerts: z.array(CurrentConditionsAlertSchema),
+  /** `missing`: todavía no se bajan las alertas; `alerts: []` no quiere decir "sin alertas". */
+  alerts_status: z.enum(["ok", "missing", "error"]),
+  note: z.string().optional(),
+});
+
+export type CurrentConditionsData = z.infer<typeof CurrentConditionsSchema>;
+
+/**
  * /api/route — PROPUESTA de contrato (ticket del planificador). El modelo de
  * costo es decisión abierta del equipo (docs/context.md §5); esto fija solo
  * qué entra y qué sale. Documentado en docs/context.md §4.
  *
  * Request (POST, JSON):
- *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }] }
+ *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }], cargo_kg? }
  *   waypoints[0] = salida, el último = llegada, el resto = estaciones en orden.
+ *   cargo_kg = equipo encima además del traje (kg, 0 si falta); entra a Pandolf.
  */
 export interface RouteRequest {
   readonly site: string;
@@ -109,6 +148,7 @@ export interface RouteRequest {
     readonly task: string | null;
     readonly dwell_min: number;
   }[];
+  readonly cargo_kg?: number;
 }
 
 /**
@@ -543,6 +583,47 @@ export const CoverageSchema = z.object({
 });
 
 /**
+ * GET /api/sites/{site}/viewshed?lat=&lon= (api/viewshed.py): desde dónde hay
+ * línea de vista (contacto por radio) con un hábitat puesto en (lat, lon). La
+ * misma geometría que el límite "minutos seguidos sin contacto" del
+ * planificador. Lo dibuja la capa `habitat-contact`.
+ *
+ * `geojson: null` + `note` = no se pudo calcular (falta el DTM, hábitat fuera
+ * del DTM): no se dibuja nada, se avisa.
+ */
+export const ContactClassSchema = z.enum(["contact", "no_contact", "unknown"]);
+export const ViewshedSchema = z.object({
+  site: z.string(),
+  habitat: LatLonSchema,
+  note: z.string().nullable(),
+  radius_m: z.number().optional(),
+  cell_m: z.number().optional(),
+  fractions: z.record(ContactClassSchema, z.number()).optional(),
+  source: z
+    .object({
+      provenance: ProvenanceSchema,
+      mission: z.string().nullable(),
+      instrument: z.string().nullable(),
+      resolution: z.string().optional(),
+      source: z.string().optional(),
+      assumptions: z.array(z.string()).readonly().optional(),
+    })
+    .optional(),
+  geojson: z
+    .object({
+      type: z.literal("FeatureCollection"),
+      features: z.array(
+        z.object({
+          type: z.literal("Feature"),
+          properties: z.object({ class: ContactClassSchema }),
+          geometry: z.object({ type: z.literal("Polygon"), coordinates: z.array(RingSchema).min(1) }),
+        }),
+      ),
+    })
+    .nullable(),
+});
+
+/**
  * Sol y sombra por hora para el deslizador de tiempo. Los escribe
  * pipeline/shadow_tiles.py y nginx los sirve en /tiles/<sitio>/illumination/.
  * Las plantillas son relativas a /tiles/<sitio>/, como en terrain.json.
@@ -609,6 +690,8 @@ export type Place = z.infer<typeof PlaceSchema>;
 export type PlaceKind = z.infer<typeof PlaceKindSchema>;
 export type PlacesIndex = z.infer<typeof PlacesIndexSchema>;
 export type Coverage = z.infer<typeof CoverageSchema>;
+export type Viewshed = z.infer<typeof ViewshedSchema>;
+export type ContactClass = z.infer<typeof ContactClassSchema>;
 export type TileSet = z.infer<typeof TileSetSchema>;
 export type TerrainLayer = z.infer<typeof TerrainLayerSchema>;
 export type TerrainIndex = z.infer<typeof TerrainIndexSchema>;
