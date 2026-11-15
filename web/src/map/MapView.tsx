@@ -37,6 +37,28 @@ import {
   placesToGeoJSON,
 } from "./places";
 import { PlacePopup } from "../components/route/PlacePopup";
+import { CONTACT_COLOR, CONTACT_HATCH_IMAGE, CONTACT_LAYER_ID, useContact } from "../state/contact";
+
+/** Las tres capas de la zona de contacto: se prenden y apagan juntas. */
+const CONTACT_LAYERS = [CONTACT_LAYER_ID, `${CONTACT_LAYER_ID}-hatch`, `${CONTACT_LAYER_ID}-edge`] as const;
+
+/** Rayado diagonal de 8 px para "sin contacto", generado acá: no hay sprites en el estilo. */
+function hatchImage(hex: string): { width: number; height: number; data: Uint8Array } {
+  const size = 8;
+  const data = new Uint8Array(size * size * 4);
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if ((x + y) % size > 1) continue; // línea de 2 px a 45°
+      const k = (y * size + x) * 4;
+      data[k] = r ?? 0;
+      data[k + 1] = g ?? 0;
+      data[k + 2] = b ?? 0;
+      data[k + 3] = 255;
+    }
+  }
+  return { width: size, height: size, data };
+}
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -708,6 +730,70 @@ export function MapView({ center, bbox, siteId }: Props) {
     };
     whenReady(map, apply);
   }, [result, activeStep]);
+
+  // 5c. Contacto con el hábitat (id de contrato: habitat-contact). Zona con línea
+  //     de vista a la antena de A, de /api/sites/{site}/viewshed. Sin contacto va
+  //     rayado además de rojo: no se comunica solo por color. Debajo de la ruta.
+  const viewshed = useContact((s) => s.viewshed);
+  const contactVisible = useContact((s) => s.visible);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data: FeatureCollection = viewshed?.geojson ?? { type: "FeatureCollection", features: [] };
+      const visibility = contactVisible ? "visible" : "none";
+      const src = map.getSource(CONTACT_LAYER_ID);
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+        for (const id of CONTACT_LAYERS) map.setLayoutProperty(id, "visibility", visibility);
+        return;
+      }
+      if (!map.hasImage(CONTACT_HATCH_IMAGE)) map.addImage(CONTACT_HATCH_IMAGE, hatchImage(CONTACT_COLOR.no_contact));
+      map.addSource(CONTACT_LAYER_ID, { type: "geojson", data });
+      const before = ["coverage-outline", "route-casing"].find((id) => map.getLayer(id));
+      map.addLayer(
+        {
+          id: CONTACT_LAYER_ID,
+          type: "fill",
+          source: CONTACT_LAYER_ID,
+          layout: { visibility },
+          paint: {
+            "fill-color": [
+              "match",
+              ["get", "class"],
+              ...Object.entries(CONTACT_COLOR).flat(),
+              CONTACT_COLOR.unknown,
+            ] as unknown as ExpressionSpecification,
+            "fill-opacity": ["match", ["get", "class"], "contact", 0.16, "no_contact", 0.22, 0.1],
+          },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: `${CONTACT_LAYER_ID}-hatch`,
+          type: "fill",
+          source: CONTACT_LAYER_ID,
+          filter: ["==", ["get", "class"], "no_contact"],
+          layout: { visibility },
+          paint: { "fill-pattern": CONTACT_HATCH_IMAGE, "fill-opacity": 0.8 },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: `${CONTACT_LAYER_ID}-edge`,
+          type: "line",
+          source: CONTACT_LAYER_ID,
+          filter: ["==", ["get", "class"], "contact"],
+          layout: { visibility },
+          paint: { "line-color": CONTACT_COLOR.contact, "line-width": 1.2, "line-opacity": 0.9 },
+        },
+        before,
+      );
+    };
+    whenReady(map, apply);
+  }, [viewshed, contactVisible]);
 
   // 6. Pines de lugares (places.json), como en Google Maps. Los mismos lugares
   //    que el buscador; se filtran por tipo desde el panel de capas. Al
