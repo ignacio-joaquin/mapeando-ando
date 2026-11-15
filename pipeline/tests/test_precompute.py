@@ -335,6 +335,99 @@ def test_solo_tiles_curvas_parte_del_geojson_viejo(data_dir):
     assert not (out / ".work-contours").exists()
 
 
+OLD_GEOJSON = '{"type": "FeatureCollection", "features": []}'
+
+
+@needs_gdal
+def test_con_tiles_se_borra_el_geojson_viejo(data_dir):
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.geojson").write_text(OLD_GEOJSON)  # de una corrida de antes de los tiles
+    assert precompute.main(["--site", "jezero"]) == 0
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["file"] == "contours.gpkg" and layer["tiles"]["status"] == "ok"
+    assert not (out / "contours.geojson").exists()
+
+
+@needs_gdal
+def test_si_falla_el_teselado_queda_el_geojson_viejo(data_dir, monkeypatch):
+    """Degradar, no romper: sin tiles, el mapa sigue con las curvas de la corrida anterior."""
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.geojson").write_text(OLD_GEOJSON)
+
+    def falla(*a, **k):
+        raise RuntimeError("ogr2ogr MVT explotó")
+
+    monkeypatch.setattr(tiles, "vector_a_tiles", falla)
+    assert precompute.main(["--site", "jezero"]) == 1
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["status"] == "ok" and layer["tiles"]["status"] == "error"
+    assert layer["file"] == "contours.geojson"
+    assert layer["assumptions"] == precompute.CONTOUR_GEOJSON_ASSUMPTIONS
+    assert (out / "contours.geojson").read_text() == OLD_GEOJSON
+    assert (out / "contours.gpkg").exists()  # el próximo --solo-tiles-curvas parte de acá
+
+
+@needs_gdal
+def test_sin_tiles_queda_el_geojson_viejo(data_dir):
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.geojson").write_text(OLD_GEOJSON)
+    assert precompute.main(["--site", "jezero", "--no-tiles"]) == 0
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["file"] == "contours.geojson" and "tiles" not in layer
+    assert (out / "contours.geojson").exists()
+
+
+def test_solo_tiles_curvas_que_falla_no_apaga_el_geojson(data_dir, monkeypatch):
+    """Sin GDAL: el teselado se simula. Si falla, `file` sigue en el GeoJSON que andaba."""
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.gpkg").write_bytes(b"")
+    (out / "contours.geojson").write_text(OLD_GEOJSON)
+    viejo = {"file": "contours.geojson", "status": "ok", "params": {"interval_m": 10}, "assumptions": []}
+    (out / "terrain.json").write_text(json.dumps({"site": "jezero", "generated_at": "2026-11-01T00:00:00Z",
+                                                  "layers": {"relief-contours": dict(viejo)}}))
+    monkeypatch.setattr(tiles, "faltan_herramientas", lambda: [])
+
+    def falla(out):
+        raise RuntimeError("ogr2ogr MVT explotó")
+
+    monkeypatch.setattr(precompute, "contour_tiles", falla)
+    assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 1
+    index = json.loads((out / "terrain.json").read_text())
+    layer = index["layers"]["relief-contours"]
+    assert layer["tiles"]["status"] == "error" and "explotó" in layer["tiles"]["error"]
+    assert {k: layer[k] for k in viejo} == viejo  # file, params y assumptions, sin tocar
+    assert index["generated_at"] != "2026-11-01T00:00:00Z"  # el mapa ve que el índice cambió
+    assert (out / "contours.geojson").exists()
+    assert not (out / ".work-contours").exists()
+
+
+def test_solo_tiles_curvas_que_anda_cambia_a_tiles(data_dir, monkeypatch):
+    out = data_dir / "output" / "jezero"
+    out.mkdir(parents=True)
+    (out / "contours.gpkg").write_bytes(b"")
+    (out / "terrain.json").write_text(json.dumps({"site": "jezero", "generated_at": "2026-11-01T00:00:00Z",
+                                                  "layers": {"relief-contours": {"file": "contours.geojson",
+                                                                                 "status": "ok"}}}))
+    monkeypatch.setattr(tiles, "faltan_herramientas", lambda: [])
+    info = {"status": "ok", "template": "contours/{z}/{x}/{y}.pbf", "minzoom": 10, "maxzoom": 14,
+            "bounds": [0, 0, 1, 1], "count": 1, "layer": "contours"}
+    monkeypatch.setattr(precompute, "contour_tiles", lambda out: dict(info))
+    assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 0
+    layer = json.loads((out / "terrain.json").read_text())["layers"]["relief-contours"]
+    assert layer["file"] == "contours.gpkg" and layer["tiles"] == info
+    assert layer["assumptions"] == precompute.CONTOUR_ASSUMPTIONS
+
+
 def test_solo_tiles_curvas_sin_corrida_previa(data_dir):
     assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 2
 

@@ -343,6 +343,9 @@ CONTOUR_PARAMS = {"interval_m": CONTOUR_INTERVAL_M, "major_m": CONTOUR_MAJOR_M, 
                   "simplify_m": CONTOUR_SIMPLIFY_M}
 CONTOUR_ASSUMPTIONS = [f"De lejos (zoom < {CONTOUR_MINOR_MIN_ZOOM}) solo se dibujan las curvas "
                        f"cada {CONTOUR_MAJOR_M} m."]
+# Si los tiles no salen y queda el contours.geojson de una corrida anterior, el mapa usa ese.
+CONTOUR_GEOJSON_ASSUMPTIONS = ["Curvas de una corrida anterior, en un GeoJSON entero: los tiles de esta "
+                               "corrida no salieron. Mismo DTM, todas las curvas a cualquier zoom."]
 
 
 def split_contours(src, dst, srs_flag="-t_srs"):
@@ -367,7 +370,8 @@ def contour_tiles(out):
 def retile_contours(out):
     """Solo los tiles de las curvas, sobre una corrida que ya está hecha: minutos en vez de rehacer
     pendiente y sombreado. Parte de contours.gpkg o, si es de antes de los tiles, de
-    contours.geojson (que se deja: el frontend lo usa mientras no haya tiles).
+    contours.geojson. El GeoJSON se deja: si el teselado falla, `file` sigue apuntándolo y el
+    mapa lo dibuja como antes; la próxima corrida completa con tiles lo borra.
 
     Devuelve 0 si anduvo, 1 si falló y 2 si no hay una corrida previa.
     """
@@ -400,7 +404,12 @@ def retile_contours(out):
             log(f"Falló el teselado de relief-contours: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
             ok = False
-        layer.update(file="contours.gpkg", params=CONTOUR_PARAMS, assumptions=CONTOUR_ASSUMPTIONS)
+        if ok:
+            # Recién con los tiles listos el mapa deja el GeoJSON (si no, apagaría curvas que andaban).
+            layer.update(file="contours.gpkg", params=CONTOUR_PARAMS, assumptions=CONTOUR_ASSUMPTIONS)
+        # El mapa arma la clave de cada fuente con generated_at: si no cambia, una pestaña que vuelve
+        # a leer el índice sigue con la fuente GeoJSON aunque ya haya tiles.
+        index["generated_at"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
         publish(work / "terrain.json", index_path)
         if ok:
@@ -545,8 +554,8 @@ def main(argv=None):
              str(work / "contours_simple.gpkg"), str(work / "contours_raw.gpkg")])
         split_contours(work / "contours_simple.gpkg", work / "contours.gpkg")
         publish(work / "contours.gpkg", out / "contours.gpkg")
-        # El GeoJSON de antes de los tiles: nadie lo pide más y en Gale pesa cientos de MB.
-        (out / "contours.geojson").unlink(missing_ok=True)
+        # El contours.geojson de una corrida anterior NO se borra acá: si después falla el
+        # teselado, es lo único que le queda al mapa. Se borra en el paso 8, con los tiles listos.
 
     layers["relief-contours"] = {
         "file": "contours.gpkg", "unit": "m", "provenance": "DERIVED", "mission": entry.get("mission"),
@@ -699,6 +708,15 @@ def main(argv=None):
             failed = True
             log(f"Falló el teselado de relief-contours: {e}")
             contours["tiles"] = {"status": "error", "error": str(e)[:400]}
+    # `file` le dice al mapa qué dibujar (docs/context.md §4): con tiles, contours.gpkg; sin
+    # tiles (fallaron o --no-tiles), el GeoJSON de una corrida anterior si está. Degradar, no
+    # romper: el GeoJSON viejo se borra solo cuando ya hay tiles, y después de publicar el índice.
+    drop_old_geojson = False
+    if contours.get("status") == "ok":
+        if contours.get("tiles", {}).get("status") == "ok":
+            drop_old_geojson = (out / "contours.geojson").exists()
+        elif (out / "contours.geojson").exists():
+            contours.update(file="contours.geojson", assumptions=CONTOUR_GEOJSON_ASSUMPTIONS)
 
     # 9. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
@@ -730,6 +748,9 @@ def main(argv=None):
 
     (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
     publish(work / "terrain.json", out / "terrain.json")
+    if drop_old_geojson:
+        # En Gale pesa cientos de MB y ya nadie lo pide: el índice publicado dice contours.gpkg.
+        (out / "contours.geojson").unlink(missing_ok=True)
     shutil.rmtree(work, ignore_errors=True)
 
     log("Listo. Archivos generados:")
