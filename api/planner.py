@@ -877,7 +877,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         light_status = "missing"
         light_source = "missing"
     else:
-        partial_shadow = any(plan.planned and plan.shadow_fraction is None for plan in legs_plan)
+        # Con pila, el atardecer siempre se evalúa; la sombra de la ruta, solo en los tramos
+        # que la midieron. Un tramo en línea recta (sin A*) o sin dato deja la luz a medias.
+        partial_shadow = any(plan.shadow_fraction is None for plan in legs_plan)
         light_status = "partial" if partial_shadow else "complete"
         light_source = "reused" if stack.reuse is not None else "exact"
     out = {

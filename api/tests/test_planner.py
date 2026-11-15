@@ -77,6 +77,17 @@ class TestSinDatos:
         assert body["data_quality"]["light_status"] == "complete"
         assert "no se evaluó el contacto con el hábitat" in body["verdict"]["summary"]
 
+    def test_pila_sin_pendiente_la_luz_queda_a_medias(self, client, site):
+        # Con la pila se evalúa el atardecer, pero sin pendiente no hay A* y la sombra
+        # no entra en la ruta: ni "complete" ni "missing".
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        daylight = next(lim for lim in body["verdict"]["limits"] if lim["id"] == "daylight")
+        assert daylight["status"] != "not_evaluated"
+        assert body["data_quality"]["light_status"] == "partial"
+        assert body["data_quality"]["light_evaluated"] is False
+        assert body["data_quality"]["light_source"] == "exact"
+
     def test_fecha_invalida_responde_422(self, client, site):
         body = request(band_time(13)) | {"depart_utc": "mañana a la tarde"}
         assert client.post("/api/route", json=body).status_code == 422
@@ -141,6 +152,14 @@ class TestTerreno:
         assert body["data_quality"]["terrain_status"] == "partial"
         assert body["data_quality"]["terrain_evaluated"] is False
         assert body["data_quality"]["terrain_source"] == "processed"
+
+    def test_tramo_fuera_del_dtm_deja_la_luz_a_medias(self, client, site):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13), [A, latlon(ROW, 120), latlon(ROW, N + 50)])).json()
+        assert [leg["class"] for leg in body["legs"]] == ["ok", "unknown"]
+        assert body["legs"][1]["shadow_fraction"]["value"] is None
+        assert body["data_quality"]["light_status"] == "partial"
 
     def test_terreno_procesado_y_luz_exacta(self, client, site):
         write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
