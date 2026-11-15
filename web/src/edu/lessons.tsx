@@ -108,13 +108,16 @@ export interface TaskStep extends StepBase {
 export interface PredictStep extends StepBase {
   readonly kind: "predict";
   readonly question: string;
-  readonly reveal: (ctx: LessonContext, prediction: Prediction) => ReactNode;
+  /** `route` es la ruta contra la que predijo, congelada: si después la cambia, la corrección no cambia. */
+  readonly reveal: (route: RouteResponse, prediction: Prediction) => ReactNode;
 }
 
 export type LessonStep = InfoStep | TaskStep | PredictStep;
 
 export interface Lesson {
   readonly id: string;
+  /** Al salir, se queda la ruta que armó el alumno en vez de volver la de antes. */
+  readonly keepsRoute?: boolean;
   /** Emoji decorativo de la tarjeta (va con aria-hidden). */
   readonly icon: string;
   readonly title: string;
@@ -181,8 +184,7 @@ function countProvenance(node: unknown, acc: Record<Provenance, number>): Record
   return acc;
 }
 
-function revealFactor(route: RouteResponse | null, prediction: Prediction): ReactNode {
-  if (!route) return <NeedRoute />;
+function revealFactor(route: RouteResponse, prediction: Prediction): ReactNode {
   const real = route.verdict.limiting_factor;
   if (!real) {
     return <P>El planificador no pudo nombrar un factor limitante: ningún límite se pudo evaluar del todo.</P>;
@@ -325,7 +327,8 @@ const pendiente: Lesson = {
       check: ({ route }) => {
         if (!route) return NO_ROUTE;
         const d = walkedVsStraight(route);
-        const steep = route.legs.some((l) => l.class === "caution" || l.class === "limit" || l.class === "blocked");
+        // Solo cuenta lo que de verdad aprieta: "con cuidado" (10–20°) lo tienen casi todas las rutas.
+        const steep = route.legs.some((l) => l.class === "limit" || l.class === "blocked");
         if (!d) return { done: steep, hint: steep ? null : "Esta ruta tiene tramos sin distancia: probá otro destino." };
         const extra = d.walked / d.straight - 1;
         if (extra >= 0.15 || steep) return { done: true, hint: null };
@@ -391,11 +394,11 @@ const reloj: Lesson = {
         <>
           <P>
             Un sol dura 24 h 39 min. Las sombras de los cráteres se mueven con el sol, y en la sombra hace
-            más frío y el traje trabaja más. Además, tenés que estar de vuelta antes de que oscurezca.
+            más frío. Además, tenés que estar de vuelta antes de que oscurezca.
           </P>
           <P>
-            Por eso el planificador mira a qué hora pasás por cada celda: no es un mapa fijo, es un mapa
-            que cambia mientras caminás.
+            Por eso el planificador mira a qué hora pasás por cada celda y, si puede, evita la sombra: no es
+            un mapa fijo, es un mapa que cambia mientras caminás.
           </P>
         </>
       ),
@@ -416,10 +419,12 @@ const reloj: Lesson = {
       check: (ctx) => {
         if (!ctx.route) return NO_ROUTE;
         const daylight = limitOf(ctx.route, "daylight");
-        const same = sameGeometry(ctx.attempts);
+        // Solo intentos con la luz evaluada: si no, el cambio puede venir de que una
+        // hora tiene sombras calculadas y la otra no, que no es el efecto de la hora.
+        const same = sameGeometry(ctx.attempts).filter((a) => a.daylightEvaluated);
         const statuses = new Set(same.map((a) => a.status));
         if (statuses.size >= 2) return { done: true, hint: null };
-        if (daylight?.status === "not_evaluated") {
+        if (daylight?.status === "not_evaluated" || daylight?.complete === false) {
           return {
             done: false,
             blocked: true,
@@ -449,6 +454,7 @@ const reloj: Lesson = {
         if (!ctx.route) return <NeedRoute />;
         const origin = ctx.waypoints[0];
         const same = [...sameGeometry(ctx.attempts)].sort((a, b) => a.departMs - b.departMs);
+        const anyUnlit = same.some((a) => !a.daylightEvaluated);
         const daylight = limitOf(ctx.route, "daylight");
         const shadowMin = costMinutes(ctx.route, "shadow");
         return (
@@ -463,6 +469,12 @@ const reloj: Lesson = {
                   ] as const,
               )}
             />
+            {anyUnlit ? (
+              <Caveat>
+                Algunas de estas horas no tenían sombras calculadas: ahí el veredicto no sabe cuándo atardece,
+                y no cuentan para la consigna.
+              </Caveat>
+            ) : null}
             <P>Y en la ruta que tenés ahora:</P>
             <Facts
               rows={[
@@ -677,8 +689,8 @@ const dosis: Lesson = {
     },
     {
       kind: "info",
-      title: "Cuántas EVAs te entran",
-      say: "Con esta dosis, estas son las salidas que te entran en el presupuesto.",
+      title: "Cuánto juntaste",
+      say: "Esto es lo que juntaste en esta salida, comparado con el tope por salida.",
       camera: { kind: "route" }, lockZoom: true, ui: [EDU_TARGET.VERDICT],
       focus: [EDU_TARGET.BREAKDOWN],
       body: ({ route }) => {
@@ -693,15 +705,19 @@ const dosis: Lesson = {
             <Facts
               rows={[
                 ["Dosis de esta EVA", measure(d?.used, 3)],
-                ["Presupuesto por EVA", measure(d?.limit, 3)],
+                ["Tope por EVA", measure(d?.limit, 3)],
+                ["Usaste del tope", used !== null && limit ? `${num((used / limit) * 100, 1)} %` : "sin dato"],
                 ["Tasa (dosis ÷ duración)", rate === null ? "sin dato" : `${num(rate, 4)} ${d?.used.unit ?? ""}/h`],
-                ["EVAs así dentro del presupuesto", used && limit ? num(Math.floor(limit / used), 0) : "sin dato"],
               ]}
             />
             <P>
-              La dosis crece con el tiempo afuera, no con el lugar. Por eso no cambia la ruta: cambia
-              cuántas salidas te podés permitir.
+              La dosis crece con el tiempo afuera, no con el lugar. Por eso no cambia por dónde vas: cambia
+              cuánto te podés quedar.
             </P>
+            <Caveat>
+              El planificador mira una sola salida. En una misión real la dosis se suma salida tras salida, pero
+              ese total no lo calcula: no hay un tope de misión con fuente.
+            </Caveat>
             {d?.used.source ? <Caveat>Fuente de la tasa: {d.used.source}.</Caveat> : null}
             {d?.limit.provenance === "ASSUMED" ? (
               <Caveat>El presupuesto por EVA lo eligió el equipo y todavía no tiene fuente citable.</Caveat>
@@ -727,7 +743,7 @@ const robustez: Lesson = {
       body: () => (
         <P>
           Afuera las cosas se demoran. El planificador toma tu misma ruta y la recalcula en peores
-          condiciones: salir 30 min tarde, caminar un 20 % más lento, llevar un 10 % más de carga. No es
+          condiciones: salir más tarde, caminar más lento, llevar más carga. No es
           una probabilidad: cuenta en cuántos de esos escenarios seguís bien.
         </P>
       ),
@@ -741,7 +757,7 @@ const robustez: Lesson = {
       question: "Armá una ruta. Sin ver el veredicto: ¿qué es lo que más la limita?",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
       body: () => <P>El veredicto queda tapado hasta que elijas.</P>,
-      reveal: (ctx, p) => revealFactor(ctx.route, p),
+      reveal: revealFactor,
     },
     {
       kind: "task",
@@ -871,6 +887,7 @@ const incertezas: Lesson = {
 
 const mision: Lesson = {
   id: "mision",
+  keepsRoute: true,
   icon: "🚀",
   title: "Misión final",
   tagline: "Una EVA completa a un lugar real, con todo lo que aprendiste.",
@@ -892,6 +909,12 @@ const mision: Lesson = {
       check: ({ places, waypoints, route }) => {
         if (!places || places.places.length === 0) {
           return { done: false, blocked: true, hint: "Este sitio todavía no tiene lugares cargados (places.json)." };
+        }
+        if (waypoints.length === 0) {
+          return {
+            done: false,
+            hint: "Primero marcá tu base: un clic en un lugar vacío del mapa, o «Poner el hábitat acá» en la ficha de un pin.",
+          };
         }
         // Si el sitio todavía no tiene muestras ni objetivos, vale cualquier lugar con nombre.
         const science = places.places.some((p) => p.kind === "sample" || p.kind === "target");
@@ -919,7 +942,7 @@ const mision: Lesson = {
       question: "¿Qué va a limitar esta EVA?",
       hide: [EDU_TARGET.VERDICT, EDU_TARGET.BREAKDOWN],
       body: () => null,
-      reveal: (ctx, p) => revealFactor(ctx.route, p),
+      reveal: revealFactor,
     },
     {
       kind: "task",
@@ -932,6 +955,20 @@ const mision: Lesson = {
       check: ({ route }) => {
         if (!route) return NO_ROUTE;
         const v = route.verdict;
+        // Un límite que no se pudo evaluar del todo fuerza CAUTION (api/safety.py): con
+        // esos datos el GO es imposible y la consigna no se puede cumplir.
+        const incomplete = (v.limits ?? []).filter(
+          (l) => l.status !== "undefined" && (l.status === "not_evaluated" || !l.complete),
+        );
+        if (v.status === "CAUTION" && incomplete.length > 0) {
+          return {
+            done: false,
+            blocked: true,
+            hint: `Con los datos de hoy esta ruta no puede dar GO: no se pudo evaluar del todo ${incomplete
+              .map((l) => l.label.toLowerCase())
+              .join(", ")}. Probá otra hora o fecha.`,
+          };
+        }
         if (v.status !== "GO") {
           return { done: false, hint: `Está en ${v.status === "NO_GO" ? "NO-GO" : "CAUTION"}${v.limiting_factor ? `; limita ${FACTOR_LABEL[v.limiting_factor].toLowerCase()}` : ""}.` };
         }

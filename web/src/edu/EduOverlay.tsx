@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { FACTOR_LABEL } from "../components/route/VerdictCard";
-import { useEdu, type Prediction } from "../state/edu";
+import { useEdu, type Prediction, type PredictionRecord } from "../state/edu";
 import { lessonById, LESSONS, PREDICTABLE, setupAt, type Lesson, type LessonStep } from "./lessons";
 import {
   useLessonContext,
@@ -90,7 +90,11 @@ function LessonPicker() {
             </h2>
             <p className="mt-1 text-sm leading-relaxed text-fg">
               Aprendé a planear una salida a la superficie de Marte. En cada misión usás el planificador
-              real, con datos de la NASA: nada de lo que vas a ver está inventado.
+              real, con datos de la NASA, y cada número te dice de dónde sale: lo medido, lo calculado y lo
+              que supuso el equipo.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Tu travesía queda guardada: cuando salgas del entrenamiento, vuelve.
             </p>
           </div>
           <button
@@ -172,7 +176,7 @@ function LessonCoach({ lesson }: { readonly lesson: Lesson }) {
   const { ctx, example, loading } = useLessonContext();
   const [minimized, setMinimized] = useState(false);
 
-  usePlanSandbox();
+  usePlanSandbox(lesson.keepsRoute === true);
   useRecordAttempts();
   useStage(step, setup, step.kind === "predict" && prediction !== null);
   useStepLayers(setup);
@@ -183,7 +187,10 @@ function LessonCoach({ lesson }: { readonly lesson: Lesson }) {
   useEffect(() => setMinimized(false), [index]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMinimized((m) => !m);
+      // Esc en un campo (el buscador cierra sus sugerencias con Esc) no es para la tarjeta.
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (e.key !== "Escape" || e.defaultPrevented || target?.closest("input, textarea, select, [contenteditable]")) return;
+      setMinimized((m) => !m);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -272,7 +279,7 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
   const canAdvance =
     step.kind === "info" ||
     (step.kind === "task" && check?.done === true && !example) ||
-    (step.kind === "predict" && prediction !== null && ctx.route !== null);
+    (step.kind === "predict" && prediction !== null);
 
   return (
     <section
@@ -358,9 +365,12 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
           <PredictBlock
             question={step.question}
             prediction={prediction}
-            onPredict={predict}
+            onPredict={(choice) => {
+              // Se corrige contra la ruta de este momento, congelada.
+              if (ctx.route) predict(choice, ctx.route);
+            }}
             hasRoute={ctx.route !== null}
-            reveal={prediction !== null ? step.reveal(ctx, prediction) : null}
+            reveal={prediction !== null ? step.reveal(prediction.route, prediction.choice) : null}
           />
         ) : null}
 
@@ -456,7 +466,7 @@ function Banner({ tone, children }: { readonly tone: "warn"; readonly children: 
 
 interface PredictProps {
   readonly question: string;
-  readonly prediction: Prediction | null;
+  readonly prediction: PredictionRecord | null;
   readonly onPredict: (p: Prediction) => void;
   readonly hasRoute: boolean;
   readonly reveal: ReactNode;
@@ -520,9 +530,9 @@ function Spotlight({ rect }: { readonly rect: DOMRect | null }) {
 function useAnchorRect(anchor: string): DOMRect | null {
   const [rect, setRect] = useState<DOMRect | null>(null);
   useEffect(() => {
-    let raf = 0;
     let last = "";
-    // Por cuadro: los paneles cambian de tamaño, el mapa vuela, la página scrollea.
+    // Cada 100 ms alcanza para seguir paneles que aparecen o cambian de tamaño,
+    // sin consultar el DOM en cada cuadro mientras el mapa vuela.
     const tick = () => {
       const r = document.querySelector(`[data-edu="${anchor}"]`)?.getBoundingClientRect();
       const visible = r && r.width > 0 && r.height > 0;
@@ -531,10 +541,14 @@ function useAnchorRect(anchor: string): DOMRect | null {
         last = key;
         setRect(visible ? r : null);
       }
-      raf = requestAnimationFrame(tick);
     };
     tick();
-    return () => cancelAnimationFrame(raf);
+    const id = window.setInterval(tick, 100);
+    window.addEventListener("resize", tick);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("resize", tick);
+    };
   }, [anchor]);
   return rect;
 }

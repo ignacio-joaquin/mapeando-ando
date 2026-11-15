@@ -4,11 +4,14 @@ Un modo que enseña las dificultades de planificar una EVA en Marte **usando el 
 
 Funciona como un onboarding. El botón 🎓 del encabezado abre un selector de misiones a pantalla completa, y durante la misión una tarjeta flotante apunta a la pieza de la interfaz de la que habla. En los pasos de mirar se atenúa el resto de la pantalla; en los de hacer, no, para poder usar el mapa. La tarjeta se achica con ▾ o con Esc. Pensado para cualquier edad: cada paso tiene una frase corta y clara (`say`), y abajo, en "Más a fondo", el detalle con los números y la letra chica. El detalle viene abierto en los pasos de mirar y cerrado en los de hacer.
 
-Cada misión arranca con la travesía vacía, para que la consigna la cumpla lo que hace el alumno y no una ruta que ya estaba. Al salir, si armó una ruta se la queda; si no, vuelve la que tenía.
+Cada misión arranca con la travesía vacía y el clic del mapa en "sumar puntos" (el selector de modo está escondido durante la lección). Así la consigna la cumple lo que hace el alumno y no una ruta que ya estaba. Al salir vuelve la travesía que tenía antes, salvo en la misión final, que deja la ruta armada para imprimirla. Si cambió de sitio en el medio, no se devuelve nada: esos puntos eran de otro lugar.
 
 ## La regla
 
-**Una lección no trae números propios.** Todo número que muestra sale de la respuesta real (`web/src/edu/read.ts`), y las consignas se corrigen con predicados sobre esa respuesta (`status`, `limiting_factor`, `margin`, `robustness`), nunca contra un valor esperado escrito en la lección. Si el equipo cambia un límite en `api/safety.py`, las lecciones siguen andando y el texto cambia solo.
+**Una lección no trae números propios.** Todo número que muestra sale de la respuesta real (`web/src/edu/read.ts`), y las consignas se corrigen con predicados sobre esa respuesta (`status`, `limiting_factor`, `margin`, `robustness`), nunca contra un valor esperado escrito en la lección. Si el equipo cambia un límite en `api/safety.py`, las lecciones siguen andando y el texto cambia solo. Lo único escrito a mano son hechos generales (la duración de un sol, la gravedad de Marte), nunca un valor del modelo.
+
+- Una predicción se corrige contra la ruta del momento en que se hizo, congelada: cambiar la ruta después no cambia la corrección.
+- La misión final no pide un GO que los datos de hoy no permiten. Si un límite no se pudo evaluar del todo (por ejemplo, la luz sin pila de sombras), el veredicto queda en CAUTION por diseño (`api/safety.py`), y el paso lo dice y se puede saltear.
 
 - Con el planificador de ejemplo (sin backend) no se corrige nada: lo dice en pantalla.
 - Si los datos del server no dejan cumplir una consigna (falta la pila de sombras, el DTM, la dosis, los lugares), el paso lo dice y se puede saltear, pero **la lección no queda como hecha**. Nunca se finge el resultado.
@@ -18,11 +21,11 @@ Cada misión arranca con la travesía vacía, para que la consigna la cumpla lo 
 | Id | Dificultad | Lo que lee de la respuesta | Consigna |
 |---|---|---|---|
 | `datos` | Desconfiá de un número sin fuente | `provenance` de todos los valores, tramos `unknown`, límites `ASSUMED` | Armar cualquier ruta |
-| `pendiente` | No se puede caminar por cualquier lado | `legs[].distance`, `max_slope`, límite `terrain`, costo `slope` | Desvío ≥ 15 % sobre la línea recta, o un tramo `caution`/`limit`/`blocked` |
-| `reloj` | El mapa cambia con la hora (4D) | límite `daylight`, costo `shadow` | Mismos puntos, dos horas de salida con veredictos distintos |
+| `pendiente` | No se puede caminar por cualquier lado | `legs[].distance`, `max_slope`, límite `terrain`, costo `slope` | Desvío ≥ 15 % sobre la línea recta, o un tramo `limit`/`blocked` (`caution` no cuenta: lo tienen casi todas las rutas) |
+| `reloj` | El mapa cambia con la hora (4D) | límite `daylight`, costo `shadow` | Mismos puntos, dos horas de salida con veredictos distintos, **las dos con la luz evaluada**: si una hora tiene sombras calculadas y la otra no, el cambio es de cobertura de datos y no cuenta |
 | `consumibles` | El aire y la batería se acaban | límites `o2`, `battery` | Margen de O₂ o batería < 50 % |
 | `contacto` | Perder de vista el hábitat | límite `contact`, costo `contact` | Al menos un rato sin línea de vista |
-| `dosis` | La radiación se acumula | límite `dose` | Dosis evaluada; muestra cuántas EVAs así entran en el presupuesto |
+| `dosis` | La radiación se acumula | límite `dose` | Dosis evaluada; muestra qué parte del tope por EVA usaste. No calcula un total de misión: no hay tope de misión con fuente |
 | `robustez` | Los planes fallan | `robustness.scenarios` | Predecir el factor limitante; después no NO-GO y todos los escenarios evaluables aguantan |
 | `incertezas` | Lo que no sabemos | escenarios `not_evaluated`, factores de costo inactivos, límites sin evaluar o `ASSUMED` | Armar cualquier ruta |
 | `mision` | Misión final | todo | Destino = lugar de `places.json` (muestra u objetivo si el sitio los tiene), predecir, dejarla GO y robusta |

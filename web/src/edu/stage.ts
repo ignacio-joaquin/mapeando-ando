@@ -38,6 +38,7 @@ export function useRecordAttempts() {
       limiting: v.limiting_factor,
       passed: v.robustness?.passed ?? null,
       evaluated: v.robustness?.evaluated ?? null,
+      daylightEvaluated: v.limits?.some((l) => l.id === "daylight" && l.status !== "not_evaluated" && l.complete) ?? false,
     };
     useEdu.getState().record(attempt);
   }, [fresh, siteId]);
@@ -143,18 +144,36 @@ export function useMissingLayers(setup: StepSetup): readonly string[] {
 
 /**
  * Cada misión arranca con la travesía vacía: la consigna la cumple lo que hace
- * el alumno, no una ruta que ya estaba. Al salir, si armó una ruta se la
- * queda; si no, vuelve la que tenía antes de empezar.
+ * el alumno, no una ruta que ya estaba. Al salir vuelve la travesía que tenía:
+ * lo que se hace en el entrenamiento no la pisa. La misión final (`keepRoute`)
+ * deja la ruta armada, para imprimirla o compartirla.
  */
-export function usePlanSandbox() {
+export function usePlanSandbox(keepRoute: boolean) {
   useEffect(() => {
     const before = usePlan.getState();
-    const saved = { waypoints: before.waypoints, departAt: before.departAt };
+    const saved = {
+      siteId: before.siteId,
+      waypoints: before.waypoints,
+      departAt: before.departAt,
+      clickMode: before.clickMode,
+    };
     before.clear();
+    // El selector de modo se esconde en la lección: si quedó en "inspeccionar",
+    // un clic en el mapa no sumaría puntos y el alumno no tendría cómo salir.
+    before.setClickMode("add");
     return () => {
       const now = usePlan.getState();
-      if (now.waypoints.length >= 2) return;
-      usePlan.setState({ waypoints: saved.waypoints, departAt: saved.departAt, result: null, resultKey: null });
+      now.setClickMode(saved.clickMode);
+      if (keepRoute && now.waypoints.length >= 2) return;
+      // Si cambió de sitio, los puntos guardados son de otro lugar: no se devuelven.
+      if (now.siteId !== saved.siteId) return;
+      usePlan.setState({
+        waypoints: saved.waypoints,
+        departAt: saved.departAt,
+        result: null,
+        resultKey: null,
+        notice: null,
+      });
     };
-  }, []);
+  }, [keepRoute]);
 }
