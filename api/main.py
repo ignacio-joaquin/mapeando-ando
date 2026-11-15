@@ -2,12 +2,14 @@
 
 Expone el estado del servidor, el inventario de datos por sitio, la point query,
 la zona con contacto al hábitat (/api/sites/{site}/viewshed),
+las condiciones actuales (/api/sites/{site}/conditions),
 /api/route (planificador 4D, api/planner.py), /api/route/consumables (consumibles
 del traje sobre una ruta ya armada) y /api/illumination/window (sol/sombra precomputados).
 """
 import json
 import math
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -73,70 +75,68 @@ def site(site_id: str):
     return m["sites"][site_id]
 
 
-def _fallback_conditions(site_id: str) -> dict:
-    site = (site_id or "jezero").lower()
-    if site == "gale":
-        obs = [
-            {"label": "temperature", "value": {"value": -7.5, "unit": "°C", "provenance": "OBSERVED",
-                                               "mission": "NASA", "instrument": "REMS",
-                                               "resolution": "última observación del instrumento",
-                                               "source": "REMS / MEDA (última medición del sitio)"},
-             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 4055, "ltst": "13:18 LTST"}},
-            {"label": "pressure", "value": {"value": 861.2, "unit": "Pa", "provenance": "OBSERVED",
-                                              "mission": "NASA", "instrument": "REMS",
-                                              "resolution": "última observación del instrumento",
-                                              "source": "REMS / MEDA (última medición del sitio)"},
-             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 4055, "ltst": "13:18 LTST"}},
-            {"label": "dust_opacity", "value": {"value": 0.61, "unit": "τ", "provenance": "OBSERVED",
-                                                  "mission": "NASA", "instrument": "REMS",
-                                                  "resolution": "última observación del instrumento",
-                                                  "source": "REMS / MEDA (última medición del sitio)"},
-             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 4055, "ltst": "13:18 LTST"}},
-        ]
-        alerts = [
-            {"severity": "moderado", "summary": "Pulso de plasma en tránsito hacia Marte, sin impacto directo aún.",
-             "when": "2026-11-15T12:05Z"},
-            {"severity": "bajo", "summary": "Clima espacial estable; sin alertas de tormenta intensa.",
-             "when": "2026-11-15T09:40Z"},
-        ]
-    else:
-        obs = [
-            {"label": "temperature", "value": {"value": -19.2, "unit": "°C", "provenance": "OBSERVED",
-                                               "mission": "NASA", "instrument": "MEDA",
-                                               "resolution": "última observación del instrumento",
-                                               "source": "MEDA / REMS (última medición del sitio)"},
-             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 1184, "ltst": "11:42 LTST"}},
-            {"label": "pressure", "value": {"value": 799.4, "unit": "Pa", "provenance": "OBSERVED",
-                                              "mission": "NASA", "instrument": "REMS",
-                                              "resolution": "última observación del instrumento",
-                                              "source": "REMS / MEDA (última medición del sitio)"},
-             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 1184, "ltst": "11:42 LTST"}},
-            {"label": "dust_opacity", "value": {"value": 0.49, "unit": "τ", "provenance": "OBSERVED",
-                                                  "mission": "NASA", "instrument": "MEDA",
-                                                  "resolution": "última observación del instrumento",
-                                                  "source": "MEDA / REMS (última medición del sitio)"},
-             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 1184, "ltst": "11:42 LTST"}},
-        ]
-        alerts = [
-            {"severity": "bajo", "summary": "CME con impacto en Marte no confirmado para este sol.",
-             "when": "2026-11-15T12:00Z"},
-            {"severity": "moderado", "summary": "Ráfaga solar media: vigilancia de dosis y comunicaciones.",
-             "when": "2026-11-15T09:30Z"},
-        ]
-    return {
-        "site": site_id,
-        "observations": obs,
-        "alerts": alerts,
-        "note": "Sin datos MEDA/REMS o DONKI todavía descargados para este sitio; se muestran valores de referencia del briefing.",
-    }
+# ---------------------------------------------- /api/sites/{site}/conditions
+
+# Qué instrumento mide cada condición en cada rover. Sirve para decir de dónde
+# va a salir el dato aunque todavía falte; no es un valor.
+_CONDITION_SOURCES = {
+    "Perseverance": {"mission": "Mars 2020", "temperature": "MEDA", "pressure": "MEDA",
+                     "dust_opacity": "MEDA RDS"},
+    "Curiosity": {"mission": "MSL", "temperature": "REMS", "pressure": "REMS",
+                  "dust_opacity": "Mastcam"},
+}
+
+_CONDITIONS = (
+    ("temperature", "Temperatura del aire", "°C"),
+    ("pressure", "Presión", "Pa"),
+    ("dust_opacity", "Opacidad de polvo (τ)", None),
+)
+
+
+def _site_config(site_id: str) -> Optional[dict]:
+    """sites/<id>.json del repo, o None si no es un sitio. Solo lee."""
+    if not re.fullmatch(r"[a-z0-9_-]+", site_id) or site_id == "common":
+        return None
+    p = REPO_DIR / "sites" / f"{site_id}.json"
+    if not p.is_file():
+        return None
+    return json.loads(p.read_text())
 
 
 @app.get("/api/sites/{site_id}/conditions")
 def site_conditions(site_id: str):
-    """Condiciones actuales: última observación atmosférica + alertas de clima espacial."""
-    if site_id not in {"jezero", "gale"}:
+    """Condiciones actuales: última observación atmosférica del rover y alertas
+    de clima espacial (DONKI).
+
+    Todavía no hay paso del pipeline que baje MEDA/REMS ni DONKI: cada valor
+    sale con `value: null` y `when: null`, y `note` dice qué falta. Nunca se
+    rellena con un valor de ejemplo.
+    """
+    cfg = _site_config(site_id)
+    if cfg is None:
         raise HTTPException(404, "Sitio desconocido")
-    return _fallback_conditions(site_id)
+    rover = str(cfg.get("rover") or "")
+    src = next((v for k, v in _CONDITION_SOURCES.items() if rover.startswith(k)), None)
+    observations = []
+    for cid, label, unit in _CONDITIONS:
+        observations.append({
+            "id": cid,
+            "label": label,
+            "value": {
+                "value": None, "unit": unit, "provenance": "OBSERVED",
+                "mission": src and src["mission"], "instrument": src and src[cid],
+                "source": "Falta el paso del pipeline que baje la última observación",
+            },
+            "when": None,
+        })
+    return {
+        "site": site_id,
+        "observations": observations,
+        "alerts": [],
+        "alerts_status": "missing",
+        "note": "Todavía no se bajan las observaciones del rover ni las alertas de DONKI: "
+                "los valores faltan y no se reemplazan por ejemplos.",
+    }
 
 
 # ---------------------------------------------------- /api/route/consumables

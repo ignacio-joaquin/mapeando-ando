@@ -86,6 +86,10 @@ async function get<T>(path: string, schema: ZodType<T>): Promise<T> {
   return parsed.data;
 }
 
+/**
+ * Condiciones actuales del sitio. null = no se pudieron leer (API caída, modo
+ * ejemplo o contrato roto): la franja lo dice y no inventa valores.
+ */
 export async function fetchCurrentConditions(siteId: string): Promise<CurrentConditionsData | null> {
   if (usingFixtures) return null;
   try {
