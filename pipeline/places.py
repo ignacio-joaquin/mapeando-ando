@@ -58,6 +58,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 
 MAX_SUGGESTED_IAU = 6   # chips de lugares sugeridos: no más que lo que entra en el panel
+MAX_SUGGESTED_TARGETS = 3   # chips de objetivos científicos ("donde el rover midió química")
 COORD_DECIMALS = 6      # 1e-6° ≈ 6 cm en Marte
 MARS_RADIUS_M = 3396190.0
 NEAR_TARGET_M = 10.0    # hasta acá, el objetivo está prácticamente donde estaba el rover
@@ -140,7 +141,7 @@ def iau_places(zip_path, bbox):
         if diameter:
             detail += f" · {diameter:.1f} km".replace(".", ",")
         out.append({
-            "id": f"iau-{r.get('link', '').rstrip('/').rsplit('/', 1)[-1] or r['name']}",
+            "id": f"iau-{r.get('link', '').rstrip('/').rsplit('/', 1)[-1] or normalize_id(r['name'])}",
             "name": r["name"],
             "kind": "iau",
             "detail": detail,
@@ -366,12 +367,13 @@ def supercam_rows(csv_path):
 
 
 def label_target_rows(csv_path):
-    """targets/<key>.csv de fetch_targets.py. PIXL va en el brazo: distancia ~0."""
+    """targets/<key>.csv de fetch_targets.py. PIXL va en el brazo: el objetivo queda al alcance
+    del brazo, pero la distancia no la publica nadie, así que no se inventa (None)."""
     with open(csv_path, newline="", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
             try:
                 yield {"name": r["target"], "type": None, "sol": int(r["sol"]),
-                       "rmc": (int(r["site"]), int(r["drive"])), "distance_m": 0.0}
+                       "rmc": (int(r["site"]), int(r["drive"])), "distance_m": None, "arm": True}
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -410,8 +412,9 @@ def science_targets(sources, bbox):
             name = (r["name"] or "").strip()
             if not is_target(name, r.get("type")):
                 continue
+            arm = bool(r.get("arm"))
             if positions is None:
-                lat, lon, dist, direct = r["lat"], r["lon"], 0.0, True
+                lat, lon, dist, direct = r["lat"], r["lon"], None, True
             else:
                 pos = positions.get(r["rmc"])
                 if pos is None:
@@ -421,7 +424,10 @@ def science_targets(sources, bbox):
                 dist, direct = r.get("distance_m"), False
             if not in_bbox(lat, lon, bbox):
                 continue
-            key = name.lower()
+            # Mismo id, mismo lugar: ChemCam escribe "John_Klein" y las etiquetas de PIXL "John Klein".
+            key = normalize_id(name)
+            if not key:
+                continue
             t = targets.setdefault(key, {"name": name, "instruments": {}, "sols": set(), "types": set(),
                                          "context": [], "best": None})
             t["instruments"].setdefault(instrument, mission)
@@ -431,11 +437,13 @@ def science_targets(sources, bbox):
             for c in r.get("context") or []:
                 if c not in t["context"]:
                     t["context"].append(c)
-            # Mejor posición: medida directa > observación cercana > observación lejana.
-            rank = (0 if direct else 1 if dist is not None and dist <= NEAR_TARGET_M else 2, dist or 0.0)
+            # Mejor posición: medida directa > observación cercana (o con el brazo) > lejana.
+            # Entre iguales gana la distancia conocida más chica; una desconocida va al final.
+            near = arm or (dist is not None and dist <= NEAR_TARGET_M)
+            rank = (0 if direct else 1 if near else 2, math.inf if dist is None else dist)
             if t["best"] is None or rank < t["best"]["rank"]:
                 t["best"] = {"rank": rank, "lat": lat, "lon": lon, "dist": dist, "direct": direct,
-                             "instrument": instrument, "mission": mission}
+                             "arm": arm, "instrument": instrument, "mission": mission}
 
     out = []
     for key, t in targets.items():
@@ -446,16 +454,19 @@ def science_targets(sources, bbox):
         parts = [kind_of, " + ".join(sorted(t["instruments"])), when] + t["context"][:2]
         if b["direct"]:
             assumption = "Posición del objetivo medida por el equipo del rover (tabla de APXS)."
+        elif b["arm"]:
+            assumption = (f"Posición del rover al medir. {b['instrument']} va en el brazo: el objetivo "
+                          "queda al alcance del brazo, no exactamente acá. La distancia no se publica.")
         elif b["rank"][0] == 1:
             assumption = (f"Posición del rover al medir, con el objetivo a {b['dist']:.1f} m: "
                           "el objetivo está a esa distancia, no exactamente acá.")
         else:
-            far = f"a {b['dist']:.0f} m" if b["dist"] else "a distancia desconocida"
+            far = f"a {b['dist']:.0f} m" if b["dist"] is not None else "a distancia desconocida"
             parts.insert(0, f"observado desde acá {far}")
             assumption = (f"Es el punto desde donde se observó, no el objetivo: el objetivo queda {far} "
                           "en una dirección que este índice no calcula.")
         out.append({
-            "id": f"target-{normalize_id(key)}",
+            "id": f"target-{key}",
             "name": t["name"].replace("_", " "),
             "kind": "target",
             "detail": " · ".join(parts),
@@ -466,6 +477,8 @@ def science_targets(sources, bbox):
             "source": "PDS Geosciences Node, listas de observaciones de los instrumentos"
                       + ("" if b["direct"] else "; posición del rover de MMGIS por site y drive"),
             "assumptions": [assumption],
+            # Para elegir sugeridos (mark_suggested los borra antes de escribir).
+            "_rank": b["rank"][0], "_instruments": len(t["instruments"]), "_sols": len(sols),
         })
     return out, unplaced
 
@@ -474,8 +487,9 @@ def mark_suggested(places):
     """Chips del panel, sin elegir a mano: salen de las fuentes.
 
     Los rasgos IAU más chicos (los más fáciles de ubicar a pie), la primera y la última
-    posición del rover, el primer tubo de cada depósito y el primer y el último aeródromo
-    del helicóptero.
+    posición del rover, el primer tubo de cada depósito, el primer y el último aeródromo
+    del helicóptero y los objetivos científicos mejor ubicados y más medidos (posición de
+    APXS o rover al lado, y más instrumentos y soles encima).
     """
     iau = sorted((p for p in places if p["kind"] == "iau"), key=lambda p: p["_size_km"])
     for p in iau[:MAX_SUGGESTED_IAU]:
@@ -499,6 +513,10 @@ def mark_suggested(places):
         last = max(heli, key=lambda p: p["_last_flight"])
         last["suggested"] = True
         last["detail"] = "Donde quedó Ingenuity · " + last["detail"]
+    targets = [p for p in places if p["kind"] == "target" and p["_rank"] <= 1]
+    targets.sort(key=lambda p: (-p["_instruments"], p["_rank"], -p["_sols"], p["id"]))
+    for p in targets[:MAX_SUGGESTED_TARGETS]:
+        p["suggested"] = True
     for p in places:
         p.setdefault("suggested", False)
         for k in [k for k in p if k.startswith("_")]:

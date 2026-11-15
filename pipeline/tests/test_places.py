@@ -79,6 +79,14 @@ def test_iau_inside_bbox_only_and_adopted(data_dir):
     assert not any(k.startswith("_") for k in belva)
 
 
+def test_iau_without_link_gets_url_safe_id(data_dir):
+    iau_zip(data_dir / "raw" / "common" / "MARS_nomenclature_center_pts.zip", [
+        {"name": "Señal Alta", "center_lat": "18.48", "center_lon": "77.38", "diameter": "0.5",
+         "type": "Crater, craters", "approval": "Adopted by IAU", "link": ""}])
+    (p,) = places.build(SITE, COMMON)["places"]
+    assert p["id"] == "iau-señal-alta"        # sin espacios ni comas: viaja en ?pts=
+
+
 def test_robbins_lon_0_360_and_bbox(data_dir):
     path = data_dir / "raw" / "jezero" / "landmarks" / "robbins_craters.geojson"
     path.parent.mkdir(parents=True)
@@ -282,4 +290,43 @@ def test_pixl_targets_from_fetch_targets(data_dir):
          "url": "https://example.invalid/inventory.csv"}]}
     got = [p for p in places.build(site, COMMON)["places"] if p["kind"] == "target"]
     assert [(p["name"], p["instrument"]) for p in got] == [("Naltsos", "PIXL")]
-    assert "objetivo a 0.0 m" in got[0]["assumptions"][0]
+    assert "0.0 m" not in got[0]["assumptions"][0]          # la distancia no la mide nadie
+    assert "al alcance del brazo" in got[0]["assumptions"][0]
+    assert "observado desde acá" not in got[0]["detail"]
+
+
+def test_same_target_with_underscore_or_space_is_one_place(data_dir):
+    # ChemCam escribe "John_Klein"; las etiquetas de PIXL, "John Klein": mismo id, un solo lugar.
+    gale_waypoints(data_dir)
+    write(data_dir / "raw" / "gale" / "msl_ccam_obs.csv", CCAM_HEAD + "182,CL5,1,a,b,John_Klein,s,No,2.5,2,0,Rock\n")
+    write(data_dir / "raw" / "gale" / "targets" / "pixl_inventory.csv",
+          "obs_id,sol,site,drive,target\n0200_1,200,2,0,John Klein\n")
+    site = {**GALE, "files": GALE["files"][:2] + [
+        {"key": "pixl_inventory", "instrument": "PIXL", "mission": "MSL",
+         "url": "https://example.invalid/inventory.csv"}]}
+    got = [p for p in places.build(site, COMMON)["places"] if p["kind"] == "target"]
+    assert [p["id"] for p in got] == ["target-john-klein"]
+    assert got[0]["instrument"] == "ChemCam + PIXL"
+
+
+def test_unknown_distance_does_not_beat_known_one():
+    obs = [{"name": "Roca", "type": None, "sol": 1, "rmc": (1, 1), "distance_m": None},
+           {"name": "Roca", "type": None, "sol": 2, "rmc": (2, 2), "distance_m": 15.0}]
+    positions = {(1, 1): (18.40, 77.30), (2, 2): (18.50, 77.40)}
+    (p,), _ = places.science_targets([("ChemCam", "MSL", obs, positions)], BBOX)
+    assert (p["lat"], p["lon"]) == (18.5, 77.4)
+    assert p["detail"].startswith("observado desde acá a 15 m")
+
+
+def test_suggested_targets_best_placed_and_most_measured(data_dir):
+    gale_waypoints(data_dir)
+    write(data_dir / "raw" / "gale" / "msl_ccam_obs.csv", CCAM_HEAD +
+          "19,CL5,1,a,b,Jake_Matijevic,s,No,3.1,2,0,Rock\n"
+          "20,CL5,1,a,b,Cerca,s,No,2.0,2,0,Rock\n"
+          "30,CL5,1,a,b,LD_Paniri,s,No,47.8,3,10,Distant outcrop\n")
+    write(data_dir / "raw" / "gale" / "apxs.csv",
+          "Sol,Target,Northing_m,Easting_m\n46,Jake_Matijevic,-272096.65,8147031.41\n")
+    got = {p["name"]: p for p in places.build(GALE, COMMON)["places"] if p["kind"] == "target"}
+    assert got["Jake Matijevic"]["suggested"] and got["Cerca"]["suggested"]
+    assert not got["LD Paniri"]["suggested"]                # observado de lejos: no es un destino claro
+    assert not any(k.startswith("_") for p in got.values() for k in p)
