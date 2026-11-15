@@ -10,7 +10,10 @@ export function normalize(text: string): string {
   return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
 }
 
-/** Nombres oficiales primero, después lugares con nombre de la misión, el rover y cráteres sin nombre. */
+/**
+ * Nombres oficiales primero, después lugares con nombre de la misión, señales de CRISM,
+ * aeródromos, y al final lo que no tiene nombre: cerros, hondonadas, el rover y cráteres.
+ */
 const KIND_ORDER: Record<PlaceKind, number> = { iau: 0, sample: 1, target: 2, orbital: 3, heli: 4, landmark: 5, depression: 6, rover: 7, crater: 8 };
 
 export const KIND_LABEL: Record<PlaceKind, string> = {
@@ -22,7 +25,7 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   crater: "cráter",
   landmark: "cerro (del DTM)",
   depression: "hondonada (del DTM)",
-  orbital: "observación desde órbita",
+  orbital: "señal mineral desde órbita (CRISM)",
 };
 
 function score(place: Place, q: string): number | null {

@@ -22,15 +22,16 @@ Junta las fuentes que ya baja el pipeline y escribe <out>/<sitio>/places.json:
     drive del rover): se cruza con los waypoints del rover. APXS sí publica la del objetivo.
     Un mismo nombre medido por varios instrumentos queda como un solo lugar.
 
-  - Hondonadas sin nombre (`kind: depression`): mínimos locales del mismo DTM, posibles cráteres
-    chicos. DERIVED; que sean cráteres de impacto no está verificado y se dice.
-  - Observaciones espectrales CRISM (`kind: orbital`, raw/<sitio>/crism/index.json de
-    fetch_science.sh): el centro de cada huella de mapa mineral de MRO.
   - Cerros y lomas sin nombre (`kind: landmark`), sacados del DTM de 1 m que ya escribe
     precompute.py (/data/output/<sitio>/dtm.tif): máximos locales que se elevan al menos
     LANDMARK_MIN_RELIEF_M sobre lo más bajo en un radio de LANDMARK_RADIUS_M. Cubren todo el
     sitio, no solo el camino del rover, y son lo que un astronauta ve en el horizonte.
     Son DERIVED: no tienen nombre oficial y no se les inventa uno.
+  - Hondonadas sin nombre (`kind: depression`): mínimos locales del mismo DTM, posibles cráteres
+    chicos. DERIVED; que sean cráteres de impacto no está verificado y se dice.
+  - Señales minerales de CRISM (`kind: orbital`, browse MTRDR de raw/<sitio>/crism/ que baja
+    fetch_science.sh): en cada observación, el punto donde un parámetro de resumen (D2300,
+    OLINDEX3…) es más fuerte, si pasa el umbral. Indicio desde órbita, no identificación mineral.
 
 Cada fuente se activa si el sitio declara ese `key` en sites/<sitio>.json: sumar un sitio con
 helicóptero o depósito no necesita código.
@@ -68,21 +69,40 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 
 MAX_SUGGESTED_IAU = 6   # chips de lugares sugeridos: no más que lo que entra en el panel
-MAX_SUGGESTED_TARGETS = 3
-MAX_SUGGESTED_LANDMARKS = 2  # los cerros de más relieve: referencias que se ven de lejos   # chips de objetivos científicos ("donde el rover midió química")
+MAX_SUGGESTED_TARGETS = 3   # chips de objetivos científicos ("donde el rover midió química")
+MAX_SUGGESTED_LANDMARKS = 2  # los cerros de más relieve: referencias que se ven de lejos
 COORD_DECIMALS = 6      # 1e-6° ≈ 6 cm en Marte
 MARS_RADIUS_M = 3396190.0
+MARS_LONGLAT = f"+proj=longlat +R={MARS_RADIUS_M:.0f} +no_defs"   # el marco de precompute.py
+DTM_GRID_M = 10.0               # el DTM de 1 m se lee una sola vez, promediado a esta grilla
+LANDMARK_GRID_M = 30.0          # los cerros se buscan sobre esa grilla promediada otra vez (3 × 3)
 LANDMARK_RADIUS_M = 500.0       # un cerro por cada círculo de este radio
 LANDMARK_MIN_RELIEF_M = 30.0    # se eleva al menos esto sobre lo más bajo del círculo
-LANDMARK_GRID_M = 10.0          # el DTM se lee remuestreado a esta grilla (alcanza para cerros)
-LANDMARK_MAX = 150
+LANDMARK_MAX = 150              # tope por sitio: los de más relieve primero
 DEPRESSION_RADIUS_M = 150.0     # hondonadas chicas: cráteres de ~100–300 m
-DEPRESSION_MIN_DEPTH_M = 8.0              # tope por sitio: los de más relieve primero
+DEPRESSION_MIN_DEPTH_M = 8.0    # el fondo queda al menos esto bajo lo más alto del círculo
 NEAR_TARGET_M = 10.0    # hasta acá, el objetivo está prácticamente donde estaba el rover
 
 # Objetivos que no son lugares: cielo, blancos de calibración, atmósfera, oscuros.
 NOT_A_PLACE = re.compile(r"sky|calib|cal target|\bscct\b|\bccct\b|\bcct\b|atmos|\bdark\b", re.I)
 NOT_A_PLACE_NAME = re.compile(r"^(atm|sky|scct|ccct|cct|cal|calibration|dark|test|none|unk|n/?a)\b", re.I)
+
+# Parámetros de resumen de CRISM que se buscan (Viviano-Beck et al. 2014): nombre corto, qué
+# indica y umbral para marcar un lugar. Los umbrales son nuestros y conservadores: la fuente no
+# publica uno, y el valor real (no solo "lo más fuerte") queda en el detail de cada lugar.
+CRISM_PARAMS = {
+    "D2300": ("Fe/Mg-filosilicatos", "filosilicatos de Fe/Mg", 0.01),
+    "D2200": ("Al-OH", "filosilicatos de Al o sílice hidratada", 0.008),
+    "BD1900R2": ("hidratación", "minerales hidratados", 0.02),
+    "OLINDEX3": ("olivino", "olivino", 0.15),
+    "MIN2295_2480": ("carbonato de Mg", "carbonatos de Mg", 0.01),
+}
+CRISM_BROWSE = re.compile(r"^([a-z]{3}[0-9a-f]{8})_[0-9a-f]{2}_br[a-z0-9]{3}j_mtr\d\.lbl$")
+CRISM_NODATA_DN = 255   # "data ignore value" del .hdr: fuera de la escena
+CRISM_MAX_DN = 254      # tope del estiramiento: un valor ahí puede ser más alto (se dice "≥")
+CRISM_WINDOW_PX = 5     # mediana de 5 × 5 px: un píxel suelto no alcanza para marcar un lugar
+CRISM_EDGE_PX = 10      # se ignora el borde de la escena, donde CRISM es ruidoso
+CRISM_DEDUP_M = 200.0   # dos observaciones que se pisan marcan el mismo lugar una sola vez
 
 
 def log(msg):
@@ -583,54 +603,70 @@ def find_peaks(z, cell_m, radius_m=LANDMARK_RADIUS_M, min_relief_m=LANDMARK_MIN_
     return out
 
 
-def _xy_to_lonlat(crs, x, y):
-    """Coordenadas del DTM a lon/lat planetocéntricas. Geográfico o equirectangular (USGS)."""
+def to_lonlat(crs, xs, ys):
+    """Coordenadas de un raster a lon/lat planetocéntricas, en el mismo marco que precompute.py."""
+    from rasterio.warp import transform
+
     if crs is None:
-        raise ValueError("el DTM no tiene CRS")
-    if crs.is_geographic:
-        return x, y
-    params = crs.to_dict()
-    if params.get("proj") != "eqc":
-        raise ValueError(f"proyección no soportada para los cerros: {params.get('proj')}")
-    radius = float(params.get("R") or params.get("a") or MARS_RADIUS_M)
-    lat_ts = math.radians(float(params.get("lat_ts", 0.0)))
-    lon0 = float(params.get("lon_0", 0.0))
-    lat = math.degrees((y - float(params.get("y_0", 0.0))) / radius)
-    lon = lon0 + math.degrees((x - float(params.get("x_0", 0.0))) / (radius * math.cos(lat_ts)))
-    return lon, lat
+        raise ValueError("el raster no tiene CRS")
+    lons, lats = transform(crs, MARS_LONGLAT, list(xs), list(ys))
+    return [norm_lon(v) for v in lons], list(lats)
 
 
-def landmark_places(dtm_path, bbox):
-    """Cerros y lomas sin nombre del DTM de 1 m, en todo el sitio."""
+def read_dtm_coarse(path, grid_m=DTM_GRID_M):
+    """El DTM de 1 m promediado a ~grid_m, leído una sola vez: (z con NaN, transform, cell_m, crs)."""
     import numpy as np
     import rasterio
     from rasterio.enums import Resampling
 
-    with rasterio.open(dtm_path) as ds:
+    with rasterio.open(path) as ds:
         px = abs(ds.transform.a)
         if ds.crs is not None and ds.crs.is_geographic:
             px = math.radians(px) * MARS_RADIUS_M
-        f = max(1, int(round(LANDMARK_GRID_M / px)))
+        f = max(1, int(round(grid_m / px)))
         h, w = max(1, ds.height // f), max(1, ds.width // f)
         z = ds.read(1, out_shape=(h, w), resampling=Resampling.average, masked=True)
         z = np.ma.filled(z.astype("float64"), np.nan)
         transform = ds.transform * ds.transform.scale(ds.width / w, ds.height / h)
-        cell_m = px * ds.width / w
-        crs = ds.crs
+        return z, transform, px * ds.width / w, ds.crs
 
-    out = []
-    for i, (r, c, relief) in enumerate(find_peaks(z, cell_m), start=1):
-        x, y = transform * (c + 0.5, r + 0.5)
-        lon, lat = _xy_to_lonlat(crs, x, y)
-        lon = norm_lon(lon)
-        if not in_bbox(lat, lon, bbox):
-            continue
-        out.append({
-            "id": f"cerro-{i}",
-            "name": f"Cerro sin nombre {i}",
+
+def coarsen(dtm, grid_m):
+    """Promedia bloques de la grilla hasta ~grid_m. Un bloque con algún hueco queda en hueco."""
+    z, transform, cell_m, crs = dtm
+    f = max(1, int(round(grid_m / cell_m)))
+    if f == 1:
+        return dtm
+    h, w = z.shape[0] // f, z.shape[1] // f
+    z = z[:h * f, :w * f].reshape(h, f, w, f).mean(axis=(1, 3))
+    return z, transform * transform.scale(f, f), cell_m * f, crs
+
+
+def _dtm_places(found, dtm, bbox, make):
+    """Celdas encontradas en el DTM a lugares dentro del bbox, numerados después de filtrar."""
+    _, transform, _, crs = dtm
+    if not found:
+        return []
+    xs, ys = zip(*(transform * (c + 0.5, r + 0.5) for r, c, _ in found))
+    lons, lats = to_lonlat(crs, xs, ys)
+    inside = [(lat, lon, v) for (_, _, v), lat, lon in zip(found, lats, lons) if in_bbox(lat, lon, bbox)]
+    return [make(n, round(lat, COORD_DECIMALS), round(lon, COORD_DECIMALS), v)
+            for n, (lat, lon, v) in enumerate(inside, start=1)]
+
+
+def landmark_places(dtm, bbox):
+    """Cerros y lomas sin nombre del DTM, en todo el sitio. `dtm` es lo que da read_dtm_coarse."""
+    grid = coarsen(dtm, LANDMARK_GRID_M)
+    cell_m = grid[2]
+
+    def make(n, lat, lon, relief):
+        return {
+            # El id va por posición, no por orden: otra corrida no lo cambia de cerro.
+            "id": f"landmark-{lat:.4f}-{lon:.4f}",
+            "name": f"Cerro sin nombre {n}",
             "kind": "landmark",
             "detail": f"Se eleva {relief:.0f} m sobre su entorno (radio {LANDMARK_RADIUS_M:.0f} m)",
-            "lat": round(lat, COORD_DECIMALS), "lon": round(lon, COORD_DECIMALS),
+            "lat": lat, "lon": lon,
             "provenance": "DERIVED",
             "mission": "MRO",
             "instrument": "HiRISE (DTM)",
@@ -641,42 +677,22 @@ def landmark_places(dtm_path, bbox):
                 "Sin nombre oficial: el número solo lo ordena por relieve",
             ],
             "_relief": relief,
-        })
-    return out
+        }
+
+    return _dtm_places(find_peaks(grid[0], cell_m), grid, bbox, make)
 
 
-def depression_places(dtm_path, bbox):
+def depression_places(dtm, bbox):
     """Hondonadas cerradas del DTM (posibles cráteres chicos): mínimos locales, mismo criterio que los cerros."""
-    import numpy as np
-    import rasterio
-    from rasterio.enums import Resampling
+    z, _, cell_m, _ = dtm
 
-    with rasterio.open(dtm_path) as ds:
-        px = abs(ds.transform.a)
-        if ds.crs is not None and ds.crs.is_geographic:
-            px = math.radians(px) * MARS_RADIUS_M
-        f = max(1, int(round(LANDMARK_GRID_M / px)))
-        h, w = max(1, ds.height // f), max(1, ds.width // f)
-        z = ds.read(1, out_shape=(h, w), resampling=Resampling.average, masked=True)
-        z = np.ma.filled(z.astype("float64"), np.nan)
-        transform = ds.transform * ds.transform.scale(ds.width / w, ds.height / h)
-        cell_m = px * ds.width / w
-        crs = ds.crs
-
-    out = []
-    for i, (r, c, depth) in enumerate(find_peaks(-z, cell_m, radius_m=DEPRESSION_RADIUS_M,
-                                                 min_relief_m=DEPRESSION_MIN_DEPTH_M), start=1):
-        x, y = transform * (c + 0.5, r + 0.5)
-        lon, lat = _xy_to_lonlat(crs, x, y)
-        lon = norm_lon(lon)
-        if not in_bbox(lat, lon, bbox):
-            continue
-        out.append({
-            "id": f"hondonada-{i}",
-            "name": f"Hondonada sin nombre {i}",
+    def make(n, lat, lon, depth):
+        return {
+            "id": f"depression-{lat:.4f}-{lon:.4f}",
+            "name": f"Hondonada sin nombre {n}",
             "kind": "depression",
             "detail": f"Fondo {depth:.0f} m por debajo de su borde (radio {DEPRESSION_RADIUS_M:.0f} m); posible cráter",
-            "lat": round(lat, COORD_DECIMALS), "lon": round(lon, COORD_DECIMALS),
+            "lat": lat, "lon": lon,
             "provenance": "DERIVED",
             "mission": "MRO",
             "instrument": "HiRISE (DTM)",
@@ -686,37 +702,140 @@ def depression_places(dtm_path, bbox):
                 "Solo la forma del terreno: que sea un cráter de impacto no está verificado",
                 "Sin nombre oficial: el número solo la ordena por profundidad",
             ],
-            "_relief": depth,
-        })
+        }
+
+    found = find_peaks(-z, cell_m, radius_m=DEPRESSION_RADIUS_M, min_relief_m=DEPRESSION_MIN_DEPTH_M)
+    return _dtm_places(found, dtm, bbox, make)
+
+
+def _pds_tuple(text, key):
+    m = re.search(rf"^\s*{key}\s*=\s*\(([^)]*)\)", text, re.M)
+    if m is None:
+        raise ValueError(f"la etiqueta no trae {key}")
+    return [v.strip().strip('"') for v in m.group(1).split(",")]
+
+
+def crism_browse_bands(lbl_path):
+    """{parámetro: (banda, offset, factor)} de una etiqueta de browse MTRDR: valor = offset + DN · factor."""
+    text = Path(lbl_path).read_text(errors="replace")
+    names = _pds_tuple(text, "BAND_NAME")
+    offsets = [float(v) for v in _pds_tuple(text, "OFFSET")]
+    factors = [float(v) for v in _pds_tuple(text, "SCALING_FACTOR")]
+    if not len(names) == len(offsets) == len(factors):
+        raise ValueError(f"{Path(lbl_path).name}: bandas y escalas no coinciden")
+    return {n: (i, o, f) for i, (n, o, f) in enumerate(zip(names, offsets, factors), start=1)}
+
+
+def crism_hotspot(values, valid):
+    """(fila, col, valor) de la ventana de CRISM_WINDOW_PX con la mediana más alta, lejos del borde."""
+    import numpy as np
+    from scipy import ndimage
+
+    med = ndimage.median_filter(np.where(valid, values, -np.inf), size=CRISM_WINDOW_PX,
+                                mode="constant", cval=-np.inf)
+    # Los bordes de la escena son ruidosos: la ventana tiene que quedar bien adentro.
+    inside = ndimage.minimum_filter(valid.astype(np.uint8), size=2 * CRISM_EDGE_PX + 1,
+                                    mode="constant", cval=0) == 1
+    med = np.where(inside, med, -np.inf)
+    best = med.max()
+    if not np.isfinite(best):
+        return None
+    # El browse es de 8 bits y hay empates (un parche saturado entero): gana el centro del
+    # parche, donde el promedio de la ventana es más alto.
+    mean = ndimage.uniform_filter(np.where(valid, values, 0.0), size=CRISM_WINDOW_PX, mode="constant")
+    r, c = np.unravel_index(int(np.argmax(np.where(med == best, mean, -np.inf))), med.shape)
+    return int(r), int(c), float(best)
+
+
+def _dist_m(lat1, lon1, lat2, lon2):
+    """Distancia corta sobre la esfera de Marte (equirectangular: alcanza para cientos de metros)."""
+    dx = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.hypot(dx, math.radians(lat2 - lat1)) * MARS_RADIUS_M
+
+
+def _crism_reasons(crism_dir):
+    """Motivo con el que MRO apuntó cada observación ('Depositional Fan'), si index.json lo trae."""
+    path = Path(crism_dir) / "index.json"
+    if not path.exists():
+        return {}
+    out = {}
+    for o in json.loads(path.read_text()):
+        obs, comment = str(o.get("pdsid") or "")[:11].lower(), o.get("comment")
+        if obs and comment:
+            out[obs] = re.sub(r"^COORD Target\s*-\s*(\d+\s+)?", "", str(comment)).strip()
     return out
 
 
-def crism_places(index_path, bbox):
-    """Huellas de observaciones espectrales CRISM (MRO) del sitio, en su centro."""
-    obs = json.loads(Path(index_path).read_text())
+def crism_places(crism_dir, bbox):
+    """Dónde cada observación CRISM muestra la señal más fuerte de cada parámetro de CRISM_PARAMS.
+
+    Lee los browse MTRDR que ya baja fetch_science.sh: el .img trae el parámetro en 8 bits y la
+    etiqueta .lbl, cómo volver al valor real. Un lugar por observación y parámetro, solo si
+    supera el umbral; si dos observaciones marcan casi el mismo punto, queda la más fuerte.
+    """
+    import rasterio
+
+    crism_dir = Path(crism_dir)
+    labels = sorted((m.group(1), p) for p in crism_dir.glob("*.lbl") if (m := CRISM_BROWSE.match(p.name)))
+    if not labels:
+        raise FileNotFoundError("Faltan los browse CRISM (fetch_science.sh)")
+    reasons = _crism_reasons(crism_dir)
+    found, seen = [], set()
+    for obs, lbl in labels:
+        img = lbl.with_suffix(".img")
+        if not img.exists():
+            continue
+        bands = crism_browse_bands(lbl)
+        # Un mismo parámetro sale en varios browse de la observación: se mira una vez.
+        wanted = [p for p in bands if p in CRISM_PARAMS and (obs, p) not in seen]
+        if not wanted:
+            continue
+        with rasterio.open(img) as ds:
+            res = abs(ds.transform.a)
+            for param in wanted:
+                seen.add((obs, param))
+                band, offset, factor = bands[param]
+                dn = ds.read(band)
+                hit = crism_hotspot(offset + dn * factor, dn != CRISM_NODATA_DN)
+                if hit is None or hit[2] < CRISM_PARAMS[param][2]:
+                    continue
+                r, c, value = hit
+                x, y = ds.transform * (c + 0.5, r + 0.5)
+                (lon,), (lat,) = to_lonlat(ds.crs, [x], [y])
+                found.append({"obs": obs, "param": param, "lat": lat, "lon": lon, "value": value,
+                              "saturated": value >= offset + CRISM_MAX_DN * factor - 1e-9, "res": res})
+
+    kept = []
+    for f in sorted(found, key=lambda f: -f["value"]):
+        if any(k["param"] == f["param"] and _dist_m(k["lat"], k["lon"], f["lat"], f["lon"]) < CRISM_DEDUP_M
+               for k in kept):
+            continue
+        kept.append(f)
+
     out = []
-    for o in obs:
-        try:
-            lat, lon = float(o["center_lat"]), norm_lon(float(o["center_lon"]))
-        except (KeyError, TypeError, ValueError):
+    for f in kept:
+        if not in_bbox(f["lat"], f["lon"], bbox):
             continue
-        if not in_bbox(lat, lon, bbox):
-            continue
-        pdsid = str(o.get("pdsid") or "")
-        prods = sorted({re.sub(r".*_(br[a-z0-9]+?)j?_mtr.*", r"\1", f).upper()
-                        for f in o.get("files", []) if "_br" in f})
+        param, obs = f["param"], f["obs"]
+        label, meaning, threshold = CRISM_PARAMS[param]
+        value = f"{param} {'≥' if f['saturated'] else '='} {f['value']:.3f}".replace(".", ",")
+        reason = reasons.get(obs)
         out.append({
-            "id": f"crism-{pdsid.lower()}",
-            "name": f"Observación CRISM {pdsid[:11].upper()}",
+            "id": f"crism-{obs}-{param.lower()}",
+            "name": f"Señal de {label} ({param})",
             "kind": "orbital",
-            "detail": "Mapa mineral desde órbita" + (f" · {', '.join(prods[:6])}" if prods else ""),
-            "lat": round(lat, COORD_DECIMALS), "lon": round(lon, COORD_DECIMALS),
-            "provenance": "OBSERVED",
+            "detail": f"{value}, lo más fuerte de {obs.upper()}" + (f" · objetivo de MRO: {reason}" if reason else ""),
+            "lat": round(f["lat"], COORD_DECIMALS), "lon": round(f["lon"], COORD_DECIMALS),
+            "provenance": "DERIVED",
             "mission": "MRO",
             "instrument": "CRISM",
-            "resolution": "~18 m/px (MTRDR)",
-            "source": "CRISM MTRDR, índices de resumen mineral (PDS Geosciences / ODE)",
-            "assumptions": ["El pin marca el centro de la huella, que cubre ~10 km"],
+            "resolution": f"{f['res']:.0f} m/px, mediana de {CRISM_WINDOW_PX} × {CRISM_WINDOW_PX} px",
+            "source": "CRISM MTRDR browse, parámetros de resumen (Viviano-Beck et al. 2014), PDS Geosciences",
+            "assumptions": [
+                f"Indicio desde órbita de {meaning}: no es una identificación mineral, hay que confirmarla con los espectros",
+                f"Umbral nuestro, conservador (no lo publica la fuente): {param} ≥ {threshold}".replace(".", ","),
+                "Es el punto más fuerte de la observación: alrededor puede haber más terreno con la misma señal",
+            ],
         })
     return out
 
@@ -786,29 +905,24 @@ def build(site, common):
     attempt("robbins", "Cráteres de Robbins & Hynek 2012", robbins)
     attempt("rover", f"Waypoints de {rover_name} (MMGIS)", rover)
 
-    def landmarks():
-        path = DATA_DIR / "output" / site["id"] / "dtm.tif"
-        if not path.exists():
-            raise FileNotFoundError("Falta el DTM del sitio (precompute.py)")
-        return landmark_places(path, bbox)
+    dtm_cache = {}
 
-    attempt("landmarks", f"Cerros sin nombre del DTM (relieve ≥ {LANDMARK_MIN_RELIEF_M:.0f} m)", landmarks)
+    def dtm():
+        """El DTM se lee una sola vez para cerros y hondonadas."""
+        if "grid" not in dtm_cache:
+            path = DATA_DIR / "output" / site["id"] / "dtm.tif"
+            if not path.exists():
+                raise FileNotFoundError("Falta el DTM del sitio (precompute.py)")
+            dtm_cache["grid"] = read_dtm_coarse(path)
+        return dtm_cache["grid"]
 
-    def depressions():
-        path = DATA_DIR / "output" / site["id"] / "dtm.tif"
-        if not path.exists():
-            raise FileNotFoundError("Falta el DTM del sitio (precompute.py)")
-        return depression_places(path, bbox)
+    attempt("landmarks", f"Cerros sin nombre del DTM (relieve ≥ {LANDMARK_MIN_RELIEF_M:.0f} m)",
+            lambda: landmark_places(dtm(), bbox))
+    attempt("depressions", f"Hondonadas del DTM (≥ {DEPRESSION_MIN_DEPTH_M:.0f} m, posibles cráteres)",
+            lambda: depression_places(dtm(), bbox))
+    attempt("crism", "Señales minerales de CRISM (MRO), de los browse MTRDR",
+            lambda: crism_places(DATA_DIR / "raw" / site["id"] / "crism", bbox))
 
-    attempt("depressions", f"Hondonadas del DTM (≥ {DEPRESSION_MIN_DEPTH_M:.0f} m, posibles cráteres)", depressions)
-
-    def crism():
-        path = DATA_DIR / "raw" / site["id"] / "crism" / "index.json"
-        if not path.exists():
-            raise FileNotFoundError("Faltan las observaciones CRISM (fetch_science.sh)")
-        return crism_places(path, bbox)
-
-    attempt("crism", "Observaciones espectrales CRISM (MRO)", crism)
     # Fuentes que solo existen en algunos sitios: si el sitio no las declara, no aparecen.
     declared = {f["key"] for f in site["files"]}
     if "heli_waypoints" in declared:

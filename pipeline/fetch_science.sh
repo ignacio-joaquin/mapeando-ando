@@ -43,9 +43,12 @@ for row in "${SITES[@]}"; do
   python3 - "$site" "$lon0" "$lat1" "$lon1" "$lat0" "$RAW/$site/crism" <<'EOF'
 import json, os, subprocess, sys, urllib.request
 site, lon0, lat1, lon1, lat0, outdir = sys.argv[1], *map(float, sys.argv[2:6]), sys.argv[6]
-q = ("https://oderest.rsl.wustl.edu/live2/?query=product&results=fp&target=mars&ihid=MRO&iid=CRISM&pt=MTRDR"
+# results=mf: metadata + archivos. Con results=fp (solo archivos) no vienen el centro, la escala
+# ni el motivo de la observación.
+q = ("https://oderest.rsl.wustl.edu/live2/?query=product&results=mf&target=mars&ihid=MRO&iid=CRISM&pt=MTRDR"
      f"&westlon={lon0}&eastlon={lon1}&minlat={lat0}&maxlat={lat1}&output=JSON&limit=200")
-d = json.load(urllib.request.urlopen(q, timeout=120))
+req = urllib.request.Request(q, headers={"User-Agent": "mapeando-ando/1.0 (NASA Space Apps 2026; descarga dirigida de datos PDS)"})
+d = json.load(urllib.request.urlopen(req, timeout=120))
 prods = d["ODEResults"].get("Products", {}).get("Product", [])
 prods = prods if isinstance(prods, list) else [prods]
 index = []
@@ -60,8 +63,11 @@ for p in prods:
             if not os.path.exists(dest):
                 subprocess.run(["curl", "-sf", "--retry", "5", "-o", dest, f["URL"]])
             got.append(name.lower())
-    index.append({"pdsid": p.get("pdsid"), "center_lat": p.get("Center_latitude"),
-                  "center_lon": p.get("Center_longitude"), "files": got})
+    index.append({"pdsid": p.get("pdsid") or p.get("Product_name", "").rsplit(".", 1)[0],
+                  "obs_type": p.get("Observation_type"), "map_scale_m": p.get("Map_scale"),
+                  "center_lat": p.get("Center_latitude"), "center_lon": p.get("Center_longitude"),
+                  "comment": p.get("Comment"), "footprint": p.get("Footprint_C0_geometry"),
+                  "files": got})
 json.dump(index, open(os.path.join(outdir, "index.json"), "w"), indent=1)
 print(f"{site}: {len(index)} observaciones CRISM")
 EOF
