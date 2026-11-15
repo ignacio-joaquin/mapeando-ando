@@ -24,6 +24,8 @@ import {
   SitesSchema,
   TerrainIndexSchema,
   type TerrainIndex,
+  ViewshedSchema,
+  type Viewshed,
   type Health,
   type SiteDetail,
   type Sites,
@@ -282,6 +284,29 @@ export async function fetchRoverPhotos(
   if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}${await errorDetail(res)}`);
   const parsed = RoverPhotosSchema.safeParse(await res.json());
   if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
+  return parsed.data;
+}
+
+/**
+ * Zona con contacto por radio con el hábitat (api/viewshed.py). null = no hay
+ * backend o el server todavía no tiene el endpoint: la capa no se dibuja y el
+ * panel lo dice. Nunca una zona de ejemplo.
+ */
+export async function fetchViewshed(
+  siteId: string,
+  p: { readonly lat: number; readonly lon: number },
+  signal?: AbortSignal,
+): Promise<Viewshed | null> {
+  if (usingFixtures) return null;
+  const qs = new URLSearchParams({ lat: String(p.lat), lon: String(p.lon) });
+  const res = await fetch(`/api/sites/${siteId}/viewshed?${qs.toString()}`, {
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (res.status === 404 || res.status === 405 || res.status === 501) return null;
+  if (!res.ok) throw new Error(`contacto: el server respondió ${res.status}${await errorDetail(res)}`);
+  const parsed = ViewshedSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`contacto: no cumple el contrato: ${parsed.error.message}`);
   return parsed.data;
 }
 

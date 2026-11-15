@@ -87,7 +87,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 
 ### Nombres y contratos compartidos
 
-`files[].key` en `sites/*.json`, los ids de capa del mapa (`survival-slope`, `landmarks-points`, `route-line`) y las rutas `/api/*` son **contratos**: los consume más de una pieza. Renombrarlos es breaking change y se hace en un PR que toca todas las puntas.
+`files[].key` en `sites/*.json`, los ids de capa del mapa (`survival-slope`, `landmarks-points`, `route-line`, `habitat-contact`) y las rutas `/api/*` son **contratos**: los consume más de una pieza. Renombrarlos es breaking change y se hace en un PR que toca todas las puntas.
 
 **Valor con procedencia.** Todo número que la API le manda al frontend (point query, `/api/route`, veredicto, fichas) viaja en este formato, y la UI lo dibuja con `<Measure>` y su badge:
 
@@ -202,6 +202,13 @@ Una pila reutilizada viaja como `MODELED`, con el sol de origen, ΔLs y la difer
 - Subsuelo (RIMFAX en Jezero, campo magnético grueso en Gale) todavía no tiene contrato: la ficha dice que falta el dato.
 - Sin fotos cerca: `photos: []` y una `note`. Nunca una foto de ejemplo.
 - Mientras el server responda 404/405/501, la ficha dice que falta el endpoint.
+
+**`GET /api/sites/{site}/viewshed?lat=&lon=` (lo calcula `api/viewshed.py`, lo dibuja la capa `habitat-contact` de `web/`).** Desde dónde hay línea de vista por radio con un hábitat puesto en (lat, lon): la misma geometría que el límite "minutos seguidos sin contacto" del planificador (`api/contact.py`), en una grilla de ~25 m hasta 3 km del hábitat. Lo valida `ViewshedSchema` en `web/src/api/schemas.ts`.
+
+- No se precomputa: depende de dónde marca el hábitat el usuario. Lee `dtm.tif` (COG, usa sus overviews) y tira ~45 000 rayos: ~0,4 s.
+- Sale: `{ site, habitat: { lat, lon }, note, radius_m, cell_m, fractions, source, geojson }`. `geojson` es una FeatureCollection de polígonos en lon/lat con `properties.class` = `contact` | `no_contact` | `unknown`. `fractions` da la parte del círculo de cada clase. `source` es la procedencia (MODELED, con los supuestos de la línea de vista).
+- Sin el DTM procesado o con el hábitat fuera del DTM: 200 con `geojson: null` y una `note`. Sitio desconocido o sin manifest: 404. El frontend trata 404/405/501 como "el server todavía no tiene el endpoint" y no dibuja nada.
+- En el mapa: `no_contact` va rayado además de rojo (no solo color); la capa se prende y apaga desde el panel del planificador y está prendida por defecto.
 
 ### Idioma
 

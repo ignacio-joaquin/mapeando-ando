@@ -121,6 +121,7 @@ class LimitResult:
     complete: bool = True           # False: se evaluó con datos parciales
     note: str | None = None
     defined: bool = True            # False: el equipo todavía no fijó el valor del límite
+    short: str | None = None        # versión corta de `note` para el resumen del veredicto
 
     @property
     def evaluated(self) -> bool:
@@ -201,6 +202,47 @@ class Assessment:
 # ------------------------------------------------------------------ evaluación
 
 
+@dataclass(frozen=True)
+class Streak:
+    """Tramo de la travesía sin contacto: segundos desde la salida y metros recorridos."""
+    t0_s: float
+    d0_m: float
+    t1_s: float
+    d1_m: float
+
+
+def _km(m: float) -> str:
+    return f"{m / 1000:.1f}".replace(".", ",")
+
+
+def contact_short(streak: Streak | None, cap_min: float) -> str | None:
+    """Para el resumen del NO-GO: cuánto y cuándo, en una línea."""
+    if streak is None or streak.t1_s <= streak.t0_s:
+        return None
+    mins = (streak.t1_s - streak.t0_s) / 60.0
+    return (f"{mins:.0f} min seguidos sin vista al hábitat (máximo {cap_min:.0f}), "
+            f"del minuto {streak.t0_s / 60:.0f} al {streak.t1_s / 60:.0f}. "
+            "Mirá la capa «Contacto con el hábitat».")
+
+
+def contact_note(streak: Streak | None, cap_min: float, broken: bool) -> str | None:
+    """Dónde está la racha más larga sin contacto y, si rompe el límite, qué hacer.
+
+    Va en el `note` del límite (el detalle del panel)."""
+    if streak is None or streak.t1_s <= streak.t0_s:
+        return None
+    mins = (streak.t1_s - streak.t0_s) / 60.0
+    where = f"del minuto {streak.t0_s / 60:.0f} al {streak.t1_s / 60:.0f}"
+    if streak.d1_m > streak.d0_m:
+        where += f", entre el km {_km(streak.d0_m)} y el {_km(streak.d1_m)} del recorrido"
+    if not broken:
+        return f"La racha más larga sin vista al hábitat es de {mins:.0f} min, {where}."
+    return (f"Son {mins:.0f} min seguidos sin línea de vista al hábitat (el máximo es {cap_min:.0f}), "
+            f"{where}: el terreno tapa la antena. Mirá la capa «Contacto con el hábitat» y elegí un "
+            "destino o un hábitat con vista entre sí, o paradas que vuelvan a tener vista antes de "
+            f"los {cap_min:.0f} min.")
+
+
 def _margin(used: float, limit: float) -> float:
     if limit <= 0:
         return -1.0
@@ -220,9 +262,14 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
     run = max_run = 0.0          # confirmada
     run_p = max_run_p = 0.0      # pesimista
     unknown_vis_s = 0.0
+    dist = 0.0                   # metros recorridos, para decir dónde está la racha
+    # Dónde empieza y termina cada racha: (s desde la salida, m recorridos) al inicio y al final.
+    run_at = run_p_at = (0.0, 0.0)
+    worst = worst_p = None
 
-    def contact(dt: float, vis: bool | None) -> None:
-        nonlocal run, max_run, run_p, max_run_p, unknown_vis_s
+    def contact(dt: float, vis: bool | None, t_end: float, d_end: float) -> None:
+        nonlocal run, max_run, run_p, max_run_p, unknown_vis_s, run_at, run_p_at, worst, worst_p
+        start = (t_end - dt, dist)
         if vis is True:
             run = run_p = 0.0
             return
@@ -230,10 +277,16 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
             unknown_vis_s += dt
             run = 0.0            # no se sabe: corta la racha confirmada
         else:
+            if run == 0.0:
+                run_at = start
             run += dt
-            max_run = max(max_run, run)
+            if run > max_run:
+                max_run, worst = run, Streak(*run_at, t_end, d_end)
+        if run_p == 0.0:
+            run_p_at = start
         run_p += dt
-        max_run_p = max(max_run_p, run_p)
+        if run_p > max_run_p:
+            max_run_p, worst_p = run_p, Streak(*run_p_at, t_end, d_end)
 
     for i, leg in enumerate(track.legs):
         for s, sl, vis in zip(leg.steps, leg.slopes, leg.visible):
@@ -250,7 +303,8 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
                 slope_gaps += 1
             else:
                 max_slope = sl if max_slope is None else max(max_slope, sl)
-            contact(dt, vis)
+            contact(dt, vis, t, dist + s.dx_m)
+            dist += s.dx_m
         if i < len(track.dwell_s):
             dwell = max(0.0, track.dwell_s[i])
             if dwell:
@@ -260,7 +314,7 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
                 bat += stay["battery_wh"]
                 t += dwell
                 vis = track.station_visible[i] if i < len(track.station_visible) else None
-                contact(dwell, vis)
+                contact(dwell, vis, t, dist)
 
     end = cond.depart_s + t
     kcal = energy * KCAL_PER_J
@@ -323,6 +377,8 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
             # Sin huecos, o con huecos que ni contados como sin contacto rompen el límite.
             max_run_min = pessimistic_min
             r = LimitResult("contact", max_run_min, cap, _margin(max_run_min, cap))
+            r.note = contact_note(worst_p, cap, r.broken)
+            r.short = contact_short(worst_p, cap) if r.broken else None
             if unknown_vis_s > 0:
                 r.note = (f"{unknown_min:.0f} min sin dato de visibilidad: se contaron como sin contacto "
                           "y aun así no pasa el límite.")
@@ -330,7 +386,10 @@ def evaluate(track: Track, cond: Conditions, limits: Limits = Limits()) -> Evalu
             # Los huecos podrían romperlo: se evalúa con lo medido y queda incompleto (CAUTION).
             max_run_min = confirmed_min
             r = LimitResult("contact", max_run_min, cap, _margin(max_run_min, cap))
-            if not r.broken:
+            if r.broken:
+                r.note = contact_note(worst, cap, True)
+                r.short = contact_short(worst, cap)
+            else:
                 r.complete = False
                 r.note = (f"{unknown_min:.0f} min sin dato de visibilidad: contándolos como sin contacto, "
                           f"la racha llegaría a {pessimistic_min:.0f} min. No se sabe si se rompe el límite.")
@@ -426,6 +485,8 @@ def summary(a: Assessment) -> str:
     lim = a.base.limiting
     if a.status == "NO_GO":
         r = min(a.base.broken, key=lambda x: x.margin)
+        if r.short:
+            return f"No va: {r.short}"
         extra = f" {r.note}" if r.note else ""
         return f"No va: se rompe el límite de {LIMIT_LABELS[r.id][0].lower()}.{extra}"
     passed, total = a.robustness

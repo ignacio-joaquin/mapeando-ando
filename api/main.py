@@ -1,6 +1,7 @@
 """API de Mapa Marciano.
 
 Expone el estado del servidor, el inventario de datos por sitio, la point query,
+la zona con contacto al hábitat (/api/sites/{site}/viewshed),
 /api/route (planificador 4D, api/planner.py), /api/route/consumables (consumibles
 del traje sobre una ruta ya armada) y /api/illumination/window (sol/sombra precomputados).
 """
@@ -11,13 +12,16 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from .consumables import Step, SuitParams, route_consumption
 from .illumination import IlluminationNotReady, parse_utc, read_window, stack_for_tag
+from .planner import _terrain_inputs as terrain_inputs
 from .planner import plan_route
 from .terrain import MARS_RADIUS_M, TerrainError, densify, haversine_m, sample_dtm
+from .viewshed import HabitatOutsideDtm
+from .viewshed import viewshed as compute_viewshed
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 REPO_DIR = Path(__file__).resolve().parent.parent
@@ -373,6 +377,36 @@ def point(site_id: str, lat: float, lon: float):
         # cuando el pipeline las precompute: se muestrean de su COG igual que la elevación.
         "layers": _shelter_layers(site_id, lat, lon),
     }
+
+
+# ------------------------------------------------------- /api/sites/{site}/viewshed
+
+
+@app.get("/api/sites/{site_id}/viewshed")
+def viewshed(site_id: str, lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-360, le=360)):
+    """Desde dónde hay línea de vista (contacto por radio) con un hábitat en (lat, lon).
+
+    La misma geometría que el límite de minutos sin contacto de /api/route, en una
+    grilla de ~25 m hasta 3 km del hábitat. Depende de dónde se pone el hábitat, por
+    eso se calcula en el pedido y no en el pipeline (~0,5 s).
+
+    Degrada: sin el DTM procesado o con el hábitat fuera del DTM responde 200 con
+    `geojson: null` y una `note`. Nunca dibuja una zona que no se calculó.
+    """
+    m = _manifest()
+    if m is None or site_id not in m["sites"]:
+        raise HTTPException(404, "Sitio desconocido o datos todavía no descargados")
+    base = {"site": site_id, "habitat": {"lat": lat, "lon": lon}, "geojson": None, "note": None}
+    _, dtm_path, _ = terrain_inputs(DATA_DIR, site_id)
+    if dtm_path is None:
+        return {**base, "note": "Falta el DTM procesado del sitio (pipeline/precompute.py): "
+                                "no se puede calcular la línea de vista al hábitat."}
+    try:
+        return {**base, **compute_viewshed(dtm_path, lat, lon)}
+    except HabitatOutsideDtm as e:
+        return {**base, "note": str(e)}
+    except OSError as e:
+        raise HTTPException(503, f"No se pudo leer el DTM: {e}")
 
 
 # ------------------------------------------------------------------ /api/route

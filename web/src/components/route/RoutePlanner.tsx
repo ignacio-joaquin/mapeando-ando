@@ -13,6 +13,7 @@ import { DestinationSearch } from "./DestinationSearch";
 import { PlaceCard } from "./PlaceCard";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
+import { HabitatContact } from "./HabitatContact";
 import { SafetyBreakdown } from "./SafetyBreakdown";
 import { VerdictCard } from "./VerdictCard";
 import { DirectionsList } from "./DirectionsList";
@@ -161,6 +162,8 @@ export function RoutePlanner() {
       ) : waypoints.length > 0 ? (
         <p className="text-[11px] text-warn">⚠ {UNVERIFIED_MESSAGE}</p>
       ) : null}
+
+      <HabitatContact />
 
       {/* Hora de salida */}
       <section className="rounded border border-line p-2">
