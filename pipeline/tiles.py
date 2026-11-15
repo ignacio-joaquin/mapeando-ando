@@ -59,6 +59,16 @@ RAMPAS = {
         (3, 4, "224 86 74"),      # no transitable     #e0564a
     ],
 }
+# Dosis (dose_rate.tif, µSv/h) con escala FIJA de 0 a la base de RAD (0,64 mSv/día = 26,7 µSv/h),
+# en cuartos, y un solo tono: no se estira al rango del sitio para no dramatizar diferencias que
+# son menores que la incertidumbre de la medición. = leyenda de survival-dose en layers.ts.
+RAMPAS["dosis"] = [
+    (0.0, 6.67, "232 228 240"),     # < 6,7 µSv/h        #e8e4f0
+    (6.67, 13.33, "190 178 216"),   # 6,7–13,3           #beb2d8
+    (13.33, 20.0, "143 125 186"),   # 13,3–20            #8f7dba
+    (20.0, 1000.0, "96 76 150"),    # ≥ 20 (base 26,7)   #604c96
+]
+
 # Rampas de un raster POR CLASES: al reproyectar se usa el vecino más cercano, porque un
 # bilineal entre la clase 0 y la 3 inventa un 1,5 que no existe.
 RAMPAS_POR_CLASES = {"peligro"}

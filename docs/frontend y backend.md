@@ -69,7 +69,8 @@ Sin `.env.local`, el frontend arranca en **modo ejemplo**: fixtures locales y un
 | Pipeline: teselado a XYZ PNG y ortoimagen | listo; falta correrlo |
 | Planificador de travesía, fichas, tira imprimible | listo, contra el planificador de ejemplo |
 | Capa de peligro de terreno (pendiente + rugosidad), tiles `hazard/` | listo (`pipeline/terrain_layers.py`, paso de `precompute.py`) |
-| Capas de refugio, dosis y sombras | no empezadas |
+| Capa de dosis por celda (secundaria) y presupuesto de dosis en el planificador | listo (`pipeline/radiation.py`, paso de `precompute.py`) |
+| Capas de refugio y sombras | no empezadas |
 
 ---
 
@@ -129,5 +130,5 @@ curl -s "http://<server>/api/sites/jezero/point?lat=18.488&lon=77.403" | jq
 ## 5. Lo que todavía bloquea
 
 - **El frontend no se despliega.** nginx sirve `/opt/mapeando-ando/web` directo, `deploy/update.sh` no corre `npm build` y el server no tiene Node. Mientras no se resuelva, el mapa solo se ve en local aunque esté mergeado en `main`. Es la decisión abierta de `context.md` y **no depende de los datos**.
-- **Las capas de supervivencia** de refugio y dosis no las genera nadie todavía; peligro ya sale de `precompute.py` (`pipeline/terrain_layers.py`). Sol y sombra sí: `pipeline/illumination.py` calcula la pila por hora y `pipeline/shadow_tiles.py` la tesela para el deslizador del sol (ver `docs/illumination.md`).
+- **Las capas de supervivencia** de refugio no las genera nadie todavía; peligro y dosis ya salen de `precompute.py` (`pipeline/terrain_layers.py`, `pipeline/radiation.py`). Sol y sombra sí: `pipeline/illumination.py` calcula la pila por hora y `pipeline/shadow_tiles.py` la tesela para el deslizador del sol (ver `docs/illumination.md`).
 - **El valor por capa en el inspector** viene vacío hasta que esas capas existan.

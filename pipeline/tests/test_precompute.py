@@ -208,13 +208,18 @@ def test_full_run(data_dir):
     out = data_dir / "output" / "jezero"
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
-        ["contours.geojson", "dtm.tif", "hazard", "hazard.tif", "hillshade", "hillshade.tif", "roughness.tif",
-         "slope", "slope.tif", "terrain.json", "terrain_factor.tif"]
+        ["contours.geojson", "dose", "dose_rate.tif", "dtm.tif", "hazard", "hazard.tif", "hillshade",
+         "hillshade.tif", "roughness.tif", "skyview.tif", "slope", "slope.tif", "terrain.json",
+         "terrain_factor.tif"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
         "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
-        "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok"}
+        "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok",
+        "survival-dose": "ok", "survival-skyview": "ok"}
+    dose = index["layers"]["survival-dose"]
+    assert dose["unit"] == "µSv/h" and dose["display"] == "budget" and dose["instrument"] == "RAD"
+    assert any("dem200" in w for w in index["warnings"])  # el test no tiene DEM de 200 m: sigue con aviso
     hazard = index["layers"]["survival-hazard"]
     assert hazard["provenance"] == "DERIVED" and hazard["instrument"] == "HiRISE DTM" and hazard["resolution"]
     assert "error" not in index["layers"]["terrain-roughness"]
@@ -228,7 +233,7 @@ def test_full_run(data_dir):
             assert (ds.width, ds.height) == (300, 300)
 
     for layer_id, folder in (("relief-slope", "slope"), ("relief-hillshade", "hillshade"),
-                             ("survival-hazard", "hazard")):
+                             ("survival-hazard", "hazard"), ("survival-dose", "dose")):
         t = index["layers"][layer_id]["tiles"]
         assert t["status"] == "ok" and t["template"] == f"{folder}/{{z}}/{{x}}/{{y}}.png"
         assert (out / folder / str(t["maxzoom"])).is_dir() and t["minzoom"] <= t["maxzoom"]
@@ -244,6 +249,16 @@ def test_full_run(data_dir):
     c_lon, c_lat = LON0 + math.degrees(150 / R), LAT0 - math.degrees(150 / R)
     assert tile_pixel(slope_tiles, zmax, c_lon, c_lat) == (47, 125, 79, 255)
     assert tile_pixel(slope_tiles, zmax, c_lon, c_lat + math.degrees(90 / R)) == (224, 86, 74, 255)
+
+    # Tiles de dosis: solo los cuatro tonos de la escala fija (= leyenda de survival-dose).
+    dose_rgba = {(*map(int, c.split()), 255) for _, _, c in precompute.tiles.RAMPAS["dosis"]} | {(0, 0, 0, 0)}
+    assert tile_colors(out / "dose") <= dose_rgba
+
+    # La dosis va en su propia grilla de 100 m (no la del DTM), también en COG.
+    for name in ("skyview.tif", "dose_rate.tif"):
+        with rasterio.open(out / name) as ds:
+            assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"
+            assert ds.res == (100.0, 100.0)
 
     # El peligro también, con los colores de su leyenda (los mismos que la pendiente) y sin
     # colores intermedios: es un raster por clases. Fondo del cráter bajo, pared no transitable.
@@ -351,8 +366,8 @@ def test_ortho_and_relief_have_separate_max_zoom(data_dir, monkeypatch):
 
     precompute.main(["--site", "jezero", "--ortho", "--max-zoom", "15"])
     # El peligro sale del DTM como la pendiente: usa el tope del relieve.
-    assert zooms == {"slope": 15, "hazard": 15, "ortho": 17}  # la ortoimagen, con el default de --ortho-max-zoom
+    assert zooms == {"slope": 15, "hazard": 15, "dose": 15, "ortho": 17}  # la ortoimagen, con el default de --ortho-max-zoom
 
     zooms.clear()
     precompute.main(["--site", "jezero", "--ortho", "--ortho-max-zoom", "18"])
-    assert zooms == {"slope": None, "hazard": None, "ortho": 18}  # el relieve, con el zoom que deduce gdal2tiles
+    assert zooms == {"slope": None, "hazard": None, "dose": None, "ortho": 18}  # el relieve, con el zoom que deduce gdal2tiles
