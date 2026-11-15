@@ -128,7 +128,8 @@ class TestCatalogo:
         out = dr.leg_directions(walk((0, 0), (1500, 0)), terrain(hill), dr.landmarks_from_places([cerro]))
         assert out[0]["kind"] == "toward"
         assert out[0]["landmark"]["source"] == "DEM"
-        assert out[0]["text"].startswith("Caminá 1,5 km hacia el cerro sin nombre 1, que queda al frente")
+        assert out[0]["text"] == "Caminá 1,5 km hacia el cerro sin nombre 1, a las 12."
+        assert out[0]["clock"] == 12
 
     def test_size_km_le_gana_al_texto(self):
         p = robbins("18-3", 0, 0, 2.0) | {"size_km": 3.0}
@@ -149,7 +150,9 @@ class TestIndicaciones:
         assert [d["kind"] for d in out] == ["toward"]
         d = out[0]
         assert d["landmark"]["source"] == "Robbins"
-        assert d["text"].startswith("Caminá 1,5 km hacia el cráter sin nombre de 2,0 km (Robbins 18-7), que queda al frente")
+        assert d["text"] == "Caminá 1,5 km hacia el cráter sin nombre de 2,0 km (Robbins 18-7), a las 12."
+        assert d["checks"][0]["kind"] == "landmark"
+        assert "loma baja (el borde) a unos" in d["checks"][0]["text"]
         assert d["visible_fraction"]["value"] >= 0.5
         assert d["visible_fraction"]["provenance"] == "DERIVED"
         assert abs(d["relative_bearing_deg"]) <= 15
@@ -159,7 +162,7 @@ class TestIndicaciones:
         lms = dr.landmarks_from_places([robbins("18-8", 800, 3000, 1.6)])
         out = dr.leg_directions(walk((0, 0), (1500, 0)), t, lms)
         assert out[0]["kind"] == "keep_left"
-        assert "a tu izquierda" in out[0]["text"]
+        assert out[0]["text"].endswith("a las 9.") and out[0]["clock"] == 9
 
     def test_una_loma_en_el_medio_lo_tapa_y_va_el_respaldo(self):
         def f(E, Nn):
@@ -169,7 +172,7 @@ class TestIndicaciones:
         out = dr.leg_directions(walk((0, 0), (1500, 0)), terrain(f), lms)
         assert [d["kind"] for d in out] == ["fallback_bearing"]
         assert out[0]["landmark"] is None
-        assert out[0]["text"].startswith("Sin referencia visible: mantené el rumbo 090° (E)")
+        assert out[0]["text"].startswith("Sin referencia visible: mantené el rumbo 090° (E) durante 1,5 km")
         assert out[0]["visible_fraction"]["value"] is None
 
     def test_adentro_de_un_crater_grande_se_mira_el_borde_hacia_donde_se_camina(self):
@@ -186,8 +189,8 @@ class TestIndicaciones:
         out = dr.leg_directions(walk((0, 0), (1000, 0), (1000, 1200)), t, lms)
         assert [d["kind"] for d in out][-1] == "turn"     # una indicación por trecho
         turn = out[-1]
-        assert turn["text"].startswith("A los 1,0 km, girá unos 90° a la izquierda hasta tener el cráter")
-        assert "y seguí así 1,2 km" in turn["text"]
+        assert turn["text"].startswith("Girá a la izquierda hasta tener el cráter sin nombre")
+        assert turn["text"].endswith("a las 12 y caminá 1,2 km.")
         assert turn["landmark"]["name"] == "Cráter 18-10"
 
     def test_nunca_se_inventa_un_landmark_lejano(self):
@@ -207,6 +210,140 @@ class TestIndicaciones:
         lms = dr.landmarks_from_places([robbins("18-12", 6000, 0, 2.0)])
         out = dr.leg_directions(walk((0, 0), (1000, 0)), t, lms)
         assert out[0]["text"].startswith("No se pudo evaluar qué se ve")
+
+
+# ------------------------------------------------------------ reloj, Sol, unicidad, parada, hábitat
+
+from api.mars_time import ltst_hours  # noqa: E402
+
+
+def t_at_ltst(hour: float, lon: float = LON0) -> float:
+    """Un instante del 15/11/2026 en que la hora solar local en `lon` es `hour`."""
+    t = 1794700800.0
+    while abs(ltst_hours(t, lon) - hour) > 0.02:
+        t += 60.0
+    return t
+
+
+class TestRelojYCuerpo:
+    @pytest.mark.parametrize("rel,c", [(0, 12), (29, 1), (90, 3), (180, 6), (-90, 9), (-35, 11)])
+    def test_reloj(self, rel, c):
+        assert dr.clock(rel) == c
+
+    def test_a_la_1_y_a_las_n(self):
+        assert dr.at_clock(30) == "a la 1" and dr.at_clock(60) == "a las 2"
+
+    @pytest.mark.parametrize("rel,txt", [(0, "de frente"), (45, "adelante a la derecha"),
+                                         (-90, "sobre el hombro izquierdo"), (135, "atrás a la derecha"),
+                                         (180, "en la espalda")])
+    def test_sol_respecto_del_cuerpo(self, rel, txt):
+        assert dr.body_side(rel) == txt
+
+
+class TestSol:
+    def test_mars24_al_mediodia_el_sol_esta_al_sur_y_arriba(self):
+        lat, lon = at(0, 0)
+        sun = dr.sun_mars24(t_at_ltst(12.0), lat, lon)
+        assert 150 < sun.az < 210 and sun.el > 40
+        assert sun.src["provenance"] == "MODELED"
+
+    def test_mars24_a_la_manana_el_sol_esta_al_este_y_bajo(self):
+        lat, lon = at(0, 0)
+        sun = dr.sun_mars24(t_at_ltst(8.0), lat, lon)
+        assert 60 < sun.az < 120 and 5 < sun.el < 45
+
+    def test_la_pila_de_sombras_le_gana_a_mars24_e_interpola(self, tmp_path):
+        from api.illumination import ShadowStack
+        from .rasters import band_time, write_shadow_stack
+        d = write_shadow_stack(tmp_path)
+        idx = json.loads((d / "index.json").read_text())
+        for b in idx["shadow_hourly"]["bands"]:
+            b["sun_az_deg"] = 10.0 * b["band"]
+        (d / "index.json").write_text(json.dumps(idx))
+        stack = ShadowStack(d)
+        t = (band_time(12) + band_time(13)) / 2
+        sun = dr.sun_at(stack, t, LAT0, LON0)
+        assert sun.az == pytest.approx(125.0, abs=0.5)
+        assert sun.src["instrument"] == "SPICE"
+
+    def test_sin_landmarks_el_respaldo_es_el_sol_con_hombro_y_sombra(self):
+        leg = dr.LegInput(walk((0, 0), (1500, 0)), t_start=t_at_ltst(9.0), duration_s=1800.0)
+        out = dr.leg_directions(leg, ctx=dr.Context(terrain(flat), [], None))
+        d = out[0]
+        assert d["kind"] == "fallback_sun"
+        assert d["text"].startswith("Sin referencia visible: caminá unos 30 min (1,5 km) con el Sol ")
+        assert "tu sombra hacia las" in d["text"]
+        assert d["sun"]["elevation_deg"] > 3
+
+    def test_con_el_sol_muy_alto_no_se_usa_y_se_dice(self):
+        leg = dr.LegInput(walk((0, 0), (1500, 0)), t_start=t_at_ltst(12.0), duration_s=1800.0)
+        d = dr.leg_directions(leg, ctx=dr.Context(terrain(flat), [], None))[0]
+        assert d["kind"] == "fallback_bearing"
+        assert any(c["kind"] == "sun" and "muy alto" in c["text"] for c in d["checks"])
+
+    def test_con_landmark_el_sol_va_como_confirmacion(self):
+        lms = dr.landmarks_from_places([robbins("18-30", 4000, 0, 2.0)])
+        leg = dr.LegInput(walk((0, 0), (1500, 0)), t_start=t_at_ltst(9.0), duration_s=1800.0)
+        d = dr.leg_directions(leg, ctx=dr.Context(terrain(ring(4000, 0, 1000, 80)), lms, None))[0]
+        assert d["kind"] == "toward"
+        assert d["text"] == "Caminá unos 30 min (1,5 km) hacia el cráter sin nombre de 2,0 km (Robbins 18-30), a las 12."
+        assert [c["kind"] for c in d["checks"]] == ["landmark", "sun"]
+
+
+class TestUnicidad:
+    def test_dos_crateres_parecidos_hacia_el_mismo_lado_se_distinguen(self):
+        # Lado a lado, iguales, a ~7° a cada lado de la marcha: se distinguen por la posición.
+        f = lambda E, Nn: ring(6000, 650, 500, 60)(E, Nn) + ring(6000, -650, 500, 60)(E, Nn)
+        lms = dr.landmarks_from_places([robbins("18-41", 6000, 650, 1.0), robbins("18-42", 6000, -650, 1.0)])
+        d = dr.leg_directions(walk((0, 0), (1500, 0)), terrain(f), lms)[0]
+        assert ("el de más a la izquierda de los dos que se ven hacia ahí" in d["text"]
+                or "el de más a la derecha de los dos que se ven hacia ahí" in d["text"])
+
+    def test_un_crater_solo_no_lleva_aclaracion(self):
+        lms = dr.landmarks_from_places([robbins("18-43", 4000, 0, 2.0)])
+        d = dr.leg_directions(walk((0, 0), (1500, 0)), terrain(ring(4000, 0, 1000, 80)), lms)[0]
+        assert "que se ven hacia ahí" not in d["text"]
+
+
+class TestParada:
+    def test_un_crater_al_costado_al_final_es_la_senal_de_parada(self):
+        f = lambda E, Nn: ring(5000, 0, 1000, 80)(E, Nn) + ring(1500, -2500, 700, 70)(E, Nn)
+        lms = dr.landmarks_from_places([robbins("18-50", 5000, 0, 2.0), robbins("18-51", 1500, -2500, 1.4)])
+        d = dr.leg_directions(walk((0, 0), (1500, 0)), terrain(f), lms)[0]
+        assert d["until"]["landmark"]["name"] == "Cráter 18-51"
+        assert d["until"]["text"] == "Llegaste cuando el cráter sin nombre de 1,4 km (Robbins 18-51) te quede a las 3."
+
+    def test_sin_nada_al_costado_no_hay_senal(self):
+        lms = dr.landmarks_from_places([robbins("18-52", 5000, 0, 2.0)])
+        d = dr.leg_directions(walk((0, 0), (1500, 0)), terrain(ring(5000, 0, 1000, 80)), lms)[0]
+        assert d["until"] is None
+
+
+class FakeContact:
+    """Línea de vista al hábitat: se ve desde todos lados."""
+    resolution = "DTM promediado a 10 m"
+
+    def visible_latlon(self, pts):
+        return [True for _ in pts]
+
+
+class TestHabitat:
+    def test_volviendo_el_mastil_es_la_referencia(self):
+        hab = at(0, 0)
+        ctx = dr.Context(None, None, "Sin catálogo de landmarks (falta places.json)", None, FakeContact(), hab)
+        d = dr.leg_directions(walk((2000, 0), (300, 0)), ctx=ctx)[0]
+        assert d["kind"] == "toward"
+        assert d["landmark"]["source"] == "habitat"
+        assert d["text"] == "Caminá 1,7 km hacia el mástil del hábitat, a las 12."
+
+    def test_yendo_el_mastil_confirma_a_la_espalda(self):
+        hab = at(0, 0)
+        lms = dr.landmarks_from_places([robbins("18-60", 5000, 0, 2.0)])
+        ctx = dr.Context(terrain(ring(5000, 0, 1000, 80)), lms, None, None, FakeContact(), hab)
+        d = dr.leg_directions(walk((300, 0), (1800, 0)), ctx=ctx)[0]
+        assert d["landmark"]["source"] == "Robbins"
+        assert any(c["kind"] == "habitat" and c["text"] == "El mástil del hábitat se ve a las 6, a tu espalda."
+                   for c in d["checks"])
 
 
 # ------------------------------------------------------------ /api/route de punta a punta
@@ -248,12 +385,20 @@ def route_request(*pts_m):
             "waypoints": [{"lat": la, "lon": lo, "task": None, "dwell_min": 0} for la, lo in (at(*p) for p in pts_m)]}
 
 
-def test_api_route_sin_places_json_manda_el_respaldo(client, site):
+def test_api_route_sin_places_json_no_nombra_rasgos_y_usa_el_habitat(client, site):
     res = client.post("/api/route", json=route_request((-300, 0), (300, 0)))
     assert res.status_code == 200
     dirs = res.json()["legs"][0]["directions"]
-    assert dirs and all(d["kind"] == "fallback_bearing" for d in dirs)
-    assert "falta places.json" in dirs[0]["text"]
+    # Sin catálogo no hay cráteres ni cerros; lo único que se puede nombrar es el hábitat.
+    assert dirs and all(d["landmark"] is None or d["landmark"]["source"] == "habitat" for d in dirs)
+    assert all(d["duration"]["value"] is not None for d in dirs)
+
+
+def test_api_route_sin_places_ni_hab_visible_dice_que_falta_el_catalogo(client, site):
+    res = client.post("/api/route", json=route_request((-50, 0), (300, 0)))
+    dirs = res.json()["legs"][0]["directions"]
+    fb = [d for d in dirs if d["landmark"] is None]
+    assert all("falta places.json" in d["text"] for d in fb)
 
 
 def test_api_route_encuentra_el_crater_con_el_dem(client, site):

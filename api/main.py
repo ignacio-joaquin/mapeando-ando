@@ -420,8 +420,11 @@ def route(req: PlannerRequest):
     except OSError as e:
         raise HTTPException(503, f"No se pudo leer un raster del sitio: {e}")
     inputs = out.pop("_profile_inputs", None)
+    straight = out.pop("_profile_straight_legs", [])
     if inputs is not None:
         out["profile"] = _profile(*inputs)
+        # Tramos sin camino: el perfil muestra la línea recta A→B medida, no una ruta.
+        out["profile"]["straight_legs"] = straight
     return out
 
 

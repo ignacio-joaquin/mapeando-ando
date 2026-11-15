@@ -8,6 +8,7 @@
  */
 import type { Direction, RouteResponse } from "../api/schemas";
 import { marsDistanceM } from "../mars/geo";
+import { MARS_RADIUS_M } from "../mars/constants";
 
 export type LonLat = readonly [number, number];
 
@@ -65,6 +66,22 @@ export function routeSteps(route: RouteResponse | null | undefined): RouteStep[]
     }
   });
   return steps;
+}
+
+/** Punto a `meters` de `p` con rumbo `azDeg` (0 = norte). Aproximación plana: alcanza para dibujar. */
+export function offset(p: LonLat, azDeg: number, meters: number): LonLat {
+  const R = MARS_RADIUS_M;
+  const az = (azDeg * Math.PI) / 180;
+  const dLat = ((meters * Math.cos(az)) / R) * (180 / Math.PI);
+  const dLon = ((meters * Math.sin(az)) / (R * Math.cos((p[1] * Math.PI) / 180))) * (180 / Math.PI);
+  return [p[0] + dLon, p[1] + dLat];
+}
+
+/** Largo de un trecho en metros (sobre Marte). */
+export function pathLength(path: readonly LonLat[]): number {
+  let d = 0;
+  for (let i = 1; i < path.length; i++) d += dist(path[i - 1]!, path[i]!);
+  return d;
 }
 
 /** Punto medio de un trecho, para la línea de vista dibujada hacia el landmark. */

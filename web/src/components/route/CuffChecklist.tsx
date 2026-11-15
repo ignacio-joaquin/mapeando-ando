@@ -130,8 +130,15 @@ export function CuffChecklist() {
                     <td />
                     <td colSpan={7} className="pb-1 font-sans text-[10.5pt] leading-snug">
                       {directions.map((d, k) => (
-                        <div key={k}>
+                        <div key={k} className="break-inside-avoid">
                           → {d.text} <span className="text-[8pt]">({directionNote(d)})</span>
+                          {/* En papel no hay tooltip: confirmaciones y parada, en una línea cada una. */}
+                          {(d.checks ?? []).map((c, j) => (
+                            <div key={j} className="pl-4 text-[9pt]">
+                              ✓ {c.text}
+                            </div>
+                          ))}
+                          {d.until ? <div className="pl-4 text-[9pt] font-bold">■ {d.until.text}</div> : null}
                         </div>
                       ))}
                     </td>
@@ -163,7 +170,7 @@ export function CuffChecklist() {
 
 /** Al pie de cada indicación: de dónde sale el landmark y cuánto se ve, o que es respaldo. */
 function directionNote(d: Direction): string {
-  if (isFallback(d.kind) || !d.landmark) return "RESPALDO: sin referencia visible";
+  if (isFallback(d.kind) || !d.landmark) return "RESPALDO";
   const vis = d.visible_fraction.value;
   const seen = vis === null ? "visibilidad: falta el dato" : `visible ${Math.round(vis * 100)} % del tramo`;
   return `${LANDMARK_CATALOG_LABEL[d.landmark.source]} · ${seen}`;

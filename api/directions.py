@@ -44,6 +44,12 @@ MIN_STRETCH_M = 80.0      # un trecho más corto se une al anterior
 MIN_VISIBLE = 0.5         # fracción mínima del trecho desde la que se ve el landmark
 MIN_ANGULAR_DEG = 0.5     # tamaño aparente mínimo para contarlo como visible
 STABILITY_DEG = 20.0      # desvío del rumbo relativo que empieza a penalizar
+ALIKE_DEG = 15.0          # dos candidatos hacia el mismo lado (±) se pueden confundir
+SUN_MIN_EL = 3.0          # más bajo, el Sol se confunde con el horizonte (o ya no está)
+SUN_MAX_EL = 65.0         # más alto, la sombra es corta y el Sol no marca dirección
+STOP_SIDE_DEG = (60.0, 120.0)   # la señal de parada queda al costado al final del trecho
+HABITAT_WEIGHT_DEG = 30.0 # peso del mástil del hábitat frente al tamaño aparente de los rasgos
+PROMINENCE_CAP_DEG = 20.0 # tope del tamaño aparente en el puntaje
 FRONT_DEG = 15.0
 SIDE_DEG = (60.0, 120.0)
 MAX_RANGE_M = 40_000.0    # más allá, ni el borde de Jezero sirve de referencia
@@ -393,9 +399,13 @@ class Sighting:
     rel_bearing: np.ndarray       # por observador, grados (+ = derecha)
     angular_deg: np.ndarray       # tamaño aparente por observador
     unknown: int = 0              # observadores sin dato de terreno en la línea de vista
+    distance_m: float = 0.0       # distancia mediana al punto que se mira
+    elev_deg: float = 0.0         # altura aparente mediana sobre los ojos
     score: float = 0.0
     fraction: float = 0.0
     stability: float = 0.0
+    prominence: float = 0.0       # tamaño aparente mediano cuando se ve (grados)
+    alike: list = field(default_factory=list)   # otros candidatos parecidos en la misma dirección
 
     @property
     def median_rel(self) -> float:
@@ -475,8 +485,10 @@ def sight(terrain: Terrain, lm: Landmark, olat: np.ndarray, olon: np.ndarray, oz
     angular = np.fmax(elev, width)
     seen = (vis == 1) & (angular >= MIN_ANGULAR_DEG)
     rel = wrap180(bearing(olat, olon, aim_lat, aim_lon) - heading)
+    ref = seen if seen.any() else np.ones_like(seen)
     return Sighting(lm, float(aim_lat[mid]), float(aim_lon[mid]), side, seen, rel, angular,
-                    unknown=int(np.sum(vis < 0)))
+                    unknown=int(np.sum(vis < 0)), distance_m=float(np.median(d_aim[ref])),
+                    elev_deg=float(np.median(elev[ref])))
 
 
 def _rim_band_max(terrain: Terrain, tlat, tlon, lm: Landmark) -> np.ndarray:
@@ -520,16 +532,46 @@ def score(s: Sighting) -> Sighting:
         return s
     spread = _circ_spread(s.rel_bearing[s.visible])
     s.stability = 1.0 if spread <= STABILITY_DEG else STABILITY_DEG / spread
-    prominence = float(np.median(s.angular_deg[s.visible]))
-    behind = abs(s.median_rel) > SIDE_DEG[1]
-    s.score = s.fraction * prominence * s.stability * (0.5 if behind else 1.0)
+    # Más de PROMINENCE_CAP_DEG ya es "enorme": un cráter grande y cerca no tiene que ganarle
+    # por ancho a una referencia al frente.
+    s.prominence = min(float(np.median(s.angular_deg[s.visible])), PROMINENCE_CAP_DEG)
+    s.score = s.fraction * s.prominence * s.stability * facing_weight(s.median_rel)
     return s
 
 
+def facing_weight(rel: float) -> float:
+    """Mirar hacia adelante es más fácil que girar la cabeza, y girarla que darse vuelta con el
+    casco puesto: un landmark al frente vale más que uno al costado, y ese más que uno atrás."""
+    a = abs(rel)
+    if a < SIDE_DEG[0]:
+        return 1.0
+    if a <= SIDE_DEG[1]:
+        return 0.7
+    return 0.4
+
+
+def look_alikes(s: Sighting, pool: Sequence[Sighting]) -> list[Sighting]:
+    """Candidatos que se confunden con `s`: se ven hacia el mismo lado (±ALIKE_DEG) y con un
+    tamaño aparente parecido (entre la mitad y el doble)."""
+    out = []
+    for o in pool:
+        if o is s or o.landmark.id == s.landmark.id:
+            continue
+        if abs(float(wrap180(o.median_rel - s.median_rel))) > ALIKE_DEG:
+            continue
+        if s.prominence > 0 and 0.5 <= o.prominence / s.prominence <= 2.0:
+            out.append(o)
+    return out
+
+
 def best_sighting(terrain: Terrain, landmarks: Sequence[Landmark], olat, olon, oz,
-                  heading: float) -> tuple[Sighting | None, bool]:
+                  heading: float, extra: Sequence[Sighting] = ()) -> tuple[Sighting | None, bool, list[Sighting]]:
     """(mejor avistaje, ¿se pudo evaluar algún candidato?). Sin terreno en las líneas de
-    vista no se puede afirmar que no se ve nada: no es lo mismo que "no hay referencia"."""
+    vista no se puede afirmar que no se ve nada: no es lo mismo que "no hay referencia".
+
+    También devuelve todos los que se ven en al menos MIN_VISIBLE del trecho (`pool`): un
+    candidato con parecidos hacia el mismo lado pierde puntaje, porque se puede confundir.
+    `extra` son avistajes ya armados (el mástil del hábitat) que compiten igual que el resto."""
     mid = len(olat) // 2
     d = np.array([float(haversine(olat[mid], olon[mid], lm.lat, lm.lon)) for lm in landmarks])
     radius = np.array([lm.radius_m for lm in landmarks])
@@ -539,8 +581,8 @@ def best_sighting(terrain: Terrain, landmarks: Sequence[Landmark], olat, olon, o
     rough = np.degrees(2 * np.arctan2(radius, np.maximum(d, 1.0)))
     rough[d < radius] = 90.0     # adentro del cráter: el borde rodea al caminante
     order = [int(i) for i in np.argsort(-rough) if ok[i]][:MAX_CANDIDATES]
-    best: Sighting | None = None
-    evaluated = False
+    evaluated = not order    # sin candidatos al alcance: no hay nada que ver, y eso sí se sabe
+    pool: list[Sighting] = []
     for i in order:
         s = sight(terrain, landmarks[i], olat, olon, oz, heading)
         if s is None:
@@ -548,25 +590,163 @@ def best_sighting(terrain: Terrain, landmarks: Sequence[Landmark], olat, olon, o
             continue
         evaluated |= s.unknown < s.visible.size
         score(s)
-        if s.fraction >= MIN_VISIBLE and (best is None or s.score > best.score):
-            best = s
-    return best, evaluated
+        if s.fraction >= MIN_VISIBLE:
+            pool.append(s)
+    for s in extra:
+        score(s)
+        evaluated = True
+        if s.fraction >= MIN_VISIBLE:
+            pool.append(s)
+    for s in pool:
+        s.alike = look_alikes(s, pool)
+        s.score /= 1 + len(s.alike)
+    best = max(pool, key=lambda s: s.score, default=None)
+    return best, evaluated, pool
+
+
+# ------------------------------------------------------------------ reloj, cuerpo y Sol
+
+
+def clock(rel_deg: float) -> int:
+    """Posición de reloj (1–12) de un rumbo relativo a la marcha: 12 = al frente, 3 = derecha."""
+    h = int(round(float(wrap180(rel_deg)) / 30.0)) % 12
+    return 12 if h == 0 else h
+
+
+def at_clock(rel_deg: float) -> str:
+    c = clock(rel_deg)
+    return "a la 1" if c == 1 else f"a las {c}"
+
+
+def body_side(rel_deg: float) -> str:
+    """Dónde queda algo respecto del cuerpo, para el Sol: "de frente", "sobre el hombro derecho"."""
+    a = float(wrap180(rel_deg))
+    hand = "derecho" if a > 0 else "izquierdo"
+    side = "derecha" if a > 0 else "izquierda"
+    if abs(a) <= 20:
+        return "de frente"
+    if abs(a) <= 70:
+        return f"adelante a la {side}"
+    if abs(a) <= 110:
+        return f"sobre el hombro {hand}"
+    if abs(a) <= 160:
+        return f"atrás a la {side}"
+    return "en la espalda"
+
+
+@dataclass(frozen=True)
+class SunPos:
+    az: float
+    el: float
+    src: dict
+
+
+SUN_MARS24 = {
+    "provenance": "MODELED", "mission": None, "instrument": "Mars24",
+    "source": "Posición del Sol con Mars24 (Allison & McEwen 2000): declinación por Ls y hora solar local",
+    "assumptions": ["Sin la pila de sombras de ese sol: aproximación analítica, sin efemérides SPICE",
+                    "Horizonte plano; el Sol se mueve unos 15° por hora: vale para la hora de paso"],
+}
+
+
+def sun_mars24(t: float, lat: float, lon: float) -> SunPos:
+    """Azimut (0 = norte, 90 = este) y elevación del Sol con Mars24, sin SPICE."""
+    from .mars_time import declination_deg, ls_deg, ltst_hours
+    d = math.radians(declination_deg(ls_deg(t)))
+    h = math.radians((ltst_hours(t, lon) - 12.0) * 15.0)
+    p = math.radians(lat)
+    el = math.asin(math.sin(p) * math.sin(d) + math.cos(p) * math.cos(d) * math.cos(h))
+    az = math.atan2(-math.cos(d) * math.sin(h), math.sin(d) * math.cos(p) - math.cos(d) * math.cos(h) * math.sin(p))
+    return SunPos(math.degrees(az) % 360.0, math.degrees(el), SUN_MARS24)
+
+
+def sun_from_stack(stack, t: float) -> SunPos | None:
+    """Azimut y elevación del Sol de la pila de sombras (SPICE, por hora), interpolados entre
+    las dos horas que rodean `t`. None si la pila no cubre `t` o no trae el azimut."""
+    if stack is None or not stack.covers(t):
+        return None
+    by_band = {int(b["band"]): b for b in stack.index.get("shadow_hourly", {}).get("bands", [])}
+    pts = sorted((bt, by_band.get(band)) for band, bt, _, _ in stack.bands)
+    pts = [(bt, b) for bt, b in pts if b is not None and b.get("sun_az_deg") is not None]
+    if len(pts) < 2 or not (pts[0][0] <= t <= pts[-1][0]):
+        return None
+    k = next(i for i in range(1, len(pts)) if pts[i][0] >= t)
+    (t0, b0), (t1, b1) = pts[k - 1], pts[k]
+    f = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+    az0, az1 = float(b0["sun_az_deg"]), float(b1["sun_az_deg"])
+    az = (az0 + float(wrap180(az1 - az0)) * f) % 360.0
+    el = float(b0["sun_el_deg"]) + (float(b1["sun_el_deg"]) - float(b0["sun_el_deg"])) * f
+    prov = stack.provenance()
+    src = {"provenance": prov["provenance"], "mission": "NASA NAIF", "instrument": "SPICE",
+           "source": f"Azimut y elevación del Sol de la pila {stack.tag} (pipeline/illumination.py), "
+                     "interpolados entre horas",
+           "assumptions": [a for a in prov.get("assumptions", []) if "sol" in a.lower() or "estación" in a.lower()]
+           + ["El Sol se mueve unos 15° por hora: vale para la hora de paso estimada"]}
+    return SunPos(az, el, src)
+
+
+def sun_at(stack, t: float | None, lat: float, lon: float) -> SunPos | None:
+    if t is None:
+        return None
+    return sun_from_stack(stack, t) or sun_mars24(t, lat, lon)
+
+
+def sun_usable(sun: SunPos | None) -> bool:
+    return sun is not None and SUN_MIN_EL <= sun.el <= SUN_MAX_EL
+
+
+def sun_phrase(sun: SunPos, heading: float) -> str:
+    """"el Sol sobre el hombro derecho y tu sombra hacia las 9"."""
+    rel = sun.az - heading
+    return f"el Sol {body_side(rel)} y tu sombra hacia {at_clock(rel + 180.0)[2:].strip()}"
+
+
+def sun_check(sun: SunPos | None, heading: float) -> dict | None:
+    if sun is None:
+        return None
+    if sun.el < SUN_MIN_EL:
+        return None    # de noche o rozando el horizonte: no hay nada que confirmar
+    if sun.el > SUN_MAX_EL:
+        text = (f"A esta hora el Sol está muy alto ({sun.el:.0f}°): la sombra es corta y no sirve "
+                "para orientarse.")
+    else:
+        text = f"Tenés {sun_phrase(sun, heading)}."
+    return {"kind": "sun", "text": text, **sun.src}
+
+
+# ------------------------------------------------------------------ hábitat
+
+HABITAT_SRC_BASE = {"provenance": "DERIVED", "mission": "MRO", "instrument": "HiRISE DTM",
+                    "source": "Línea de vista al mástil del hábitat (api/contact.py), desde el punto A marcado"}
+
+
+def habitat_sighting(contact, habitat: tuple[float, float], olat, olon, heading: float) -> Sighting | None:
+    """El mástil del hábitat como referencia: se ve desde donde hay línea de vista (la misma
+    que usa el límite de contacto por radio)."""
+    if contact is None:
+        return None
+    vis = contact.visible_latlon(list(zip(olat.tolist(), olon.tolist())))
+    seen = np.array([v is True for v in vis])
+    d = haversine(olat, olon, habitat[0], habitat[1])
+    if float(np.median(d)) < 100.0:
+        return None    # está al lado: no orienta
+    rel = wrap180(bearing(olat, olon, habitat[0], habitat[1]) - heading)
+    lm = Landmark("habitat", "Hábitat", "habitat", habitat[0], habitat[1], 5.0, "peak", "el mástil del hábitat")
+    # El mástil es chico pero inconfundible (y en la vuelta es justo adonde se va): pesa como un
+    # rasgo de HABITAT_WEIGHT_DEG de tamaño aparente.
+    return Sighting(lm, habitat[0], habitat[1], None, seen, rel, np.full(seen.shape, HABITAT_WEIGHT_DEG),
+                    unknown=sum(v is None for v in vis), distance_m=float(np.median(d)), elev_deg=0.0)
+
+
+def habitat_src(contact) -> dict:
+    from .contact import ASSUMPTIONS
+    src = {**HABITAT_SRC_BASE, "assumptions": ASSUMPTIONS}
+    if contact is not None:
+        src["resolution"] = contact.resolution
+    return src
 
 
 # ------------------------------------------------------------------ texto
-
-
-def _position(rel: float) -> tuple[str, str]:
-    """(kind, frase) según dónde queda el landmark respecto de la marcha."""
-    a = abs(rel)
-    hand = "derecha" if rel > 0 else "izquierda"
-    if a <= FRONT_DEG:
-        return "toward", "al frente" if a <= 5 else f"al frente, un poco a la {hand}"
-    if a < SIDE_DEG[0]:
-        return "toward", f"adelante a tu {hand}"
-    if a <= SIDE_DEG[1]:
-        return ("keep_right" if rel > 0 else "keep_left"), f"a tu {hand}"
-    return "away", f"atrás, a tu {hand}" if a < 165 else "a tu espalda"
 
 
 def _contract(prep: str, name: str) -> str:
@@ -582,30 +762,102 @@ def _target_name(s: Sighting) -> str:
     return s.landmark.label
 
 
-def direction_text(kind: str, s: Sighting, length_m: float, turn_deg: float = 0.0, at_m: float = 0.0) -> str:
-    """Una sola frase por trecho: el giro (si hay), hacia dónde mirar y cuánto caminar."""
-    name = _target_name(s)
-    dist = fmt_distance(length_m)
-    where = _position(s.median_rel)[1]
+def _position(rel: float) -> str:
+    """Tipo de indicación según dónde queda el landmark respecto de la marcha."""
+    a = abs(rel)
+    if a < SIDE_DEG[0]:
+        return "toward"
+    if a <= SIDE_DEG[1]:
+        return "keep_right" if rel > 0 else "keep_left"
+    return "away"
+
+
+def which_one(s: Sighting) -> str:
+    """Cómo distinguir `s` de sus parecidos hacia el mismo lado. "" si no tiene."""
+    if not s.alike:
+        return ""
+    group = [s, *s.alike]
+    n = len(group)
+    count = "los dos" if n == 2 else f"los {n}"
+    big = "más alto" if s.landmark.shape == "peak" or s.side else "más grande"
+    small = "más bajo" if s.landmark.shape == "peak" or s.side else "más chico"
+    others = [o.prominence for o in s.alike]
+    if s.prominence >= 1.25 * max(others):
+        return f", el {big} de {count} que se ven hacia ahí"
+    if s.prominence <= 0.8 * min(others):
+        return f", el {small} de {count} que se ven hacia ahí"
+    order = sorted(group, key=lambda o: o.median_rel)
+    if order[0] is s:
+        return f", el de más a la izquierda de {count} que se ven hacia ahí"
+    if order[-1] is s:
+        return f", el de más a la derecha de {count} que se ven hacia ahí"
+    return f", el del medio de {count} que se ven hacia ahí"
+
+
+def height_words(elev_deg: float) -> str:
+    """Altura aparente en medidas de mano con el brazo estirado (dedo ≈ 2°, puño ≈ 10°)."""
+    if elev_deg < 1.0:
+        return "apenas sobre el horizonte"
+    if elev_deg < 6.0:
+        n = max(1, round(elev_deg / 2.0))
+        return f"a {'un dedo' if n == 1 else f'{n} dedos'} sobre el horizonte"
+    n = max(1, round(elev_deg / 10.0))
+    return f"a {'un puño' if n == 1 else f'{n} puños'} sobre el horizonte"
+
+
+def look_check(s: Sighting, src: dict) -> dict:
+    lm = s.landmark
+    if lm.catalog == "habitat":
+        text = f"El mástil queda a unos {fmt_distance(s.distance_m)}."
+    elif lm.shape == "crater" and not s.side:
+        text = (f"Se ve como una loma baja (el borde) a unos {fmt_distance(s.distance_m)}, "
+                f"{height_words(s.elev_deg)}.")
+    else:
+        text = f"Queda a unos {fmt_distance(s.distance_m)}, {height_words(s.elev_deg)}."
+    return {"kind": "landmark", "text": text, **src,
+            "assumptions": list(src.get("assumptions", [])) + [
+                "Con el brazo estirado, un dedo tapa unos 2° y un puño unos 10°"]}
+
+
+def walk_words(length_m: float, minutes: float | None) -> str:
+    if minutes is None or not math.isfinite(minutes):
+        return fmt_distance(length_m)
+    m = max(1, int(round(minutes / 5.0) * 5)) if minutes >= 10 else max(1, round(minutes))
+    return f"unos {m} min ({fmt_distance(length_m)})"
+
+
+def turn_words(turn_deg: float) -> str:
+    """"Girá a la izquierda, hacia las 10": el reloj marca para dónde mirar después del giro."""
+    hand = "derecha" if turn_deg > 0 else "izquierda"
+    return f"Girá a la {hand}, hacia {at_clock(turn_deg)[2:].strip()}"
+
+
+def main_text(kind: str, s: Sighting, walk: str, turn_deg: float) -> str:
+    name = _target_name(s) + which_one(s)
+    where = at_clock(s.median_rel)
     if turn_deg:
+        # El landmark marca dónde termina el giro: no hace falta además la hora del giro.
         hand = "derecha" if turn_deg > 0 else "izquierda"
-        return (f"A los {fmt_distance(at_m)}, girá unos {abs(round(turn_deg / 5) * 5):.0f}° a la {hand} "
-                f"hasta tener {name} {where}, y seguí así {dist}.")
+        return f"Girá a la {hand} hasta tener {name} {where} y caminá {walk}."
     if kind == "toward":
-        return f"Caminá {dist} hacia {name}, que queda {where}."
+        return f"Caminá {walk} hacia {name}, {where}."
     if kind in ("keep_left", "keep_right"):
-        return f"Caminá {dist} con {name} {where}."
-    return f"Caminá {dist} dándole la espalda {_contract('a', name)}."
+        return f"Caminá {walk} con {name} {where}."
+    return f"Caminá {walk} con {name} {where}, a tu espalda."
 
 
-def fallback_text(length_m: float, heading: float, turn_deg: float, at_m: float, reason: str) -> str:
-    parts = []
-    if turn_deg:
-        hand = "derecha" if turn_deg > 0 else "izquierda"
-        parts.append(f"A los {fmt_distance(at_m)}, girá unos {abs(round(turn_deg / 5) * 5):.0f}° a la {hand}.")
-    parts.append(f"{reason}: mantené el rumbo {round(heading) % 360:03d}° ({compass(heading)}) "
-                 f"durante {fmt_distance(length_m)}.")
-    return " ".join(parts)
+def fallback_text(walk: str, heading: float, turn_deg: float, reason: str, sun: SunPos | None) -> tuple[str, str]:
+    """(kind, texto) del respaldo: por el Sol si sirve a esa hora, si no por rumbo."""
+    lead = f"{reason}. {turn_words(turn_deg)} y " if turn_deg else f"{reason}: "
+    if sun_usable(sun):
+        return "fallback_sun", f"{lead}caminá {walk} con {sun_phrase(sun, heading)}."
+    return ("fallback_bearing",
+            f"{lead}mantené el rumbo {round(heading) % 360:03d}° ({compass(heading)}) durante {walk}.")
+
+
+def until_text(s: Sighting, last: bool) -> str:
+    verb = "Llegaste" if last else "Pará"
+    return f"{verb} cuando {_target_name(s)} te quede {at_clock(s.median_rel)}."
 
 
 # ------------------------------------------------------------------ salida
@@ -613,6 +865,9 @@ def fallback_text(length_m: float, heading: float, turn_deg: float, at_m: float,
 
 GEOMETRY = {"provenance": "DERIVED", "mission": None, "instrument": "largo de la ruta",
             "source": f"Distancia sobre la ruta del planificador (esfera R = {MARS_RADIUS_M:.0f} m)"}
+DURATION = {"provenance": "MODELED", "mission": None, "instrument": "modelo del traje",
+            "source": "Duración del tramo (api/consumables.py) repartida por distancia",
+            "assumptions": ["Ritmo parejo dentro del tramo"]}
 
 
 def _mv(value, unit, src: dict) -> dict:
@@ -637,6 +892,7 @@ def visibility_source(terrain: Terrain | None, note: str | None = None) -> dict:
             "Se descuenta la curvatura de Marte",
             "El terreno promediado no ve obstáculos más chicos que su celda (rocas, dunas chicas)",
             f"Cuenta como visible si asoma al menos {MIN_ANGULAR_DEG}° sobre la línea de vista",
+            f"Un candidato con parecidos a ±{ALIKE_DEG:.0f}° pierde puntaje y se nombra frente a ellos",
         ],
     }
 
@@ -649,43 +905,139 @@ def _landmark_out(s: Sighting) -> dict:
     return out
 
 
-def leg_directions(latlon: Sequence[tuple[float, float]], terrain: Terrain | None,
-                   landmarks: Sequence[Landmark] | None, missing_reason: str | None = None) -> list[dict]:
-    """Indicaciones de un tramo, en orden. Siempre al menos una por trecho."""
+@dataclass
+class LegInput:
+    latlon: Sequence[tuple[float, float]]
+    t_start: float | None = None      # hora de salida del tramo (epoch s)
+    duration_s: float | None = None   # del modelo del traje
+
+
+@dataclass
+class Context:
+    terrain: Terrain | None = None
+    landmarks: Sequence[Landmark] | None = None
+    missing_reason: str | None = None
+    stack: object = None              # ShadowStack para el Sol (SPICE); sin ella, Mars24
+    contact: object = None            # ContactField: línea de vista al hábitat
+    habitat: tuple[float, float] | None = None
+
+
+def _stop_signal(ctx: Context, s: Stretch, latlon, main: Sighting | None, last: bool) -> dict | None:
+    """Qué se ve al costado justo al final del trecho: la señal para saber que hay que parar."""
+    cum = _cumdist(latlon)
+    at = max(s.start_m, s.start_m + s.length_m - 10.0)
+    lat = np.array([np.interp(at, cum, [p[0] for p in latlon])])
+    lon = np.array([np.interp(at, cum, [p[1] for p in latlon])])
+    best: Sighting | None = None
+    if ctx.terrain and ctx.landmarks:
+        oz = ctx.terrain.z(lat, lon) + EYE_M
+        if np.isfinite(oz).all():
+            d = np.array([float(haversine(lat[0], lon[0], lm.lat, lm.lon)) for lm in ctx.landmarks])
+            near = [ctx.landmarks[i] for i in np.argsort(d)[:MAX_CANDIDATES] if d[i] - ctx.landmarks[i].radius_m <= MAX_RANGE_M]
+            for lm in near:
+                sg = sight(ctx.terrain, lm, lat, lon, oz, s.heading)
+                if sg is None or not sg.visible[0]:
+                    continue
+                if not (STOP_SIDE_DEG[0] <= abs(float(sg.rel_bearing[0])) <= STOP_SIDE_DEG[1]):
+                    continue
+                score(sg)
+                if best is None or sg.prominence > best.prominence:
+                    best = sg
+    if best is None and ctx.habitat is not None:
+        hs = habitat_sighting(ctx.contact, ctx.habitat, lat, lon, s.heading)
+        if hs is not None and hs.visible[0] and STOP_SIDE_DEG[0] <= abs(float(hs.rel_bearing[0])) <= STOP_SIDE_DEG[1]:
+            score(hs)
+            best = hs
+    if best is None:
+        return None
+    return {"text": until_text(best, last), "landmark": _landmark_out(best)}
+
+
+def leg_directions(leg, terrain: Terrain | None = None, landmarks: Sequence[Landmark] | None = None,
+                   missing_reason: str | None = None, ctx: Context | None = None) -> list[dict]:
+    """Indicaciones de un tramo, en orden: una por trecho, con confirmaciones y señal de parada.
+
+    `leg` puede ser la polilínea sola (sin horario: no hay Sol ni duración) o un LegInput."""
+    if not isinstance(leg, LegInput):
+        leg = LegInput(leg)
+    ctx = ctx or Context(terrain, landmarks, missing_reason)
+    latlon = leg.latlon
     if len(latlon) < 2:
         return []
+    leg_len = float(_cumdist(latlon)[-1]) or 1.0
+    can_see = ctx.terrain is not None and bool(ctx.terrain) and ctx.landmarks is not None
+    vis_src = visibility_source(ctx.terrain, ctx.missing_reason)
+    hab_src = habitat_src(ctx.contact)
+    parts = stretches(latlon)
     out: list[dict] = []
-    can_see = terrain is not None and bool(terrain) and landmarks
-    vis_src = visibility_source(terrain, missing_reason)
-    for s in stretches(latlon):
+    warned_high_sun = False   # "el Sol está muy alto" se dice una vez por tramo, no en cada trecho
+    for k, s in enumerate(parts):
+        last = k == len(parts) - 1
+        olat, olon = observers(latlon, s)
+        mid = len(olat) // 2
+        minutes = None
+        t_mid = None
+        if leg.duration_s is not None:
+            minutes = leg.duration_s * s.length_m / leg_len / 60.0
+            if leg.t_start is not None:
+                t_mid = leg.t_start + leg.duration_s * (s.start_m + s.length_m / 2) / leg_len
+        sun = sun_at(ctx.stack, t_mid, float(olat[mid]), float(olon[mid]))
+        walk = walk_words(s.length_m, minutes)
+
+        extra = []
+        hab = None
+        if ctx.habitat is not None:
+            hab = habitat_sighting(ctx.contact, ctx.habitat, olat, olon, s.heading)
+            if hab is not None:
+                extra.append(hab)
         best, evaluated = None, False
-        if can_see:
-            olat, olon = observers(latlon, s)
-            oz = terrain.z(olat, olon) + EYE_M
+        if can_see or extra:
+            oz = ctx.terrain.z(olat, olon) + EYE_M if can_see else np.full(olat.shape, np.nan)
             if np.isfinite(oz).any():
-                best, evaluated = best_sighting(terrain, landmarks, olat, olon, oz, s.heading)
-        distance = _mv(round(s.length_m, 1), "m", GEOMETRY)
+                best, evaluated, _ = best_sighting(ctx.terrain, ctx.landmarks, olat, olon, oz, s.heading, extra)
+            elif extra:
+                best, evaluated, _ = best_sighting(ctx.terrain, [], olat, olon, oz, s.heading, extra)
+
+        item: dict = {
+            "distance": _mv(round(s.length_m, 1), "m", GEOMETRY),
+            "duration": _mv(None if minutes is None else round(minutes, 1), "min", DURATION),
+            "clock": None,
+            "relative_bearing_deg": None,
+        }
+        checks: list[dict] = []
         if best is None:
             if evaluated:
                 reason = "Sin referencia visible"
             elif can_see:
                 reason = "No se pudo evaluar qué se ve (falta terreno en este trecho)"
             else:
-                reason = missing_reason or "Sin landmarks evaluados"
-            out.append({
-                "kind": "fallback_bearing",
-                "text": fallback_text(s.length_m, s.heading, s.turn_deg, s.start_m, reason),
-                "landmark": None, "distance": distance, "relative_bearing_deg": None,
-                "visible_fraction": _mv(None, None, vis_src),
-            })
-            continue
-        kind = "turn" if s.turn_deg else _position(best.median_rel)[0]
-        frac = _mv(round(best.fraction, 2), None, vis_src)
-        out.append({
-            "kind": kind, "text": direction_text(kind, best, s.length_m, s.turn_deg, s.start_m),
-            "landmark": _landmark_out(best), "distance": distance,
-            "relative_bearing_deg": round(best.median_rel), "visible_fraction": frac,
-        })
+                reason = ctx.missing_reason or "Sin landmarks evaluados"
+            kind, text = fallback_text(walk, s.heading, s.turn_deg, reason, sun)
+            item.update(kind=kind, text=text, landmark=None, visible_fraction=_mv(None, None, vis_src))
+        else:
+            kind = "turn" if s.turn_deg else _position(best.median_rel)
+            src = hab_src if best.landmark.catalog == "habitat" else vis_src
+            item.update(kind=kind, text=main_text(kind, best, walk, s.turn_deg), landmark=_landmark_out(best),
+                        visible_fraction=_mv(round(best.fraction, 2), None, src),
+                        clock=clock(best.median_rel), relative_bearing_deg=round(best.median_rel))
+            checks.append(look_check(best, src))
+        if item["kind"] != "fallback_sun":
+            high = sun is not None and sun.el > SUN_MAX_EL
+            c = None if (high and warned_high_sun) else sun_check(sun, s.heading)
+            if c:
+                checks.append(c)
+                warned_high_sun |= high
+        # El hábitat como confirmación, si se ve y no es ya la referencia principal.
+        if hab is not None and hab.visible[mid] and not (best is not None and best.landmark.catalog == "habitat"):
+            checks.append({"kind": "habitat",
+                           "text": f"El mástil del hábitat se ve {at_clock(float(hab.rel_bearing[mid]))}"
+                                   f"{', a tu espalda' if clock(float(hab.rel_bearing[mid])) in (5, 6, 7) else ''}.",
+                           **hab_src})
+        item["checks"] = checks[:3]
+        item["until"] = _stop_signal(ctx, s, latlon, best, last)
+        if sun is not None:
+            item["sun"] = {"azimuth_deg": round(sun.az, 1), "elevation_deg": round(sun.el, 1), **sun.src}
+        out.append(item)
     return out
 
 
@@ -714,14 +1066,18 @@ def dem_path(data_dir: Path, site_id: str) -> Path | None:
 
 
 def route_directions(data_dir: Path, site_id: str, dtm_path: Path | None,
-                     legs_latlon: Sequence[Sequence[tuple[float, float]]],
+                     legs: Sequence, stack=None, contact=None, habitat: tuple[float, float] | None = None,
                      open_field: Callable[..., Field | None] = Field.from_raster) -> list[list[dict]]:
-    """Indicaciones de cada tramo de la ruta. Lee el terreno una vez para toda la ruta."""
+    """Indicaciones de cada tramo de la ruta. Lee el terreno una vez para toda la ruta.
+
+    `legs`: LegInput (o polilíneas solas). `stack` da el Sol de SPICE; sin ella, Mars24.
+    `contact` y `habitat` suman el mástil del hábitat como referencia."""
+    legs = [lg if isinstance(lg, LegInput) else LegInput(lg) for lg in legs]
     landmarks = load_landmarks(Path(data_dir) / "output" / site_id / "places.json")
     reason = None
     if landmarks is None:
         reason = "Sin catálogo de landmarks (falta places.json)"
-    pts = [p for leg in legs_latlon for p in leg]
+    pts = [p for leg in legs for p in leg.latlon]
     fields = []
     if pts and landmarks:
         if dtm_path is not None:
@@ -732,4 +1088,5 @@ def route_directions(data_dir: Path, site_id: str, dtm_path: Path | None,
     terrain = Terrain(fields) if fields else None
     if landmarks is not None and not terrain:
         reason = "Sin terreno para la línea de vista (falta el DTM y el DEM)"
-    return [leg_directions(leg, terrain, landmarks, reason) for leg in legs_latlon]
+    ctx = Context(terrain, landmarks, reason, stack, contact, habitat)
+    return [leg_directions(leg, ctx=ctx) for leg in legs]
