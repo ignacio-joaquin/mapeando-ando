@@ -6,6 +6,7 @@ import { Inspector } from "./components/Inspector";
 import { MarsClock } from "./components/MarsClock";
 import { ScaleBar } from "./components/ScaleBar";
 import { FixtureBanner } from "./components/FixtureBanner";
+import { CurrentConditions } from "./components/CurrentConditions";
 import { ProvenanceBadge } from "./components/ProvenanceBadge";
 import { MARS24 } from "./domain/provenance";
 import { RoutePlanner } from "./components/route/RoutePlanner";
@@ -189,6 +190,7 @@ export function App() {
           </aside>
 
           <main className="flex min-w-0 flex-1 flex-col">
+            {site ? <CurrentConditions siteId={site.id} /> : null}
             <div className="relative min-h-0 flex-1">
             {site ? (
               <>

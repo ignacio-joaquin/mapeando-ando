@@ -16,6 +16,16 @@ CONSUMABLES_FROM_DTM = {
 }
 
 
+def test_conditions_endpoint_returns_current_data(client):
+    res = client.get("/api/sites/jezero/conditions")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["site"] == "jezero"
+    assert len(body["observations"]) == 3
+    assert {obs["label"] for obs in body["observations"]} == {"temperature", "pressure", "dust_opacity"}
+    assert body["alerts"]
+
+
 class TestConsumables:
     def test_calcula_con_cotas_del_pedido(self, client, data_dir):
         res = client.post("/api/route/consumables", json=CONSUMABLES_WITH_ELEV)

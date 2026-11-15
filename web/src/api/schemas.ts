@@ -91,6 +91,31 @@ export const MeasuredValueSchema = z.object({
   assumptions: z.array(z.string()).readonly().optional(),
 });
 
+export const CurrentConditionsObservationSchema = z.object({
+  label: z.string(),
+  value: MeasuredValueSchema,
+  when: z.object({
+    utc: z.string(),
+    sol: z.number(),
+    ltst: z.string(),
+  }),
+});
+
+export const CurrentConditionsAlertSchema = z.object({
+  severity: z.enum(["bajo", "moderado", "alto"]),
+  summary: z.string(),
+  when: z.string(),
+});
+
+export const CurrentConditionsSchema = z.object({
+  site: z.string(),
+  observations: z.array(CurrentConditionsObservationSchema),
+  alerts: z.array(CurrentConditionsAlertSchema),
+  note: z.string().optional(),
+});
+
+export type CurrentConditionsData = z.infer<typeof CurrentConditionsSchema>;
+
 /**
  * /api/route — PROPUESTA de contrato (ticket del planificador). El modelo de
  * costo es decisión abierta del equipo (docs/context.md §5); esto fija solo

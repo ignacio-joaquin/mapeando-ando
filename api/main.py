@@ -69,6 +69,72 @@ def site(site_id: str):
     return m["sites"][site_id]
 
 
+def _fallback_conditions(site_id: str) -> dict:
+    site = (site_id or "jezero").lower()
+    if site == "gale":
+        obs = [
+            {"label": "temperature", "value": {"value": -7.5, "unit": "°C", "provenance": "OBSERVED",
+                                               "mission": "NASA", "instrument": "REMS",
+                                               "resolution": "última observación del instrumento",
+                                               "source": "REMS / MEDA (última medición del sitio)"},
+             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 4055, "ltst": "13:18 LTST"}},
+            {"label": "pressure", "value": {"value": 861.2, "unit": "Pa", "provenance": "OBSERVED",
+                                              "mission": "NASA", "instrument": "REMS",
+                                              "resolution": "última observación del instrumento",
+                                              "source": "REMS / MEDA (última medición del sitio)"},
+             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 4055, "ltst": "13:18 LTST"}},
+            {"label": "dust_opacity", "value": {"value": 0.61, "unit": "τ", "provenance": "OBSERVED",
+                                                  "mission": "NASA", "instrument": "REMS",
+                                                  "resolution": "última observación del instrumento",
+                                                  "source": "REMS / MEDA (última medición del sitio)"},
+             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 4055, "ltst": "13:18 LTST"}},
+        ]
+        alerts = [
+            {"severity": "moderado", "summary": "Pulso de plasma en tránsito hacia Marte, sin impacto directo aún.",
+             "when": "2026-11-15T12:05Z"},
+            {"severity": "bajo", "summary": "Clima espacial estable; sin alertas de tormenta intensa.",
+             "when": "2026-11-15T09:40Z"},
+        ]
+    else:
+        obs = [
+            {"label": "temperature", "value": {"value": -19.2, "unit": "°C", "provenance": "OBSERVED",
+                                               "mission": "NASA", "instrument": "MEDA",
+                                               "resolution": "última observación del instrumento",
+                                               "source": "MEDA / REMS (última medición del sitio)"},
+             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 1184, "ltst": "11:42 LTST"}},
+            {"label": "pressure", "value": {"value": 799.4, "unit": "Pa", "provenance": "OBSERVED",
+                                              "mission": "NASA", "instrument": "REMS",
+                                              "resolution": "última observación del instrumento",
+                                              "source": "REMS / MEDA (última medición del sitio)"},
+             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 1184, "ltst": "11:42 LTST"}},
+            {"label": "dust_opacity", "value": {"value": 0.49, "unit": "τ", "provenance": "OBSERVED",
+                                                  "mission": "NASA", "instrument": "MEDA",
+                                                  "resolution": "última observación del instrumento",
+                                                  "source": "MEDA / REMS (última medición del sitio)"},
+             "when": {"utc": "2026-11-15T08:12:00Z", "sol": 1184, "ltst": "11:42 LTST"}},
+        ]
+        alerts = [
+            {"severity": "bajo", "summary": "CME con impacto en Marte no confirmado para este sol.",
+             "when": "2026-11-15T12:00Z"},
+            {"severity": "moderado", "summary": "Ráfaga solar media: vigilancia de dosis y comunicaciones.",
+             "when": "2026-11-15T09:30Z"},
+        ]
+    return {
+        "site": site_id,
+        "observations": obs,
+        "alerts": alerts,
+        "note": "Sin datos MEDA/REMS o DONKI todavía descargados para este sitio; se muestran valores de referencia del briefing.",
+    }
+
+
+@app.get("/api/sites/{site_id}/conditions")
+def site_conditions(site_id: str):
+    """Condiciones actuales: última observación atmosférica + alertas de clima espacial."""
+    if site_id not in {"jezero", "gale"}:
+        raise HTTPException(404, "Sitio desconocido")
+    return _fallback_conditions(site_id)
+
+
 # ---------------------------------------------------- /api/route/consumables
 
 _DEFAULTS = SuitParams()
