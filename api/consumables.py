@@ -36,7 +36,7 @@ class SuitParams:
     Origen y estado de cada valor: docs/consumibles del traje.md (actualizarlo si cambia uno)."""
     astronaut_kg: float = 80.0          # astronauta sin traje
     suit_kg: float = 127.0              # EMU completo con PLSS (~280 lb)
-    cargo_kg: float = 0.0               # carga extra (herramientas, muestras); la usa M2
+    cargo_kg: float = 0.0               # carga extra (herramientas, muestras); la elige el usuario (MAP-50)
     gravity_g: float = 0.38             # 3.71 / 9.81 m/s²
     terrain_factor: float = 1.1         # η de Pandolf: regolito compacto ≈ camino de tierra
     o2_kj_per_l: float = 20.1           # equivalente energético del O2 (RQ ≈ 0.85)

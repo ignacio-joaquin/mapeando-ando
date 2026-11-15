@@ -108,6 +108,7 @@ Allton, J. H. (1989). *Catalog of Apollo Lunar Surface Geological Sampling Tools
 - Sube el O2, caminando y en cada parada: el término de carga de Pandolf no depende de la velocidad.
 - **No** cambia los tiempos: la velocidad es fija (0,8 m/s). Un modelo de velocidad que baje con la carga no está validado y no lo inventamos.
 - **No** cambia la batería: el PLSS gasta lo mismo haga lo que haga el astronauta.
+- El modo entrenamiento corre sin carga y devuelve la del usuario al salir (ver `docs/educacion.md`). La tira impresa dice con qué carga se calculó el O2.
 - Con L/W ≈ 1,6 ya con el traje solo, el término de carga probablemente sobreestima (ver [Límites](#límites)). El efecto de cada kilo extra puede estar inflado.
 
 ## Pendientes
