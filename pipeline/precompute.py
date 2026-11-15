@@ -87,6 +87,9 @@ MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DT
 TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None),
                 "survival-thermal": ("thermal", None),
                 "survival-hazard": ("hazard", "peligro"), "survival-dose": ("dose", "dosis")}
+# Capas que se teselan con vecino más cercano aunque no tengan rampa por clases: THEMIS es de
+# 100 m y se tiene que ver en sus cuadros, no interpolado.
+NEAREST_TILES = {"survival-thermal"}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
 
@@ -497,6 +500,14 @@ def main(argv=None):
             to_cog(work / f"{name}.tif", work / f"{name}_cog.tif")
             publish(work / f"{name}_cog.tif", out / f"{name}.tif")
         layers["survival-thermal"]["summary"] = summary
+        if summary["display_dn"]:
+            lo, hi = summary["display_dn"]
+            layers["survival-thermal"]["display"] = {
+                "stretch_dn": [lo, hi],
+                "note": f"Tiles estirados entre el p{thermal.DISPLAY_PERCENTILES[0]} ({lo:g} DN) y el "
+                        f"p{thermal.DISPLAY_PERCENTILES[1]} ({hi:g} DN) del sitio, solo para que se vea el "
+                        "contraste. themis_night.tif guarda los DN originales.",
+            }
         loose_layer = layers["terrain-loose-soil"]
         loose_layer.update(status="ok", params={**loose_layer["params"],
                                                 "threshold_dn": summary["loose_threshold_dn"]})
@@ -514,6 +525,8 @@ def main(argv=None):
             "ni inercia térmica en unidades.",
             "Más tibio de noche = roca o suelo compacto; más frío = arena, polvo o grano fino.",
             "Registro absoluto de ~150-275 m (1,5 a 2,75 píxeles de THEMIS).",
+            "En el mapa, brillo estirado entre el p2 y el p98 del sitio y en cuadros de 100 m "
+            "(vecino más cercano); el COG guarda los DN originales.",
         ],
     }
     layers["terrain-loose-soil"] = {
@@ -521,8 +534,9 @@ def main(argv=None):
         "nodata": thermal.LOOSE_NODATA, "classes": {0: "no", 1: "suelto probable"},
         "status": "error", "error": "no se calculó",
         "params": {"percentile": thermal.LOOSE_PERCENTILE, "min_contrast_dn": thermal.MIN_CONTRAST_DN},
-        "method": f"brillo nocturno en el {thermal.LOOSE_PERCENTILE} % más frío del sitio, solo si ese "
-                  f"percentil queda a ≥ {thermal.MIN_CONTRAST_DN} DN de la mediana",
+        "method": f"brillo nocturno en el {thermal.LOOSE_PERCENTILE} % más frío del sitio (percentiles "
+                  f"sobre los píxeles de THEMIS que tocan DTM; con empates puede marcar algo más), solo "
+                  f"si ese percentil queda a ≥ {thermal.MIN_CONTRAST_DN} DN de la mediana",
         "assumptions": [
             "Criterio relativo del equipo: marca lo más frío del sitio, no arena confirmada.",
             "El polvo fino y la arena se ven igual de fríos: los dos hunden el paso.",
@@ -537,6 +551,8 @@ def main(argv=None):
         if layers["relief-slope"].get("status") != "ok":
             raise RuntimeError("no hay pendiente: falló el paso relief-slope")
         loose = out / "loose_soil.tif" if layers["terrain-loose-soil"]["status"] == "ok" else None
+        summary = terrain_layers.compute(dtm, out / "slope.tif", work, loose_soil_path=loose)
+        # La procedencia se anota después del cálculo: si falla, la capa no dice que usó THEMIS.
         hazard = layers["survival-hazard"]
         if loose:
             hazard.update(mission="MRO + Mars Odyssey", instrument="HiRISE DTM + THEMIS",
@@ -545,7 +561,6 @@ def main(argv=None):
             hazard["params"]["loose_soil_class"] = terrain_layers.LOOSE_SOIL_CLASS
         else:
             index["warnings"].append("El peligro de terreno salió sin THEMIS: no distingue roca de arena suelta.")
-        summary = terrain_layers.compute(dtm, out / "slope.tif", work, loose_soil_path=loose)
         run(["gdal_translate", *COG_OPTS, "-co", "RESAMPLING=NEAREST",   # clases: sin promediar
              str(work / "hazard.tif"), str(work / "hazard_cog.tif")])
         publish(work / "hazard_cog.tif", out / "hazard.tif")
@@ -661,9 +676,14 @@ def main(argv=None):
             failed = True
             layer["tiles"] = {"status": "error", "error": "Faltan herramientas de GDAL: " + ", ".join(missing_tools)}
             continue
+        # THEMIS se tesela desde su versión estirada (solo visual), si la hay.
+        src = out / layer["file"]
+        if layer_id == "survival-thermal" and (work / "themis_display.tif").exists():
+            src = work / "themis_display.tif"
         try:
             layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(
-                out / layer["file"], out / folder, color=color, max_zoom=args.max_zoom)}
+                src, out / folder, color=color, max_zoom=args.max_zoom,
+                resampling="near" if layer_id in NEAREST_TILES else None)}
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló el teselado de {layer_id}: {e}")

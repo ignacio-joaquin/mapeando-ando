@@ -170,14 +170,17 @@ def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoo
 
     Los intermedios van a una carpeta oculta al lado de `outdir` y se borran al final.
     Una capa por clases (`color`) se remuestrea con el vecino más cercano: un promedio
-    mezcla las clases e inventa colores que no están en la leyenda.
+    mezcla las clases e inventa colores que no están en la leyenda. Con `resampling="near"`
+    también la reproyección va con vecino más cercano (un dato observado grueso, como
+    THEMIS a 100 m, se ve en sus cuadros y no como un degradé que nadie midió).
     """
     work = outdir.parent / f".{outdir.name}.work"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
         web = work / "web.tif"
-        a_crs_web(src, web, resampling="near" if color in RAMPAS_POR_CLASES else "bilinear", te=te)
+        cercano = color in RAMPAS_POR_CLASES or resampling == "near"
+        a_crs_web(src, web, resampling="near" if cercano else "bilinear", te=te)
         if color:
             coloreado = work / "color.tif"
             colorear(web, coloreado, color)

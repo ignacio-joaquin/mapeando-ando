@@ -242,6 +242,8 @@ def test_full_run(data_dir):
     thermal = index["layers"]["survival-thermal"]
     assert (thermal["mission"], thermal["instrument"], thermal["provenance"]) == ("Mars Odyssey", "THEMIS", "OBSERVED")
     assert thermal["tiles"]["status"] == "ok" and thermal["tiles"]["template"] == "thermal/{z}/{x}/{y}.png"
+    assert thermal["tiles"]["resampling"] == "near"                 # cuadros de 100 m, sin interpolar
+    assert thermal["display"]["stretch_dn"] == [40.0, 200.0]        # tiles estirados, solo visual
     assert index["layers"]["terrain-loose-soil"]["provenance"] == "MODELED"
     with rasterio.open(out / "themis_night.tif") as ds:
         assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"

@@ -176,9 +176,11 @@ export const LAYERS: readonly LayerSpec[] = [
         "Producto cualitativo de 8 bits: brillo relativo dentro del sitio, no una temperatura",
         "De noche la roca guarda el calor y se ve tibia; la arena y el polvo se enfrían rápido y se ven fríos",
         "Registro de ~150–275 m: no sirve para ubicar algo más chico que unos cientos de metros",
+        "En el mapa, brillo estirado entre el p2 y el p98 del sitio y en cuadros de 100 m, sin interpolar",
       ],
     },
-    // Gris del PNG: el DN de THEMIS tal cual (pipeline/thermal.py), sin colorear.
+    // Gris del PNG: el DN de THEMIS estirado entre el p2 y el p98 del sitio (pipeline/thermal.py),
+    // sin colorear. Los extremos de la leyenda son los extremos del estiramiento.
     legend: [
       { color: "#2a2a2a", label: "más frío de noche: arena, polvo, grano fino" },
       { color: "#e0e0e0", label: "más tibio de noche: roca o suelo compacto" },
