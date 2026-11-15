@@ -37,10 +37,14 @@ export function VerdictCard({ verdict, dataQuality }: Props) {
   const dataNotes: string[] = [];
   if (dataQuality) {
     const lightStatus = dataQuality.light_status ?? (dataQuality.light_evaluated ? "complete" : "missing");
-    if (lightStatus === "complete") {
-      if (dataQuality.light_source === "reused") dataNotes.push("estimado");
-    } else {
+    if (lightStatus === "missing") {
       dataNotes.push("luz sin evaluar");
+    } else {
+      if (dataQuality.light_source === "reused") {
+        dataNotes.push("luz estimada con otro sol de la misma estación");
+      } else if (lightStatus === "partial") {
+        dataNotes.push("luz parcialmente evaluada");
+      }
     }
     if (!dataQuality.contact_evaluated) dataNotes.push("contacto sin evaluar");
     const terrainStatus = dataQuality.terrain_status ?? (dataQuality.terrain_evaluated ? "complete" : "missing");

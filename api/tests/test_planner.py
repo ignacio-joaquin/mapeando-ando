@@ -180,7 +180,7 @@ class TestCuatroD:
         leg = body["legs"][0]
         assert set(path_rows(leg)) == {ROW}
         assert leg["shadow_fraction"]["value"] is None
-        assert body["data_quality"]["light_status"] == "complete"
+        assert body["data_quality"]["light_status"] == "partial"
         assert body["data_quality"]["light_source"] == "exact"
 
     def test_luz_reutilizada_por_estacion(self, client, site):

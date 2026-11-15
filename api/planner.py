@@ -876,14 +876,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     if stack is None:
         light_status = "missing"
         light_source = "missing"
-    elif slope_path is None or not terrain_planned or not any(terrain_planned):
-        light_status = "missing"
-        light_source = "missing"
-    elif all(terrain_planned):
-        light_status = "complete"
-        light_source = "reused" if stack.reuse is not None else "exact"
     else:
-        light_status = "partial"
+        partial_shadow = any(plan.planned and plan.shadow_fraction is None for plan in legs_plan)
+        light_status = "partial" if partial_shadow else "complete"
         light_source = "reused" if stack.reuse is not None else "exact"
     out = {
         "site": site_id,
