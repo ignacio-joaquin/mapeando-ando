@@ -79,7 +79,7 @@ El mapa de cobertura (`/data/output/<sitio>/coverage.geojson`, que escribe `prec
 | Topográfico | DTM HiRISE 1 m + recorte MOLA-HRSC 200 m (horizonte) | ✅ | ✅ | `raw/<sitio>/` |
 | Radiación | MSL RAD: 0.21 mGy/día, 0.64 mSv/día (Hassler 2014) | ✅ | ✅ | `reference/rad_surface_dose.json` |
 | Atmosférico | MEDA (Jezero) / REMS (Gale) | ✅ 17 GB | ✅ 7.4 GB | `raw/jezero/meda/`, `raw/gale/rems/` |
-| Térmico | THEMIS IR día/noche, 100 m, recortado (DN 8 bits, no calibrado → DERIVED) | ✅ | ✅ | `raw/<sitio>/themis/` |
+| Térmico | THEMIS IR día/noche, 100 m, recortado (DN 8 bits, cualitativo, no calibrado). El nocturno lo procesa `pipeline/thermal.py`: capa `survival-thermal` (OBSERVED) y suelo suelto probable (MODELED) | ✅ | ✅ | `raw/<sitio>/themis/` |
 | Espectral | CRISM MTRDR browse (resúmenes minerales) | ✅ 8 obs. | ✅ 29 obs. | `raw/<sitio>/crism/` + `index.json` |
 | Químico | SuperCam MOC + PIXL óxidos / ChemCam MOC + APXS | ✅ | ✅ (APXS: solo inventario) | `raw/jezero/{supercam,pixl}/`, `raw/gale/{chemcam,apxs}/` |
 | Geofísico | RIMFAX (Jezero) / campo magnético Langlais 2019 (Gale) | ✅ 1393 archivos, 1.1 GB | ✅ (coeficientes) | `raw/jezero/rimfax/`, `raw/common/magnetic_langlais2019/` |

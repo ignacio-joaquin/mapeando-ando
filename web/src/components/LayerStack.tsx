@@ -43,7 +43,14 @@ export function LayerStack() {
               const disabled = !state.available;
               const failed = pipelineError(terrain, spec.id);
               // La resolución medida por el pipeline le gana a la nominal.
-              const resolution = terrainLayer(terrain, spec.id)?.resolution ?? spec.source.resolution;
+              const piped = terrainLayer(terrain, spec.id);
+              const resolution = piped?.resolution ?? spec.source.resolution;
+              // El badge dice lo que usó la corrida (terrain.json), no lo que podría haber usado.
+              const source = {
+                ...spec.source,
+                mission: piped?.mission !== undefined ? piped.mission : spec.source.mission,
+                instrument: piped?.instrument !== undefined ? piped.instrument : spec.source.instrument,
+              };
               // Por debajo del zoom mínimo de sus tiles la capa no dibuja nada: sin este
               // aviso, prenderla de lejos (Gale abre en zoom ~9) parece no hacer nada.
               // Solo vectoriales: las raster van con tileSize 256 y MapLibre ya las dibuja
@@ -74,7 +81,7 @@ export function LayerStack() {
                         <span className="text-xs text-muted">({spec.unit})</span>
                       ) : null}
                     </label>
-                    <ProvenanceBadge source={spec.source} />
+                    <ProvenanceBadge source={source} />
                   </div>
 
                   {disabled ? (

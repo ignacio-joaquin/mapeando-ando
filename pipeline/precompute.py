@@ -9,10 +9,13 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
                     50 m en `contours_major`, el resto en `contours_minor`
   contours/         tiles vectoriales MVT de las curvas: de lejos solo las maestras
   roughness.tif     rugosidad σ (m) y terrain_factor.tif, η de Pandolf (pipeline/terrain_layers.py)
-  hazard.tif        peligro de terreno por clases: pendiente + rugosidad (pipeline/terrain_layers.py)
+  themis_night.tif  IR nocturno de THEMIS (Mars Odyssey) recortado al DTM, 100 m, y
+                    loose_soil.tif, suelo suelto probable (pipeline/thermal.py)
+  hazard.tif        peligro de terreno por clases: pendiente + rugosidad, reforzado con el suelo
+                    suelto de THEMIS si está (pipeline/terrain_layers.py)
   dose_rate.tif     dosis equivalente por celda, µSv/h, y skyview.tif (pipeline/radiation.py)
-  slope/, hillshade/, hazard/, dose/  tiles XYZ PNG para el mapa (pipeline/tiles.py), con los
-                    colores de la leyenda de web/src/map/layers.ts
+  slope/, hillshade/, thermal/, hazard/, dose/  tiles XYZ PNG para el mapa (pipeline/tiles.py),
+                    con los colores de la leyenda de web/src/map/layers.ts
   coverage.geojson  dónde hay DTM de 1 m de verdad (huella de los píxeles válidos), en lon/lat.
                     El planificador rechaza un destino que cae afuera.
   terrain.json      procedencia, parámetros, estado de cada capa y zoom/límites de los tiles.
@@ -59,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import radiation  # noqa: E402
 import terrain_layers  # noqa: E402
 import terrain_shadows as ts  # noqa: E402
+import thermal  # noqa: E402
 import tiles  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent          # carpeta raíz del repo
@@ -90,7 +94,11 @@ MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DT
 # Capas que se teselan para el mapa: carpeta de salida y rampa de color de tiles.py.
 # La carpeta es CONTRATO: el último segmento de la plantilla `tiles` de web/src/map/layers.ts.
 TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None),
+                "survival-thermal": ("thermal", None),
                 "survival-hazard": ("hazard", "peligro"), "survival-dose": ("dose", "dosis")}
+# Capas que se teselan con vecino más cercano aunque no tengan rampa por clases: THEMIS es de
+# 100 m y se tiene que ver en sus cuadros, no interpolado.
+NEAREST_TILES = {"survival-thermal"}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
 DEM_LAYER = "relief-dem"     # relieve 3D del mapa (tiles raster-dem, ver tiles.dem_a_tiles)
@@ -583,13 +591,76 @@ def main(argv=None):
                         "real del DTM puede quedar hasta una celda más afuera."],
     }
 
-    # 6. Peligro de terreno: pendiente + rugosidad (pipeline/terrain_layers.py). Usa la pendiente
-    #    del paso 2, así que si esa falló, este también. Deja además la rugosidad y el η de
-    #    Pandolf, que no van al mapa pero los usa el modelo de consumibles.
+    # 6. Térmico: IR nocturno de THEMIS (pipeline/thermal.py). La imagen va al mapa tal cual
+    #    (OBSERVED); el suelo suelto probable que sale de ella (MODELED) no se dibuja solo: entra
+    #    en el peligro de terreno del paso 7. Si falta THEMIS, el peligro sigue sin él.
+    def thermal_step():
+        summary = thermal.compute(site["id"], dtm, work, data_dir=DATA_DIR)
+        for name in ("themis_night", "loose_soil"):
+            to_cog(work / f"{name}.tif", work / f"{name}_cog.tif")
+            publish(work / f"{name}_cog.tif", out / f"{name}.tif")
+        layers["survival-thermal"]["summary"] = summary
+        if summary["display_dn"]:
+            lo, hi = summary["display_dn"]
+            layers["survival-thermal"]["display"] = {
+                "stretch_dn": [lo, hi],
+                "note": f"Tiles estirados entre el p{thermal.DISPLAY_PERCENTILES[0]} ({lo:g} DN) y el "
+                        f"p{thermal.DISPLAY_PERCENTILES[1]} ({hi:g} DN) del sitio, solo para que se vea el "
+                        "contraste. themis_night.tif guarda los DN originales.",
+            }
+        loose_layer = layers["terrain-loose-soil"]
+        loose_layer.update(status="ok", params={**loose_layer["params"],
+                                                "threshold_dn": summary["loose_threshold_dn"]})
+        loose_layer.pop("error", None)
+        index["warnings"].extend(summary["warnings"])
+
+    themis_source = {"mission": "Mars Odyssey", "instrument": "THEMIS", "resolution": "100 m/px"}
+    layers["survival-thermal"] = {
+        "file": "themis_night.tif", "unit": "DN (brillo relativo, 0-255)", "provenance": "OBSERVED",
+        **themis_source, "nodata": thermal.THEMIS_NODATA,
+        "source": "Mosaico controlado del IR nocturno de THEMIS (USGS Astrogeology / ASU), "
+                  "recortado al DTM sin remuestrear",
+        "assumptions": [
+            "Producto cualitativo de 8 bits: brillo relativo dentro del mosaico, no temperatura "
+            "ni inercia térmica en unidades.",
+            "Más tibio de noche = roca o suelo compacto; más frío = arena, polvo o grano fino.",
+            "Registro absoluto de ~150-275 m (1,5 a 2,75 píxeles de THEMIS).",
+            "En el mapa, brillo estirado entre el p2 y el p98 del sitio y en cuadros de 100 m "
+            "(vecino más cercano); el COG guarda los DN originales.",
+        ],
+    }
+    layers["terrain-loose-soil"] = {
+        "file": "loose_soil.tif", "unit": "clase", "provenance": "MODELED", **themis_source,
+        "nodata": thermal.LOOSE_NODATA, "classes": {0: "no", 1: "suelto probable"},
+        "status": "error", "error": "no se calculó",
+        "params": {"percentile": thermal.LOOSE_PERCENTILE, "min_contrast_dn": thermal.MIN_CONTRAST_DN},
+        "method": f"brillo nocturno en el {thermal.LOOSE_PERCENTILE} % más frío del sitio (percentiles "
+                  f"sobre los píxeles de THEMIS que tocan DTM; con empates puede marcar algo más), solo "
+                  f"si ese percentil queda a ≥ {thermal.MIN_CONTRAST_DN} DN de la mediana",
+        "assumptions": [
+            "Criterio relativo del equipo: marca lo más frío del sitio, no arena confirmada.",
+            "El polvo fino y la arena se ven igual de fríos: los dos hunden el paso.",
+        ],
+    }
+
+    # 7. Peligro de terreno: pendiente + rugosidad (pipeline/terrain_layers.py), con el suelo
+    #    suelto de THEMIS si el paso 6 salió bien. Usa la pendiente del paso 2, así que si esa
+    #    falló, este también. Deja además la rugosidad y el η de Pandolf, que no van al mapa
+    #    pero los usa el modelo de consumibles.
     def hazard_step():
         if layers["relief-slope"].get("status") != "ok":
             raise RuntimeError("no hay pendiente: falló el paso relief-slope")
-        summary = terrain_layers.compute(dtm, out / "slope.tif", work)
+        loose = out / "loose_soil.tif" if layers["terrain-loose-soil"]["status"] == "ok" else None
+        summary = terrain_layers.compute(dtm, out / "slope.tif", work, loose_soil_path=loose)
+        # La procedencia se anota después del cálculo: si falla, la capa no dice que usó THEMIS.
+        hazard = layers["survival-hazard"]
+        if loose:
+            hazard.update(mission="MRO + Mars Odyssey", instrument="HiRISE DTM + THEMIS",
+                          method=hazard["method"] + " Con THEMIS: 'bajo' con suelo suelto probable pasa a 'medio'.",
+                          assumptions=hazard_assumptions_themis)
+            hazard["params"]["loose_soil_class"] = terrain_layers.LOOSE_SOIL_CLASS
+        else:
+            index["warnings"].append("El peligro de terreno salió sin THEMIS: no distingue roca de arena suelta.")
         run(["gdal_translate", *COG_OPTS, "-co", "RESAMPLING=NEAREST",   # clases: sin promediar
              str(work / "hazard.tif"), str(work / "hazard_cog.tif")])
         publish(work / "hazard_cog.tif", out / "hazard.tif")
@@ -605,11 +676,16 @@ def main(argv=None):
         layers["survival-hazard"]["summary"] = summary
 
     hazard_source = {"provenance": "DERIVED", "mission": "MRO", "instrument": "HiRISE DTM"}
-    hazard_assumptions = [
+    hazard_common = [
         "Solo geometría del terreno: no incluye gravedad, traje ni carga.",
         "Un DTM de 1 m no ve rocas sueltas de menos de ~3-5 m: la rugosidad marca zonas con bloques, no rocas.",
-        "No distingue roca firme de arena suelta.",
         "El corte de rugosidad más bajo (σ 0,15 m) está cerca de la precisión vertical del DTM (decenas de cm).",
+    ]
+    hazard_assumptions = [*hazard_common, "No distingue roca firme de arena suelta."]
+    hazard_assumptions_themis = [
+        *hazard_common,
+        "Suelo suelto según THEMIS de noche (100 m, criterio relativo del equipo): solo sube 'bajo' "
+        "a 'medio', nunca bloquea. Se ve en cuadros de 100 m.",
     ]
     layers["survival-hazard"] = {
         "file": "hazard.tif", "unit": "clase", **hazard_source, "nodata": terrain_layers.HAZARD_NODATA,
@@ -633,7 +709,7 @@ def main(argv=None):
         "note": "Solo rugosidad: en Pandolf la pendiente entra aparte como el grado G de la ruta.",
     }
 
-    # 7. Dosis de radiación (pipeline/radiation.py): base de RAD × sky-view, normalizada en
+    # 8. Dosis de radiación (pipeline/radiation.py): base de RAD × sky-view, normalizada en
     #    Bradbury Landing. Grilla de 100 m. Si falta el DEM de 200 m sigue, con un aviso.
     def dose_step():
         summary = radiation.compute(site["id"], dtm, work, data_dir=DATA_DIR)
@@ -674,16 +750,23 @@ def main(argv=None):
     failed = False
     for layer_id, fn in (("relief-slope", slope_step), ("relief-hillshade", hillshade_step),
                          ("relief-contours", contours_step), ("coverage", coverage_step),
+                         ("survival-thermal", thermal_step),
                          ("survival-hazard", hazard_step), ("survival-dose", dose_step)):
         try:
             fn()
             layers[layer_id]["status"] = "ok"
+        except thermal.MissingInput as e:
+            # THEMIS es un dato opcional: si no se bajó, la capa queda sin hacer y lo dice,
+            # pero la corrida no falla (el peligro sigue, solo con la geometría).
+            log(f"Sin {layer_id}: {e}")
+            layers[layer_id].update(status="error", error=str(e)[:400])
+            index["warnings"].append(f"Sin capa térmica: {e}")
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
-    # 8. Tiles para el mapa: PNG desde los COG que quedaron bien, MVT para las curvas.
+    # 9. Tiles para el mapa: PNG desde los COG que quedaron bien, MVT para las curvas.
     missing_tools = tiles.faltan_herramientas()
     for layer_id, (folder, color) in TILED_LAYERS.items():
         layer = layers[layer_id]
@@ -693,9 +776,15 @@ def main(argv=None):
             failed = True
             layer["tiles"] = {"status": "error", "error": "Faltan herramientas de GDAL: " + ", ".join(missing_tools)}
             continue
+        # THEMIS se tesela desde su versión estirada (solo visual), si la hay.
+        src = out / layer["file"]
+        if layer_id == "survival-thermal" and (work / "themis_display.tif").exists():
+            src = work / "themis_display.tif"
+        near = layer_id in NEAREST_TILES
         try:
             layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(
-                out / layer["file"], out / folder, color=color, max_zoom=args.max_zoom)}
+                src, out / folder, color=color, max_zoom=args.max_zoom,
+                resampling="near" if near else None, warp="near" if near else None)}
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló el teselado de {layer_id}: {e}")
@@ -722,7 +811,7 @@ def main(argv=None):
         elif (out / "contours.geojson").exists():
             contours.update(file="contours.geojson", assumptions=CONTOUR_GEOJSON_ASSUMPTIONS)
 
-    # 8b. Relieve 3D: tiles raster-dem desde el DTM. Solo para levantar el mapa; los
+    # 9b. Relieve 3D: tiles raster-dem desde el DTM. Solo para levantar el mapa; los
     #     valores que ve el usuario siguen saliendo del COG. Sin dtm.tif no hay nada.
     if not args.no_tiles:
         dem_px_m = math.radians(tiles.grados_por_pixel(tiles.DEM_MAX_ZOOM)) * ts.MARS_RADIUS_M
@@ -745,7 +834,7 @@ def main(argv=None):
             log(f"Falló el teselado de {DEM_LAYER}: {e}")
             layers[DEM_LAYER].update(status="error", error=str(e)[:400])
 
-    # 9. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    # 10. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
     #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
     #    25 cm/px y teselarla compite por disco y CPU con la descarga.

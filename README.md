@@ -122,7 +122,7 @@ Si usás otro asistente (Cursor, Copilot, Gemini CLI), apuntalo a `docs/context.
 
 ## Peligro de terreno: pendiente + rugosidad (`pipeline/terrain_layers.py`)
 
-Responde "¿piso caminable, pendiente fuerte o bloques?". Es un paso más de `precompute.py`: queda registrado en `terrain.json` como `survival-hazard` y se tesela en `hazard/`. También se puede correr suelto sobre una carpeta que ya tenga `dtm.tif` y `slope.tif`: `python pipeline/terrain_layers.py --dir /data/prueba/jezero`.
+Responde "¿piso caminable, pendiente fuerte, bloques o arena?". Es un paso más de `precompute.py`: queda registrado en `terrain.json` como `survival-hazard` y se tesela en `hazard/`. También se puede correr suelto sobre una carpeta que ya tenga `dtm.tif` y `slope.tif`: `python pipeline/terrain_layers.py --dir /data/prueba/jezero`.
 
 | Archivo | Unidad | Qué es |
 |---|---|---|
@@ -130,7 +130,7 @@ Responde "¿piso caminable, pendiente fuerte o bloques?". Es un paso más de `pr
 | `roughness.tif` | m | Rugosidad σ: desvío estándar, en 5 m, del residuo del DTM tras restar el promedio en 15 m |
 | `terrain_factor.tif` | η | Factor de terreno de Pandolf, **solo por rugosidad** (para el modelo de consumibles) |
 
-**Clase = la peor entre la de pendiente y la de rugosidad.** Los cortes usan "≥", como `api/planner.py`: una celda de 25° justos es no transitable en el mapa y en el planificador.
+**Clase = la peor entre la de pendiente y la de rugosidad.** Los cortes usan "≥", como `api/planner.py`: una celda de 25° justos es no transitable en el mapa y en el planificador. **Con THEMIS** (sección siguiente), el terreno "bajo" con suelo suelto probable pasa a "medio"; nunca más que eso.
 
 | Clase | Pendiente | Rugosidad σ | ≈ escalones de |
 |---|---|---|---|
@@ -158,9 +158,34 @@ Interpolación lineal de σ entre anclas, saturada en los extremos: σ ≤ 0,05 
 ### Limitaciones
 - Precisión vertical de un DTM HiRISE de 1 m: decenas de cm (Sutton et al., 2022, *Remote Sensing* 14:2403). El corte más bajo (σ 0,15 m) queda cerca de ese ruido. En un recorte de 2×2 km del piso de Jezero, el 99 % del terreno tiene σ < 0,16 m.
 - Un DTM de 1 m no ve rocas sueltas de menos de ~3–5 m: la rugosidad marca zonas con bloques, no rocas individuales.
-- No distingue roca firme de arena suelta (η 2,1 en Pandolf).
+- Roca firme vs. arena suelta (η 2,1 en Pandolf): solo con THEMIS, a 100 m y con un criterio relativo. Sin THEMIS no lo distingue.
 - En Gale, la parte del DEM rellenada sin detalle da rugosidad 0: ahí la clase sale solo de la pendiente.
 - Cerca de los huecos del DTM, las ventanas usan solo las celdas válidas.
+
+## Capa térmica y suelo suelto (`pipeline/thermal.py`) · Mars Odyssey THEMIS · OBSERVED
+
+Responde "¿esto es roca o arena?". Paso de `precompute.py`, antes del peligro de terreno. Lee el recorte del IR nocturno de THEMIS que deja `pipeline/fetch_science.sh` en `raw/<sitio>/themis/*_nir_crop.tif`. Suelto: `python pipeline/thermal.py --site jezero --dir /data/prueba/jezero` (después, `terrain_layers.py --dir` en la misma carpeta lo usa solo).
+
+| Archivo | Procedencia | Qué es |
+|---|---|---|
+| `themis_night.tif` (+ tiles `thermal/`) | OBSERVED | IR nocturno de THEMIS recortado al DTM, **sin remuestrear** (100 m, DN 0–255, 0 sin dato). Capa `survival-thermal` del mapa, en gris |
+| `themis_display.tif` (intermedio, no se publica) | — | El mismo recorte con el brillo estirado entre el p2 y el p98 del sitio, para teselar: sin estirar, Jezero se ve todo gris medio. Los tiles van con vecino más cercano: se ven los cuadros de 100 m |
+| `loose_soil.tif` | MODELED | 1 suelto probable · 0 no · 255 sin dato. `terrain-loose-soil` en `terrain.json`; no se dibuja, entra en el peligro |
+
+**Por qué de noche.** De día manda el sol: las laderas que lo miran se calientan más. De noche cada material devuelve el calor que juntó, a su ritmo: la roca y el suelo compacto (inercia térmica alta) se enfrían despacio y se ven tibios; la arena, el polvo y el grano fino (inercia térmica baja) se enfrían rápido y se ven fríos. Es el dato clásico para separar arena suelta de roca (Fergason et al., 2006, *JGR* 111:E12004).
+
+**Qué es y qué no es el dato.** Los mosaicos controlados de USGS son productos **cualitativos de 8 bits**: los valores se estiraron y mezclaron entre imágenes para que no haya costuras. El brillo es relativo dentro del sitio, no una temperatura ni una inercia térmica en unidades. Por eso: el badge del mapa es OBSERVED (es la imagen de THEMIS, sin tocar) y todo lo que se deduce de ella es MODELED.
+
+**Criterio de suelo suelto.** El 20 % más frío del sitio (`LOOSE_PERCENTILE`; con DN enteros, los empates en el umbral pueden marcar algo más). Los percentiles salen solo de los píxeles de THEMIS que tocan DTM válido: el recorte es un rectángulo y el DTM no (en Gale es una franja diagonal). Se marca solo si ese percentil queda a ≥ 5 DN de la mediana (`MIN_CONTRAST_DN`): un percentil siempre encuentra "el 20 % más frío", aunque el sitio sea parejo, y en ese caso no se marca nada y se avisa. Los dos números son del equipo.
+
+**Cómo refuerza el peligro.** Cada píxel de 1 m toma el valor del píxel de THEMIS que lo contiene (vecino más cercano: no se promedia ni se inventa). Donde la clase geométrica es "bajo" y el suelo es suelto probable, pasa a "medio": arena en un llano no te frena en seco, pero hunde el paso y cansa. **Nunca sube a "alto" ni a "no transitable"**: un dato de 100 m con registro de ±150–275 m alcanza para avisar, no para bloquear. `summary.pct_raised_by_loose_soil` dice cuánto subió. Si falta THEMIS, la capa térmica queda en `error`, el peligro sale solo con la geometría y la corrida no falla.
+
+### Limitaciones
+- 100 m por píxel y registro absoluto de ~150–275 m (1,5 a 2,75 píxeles): los megaripples chicos no se ven, y en el mapa el refuerzo aparece en cuadros de 100 m.
+- Criterio relativo: en un sitio todo arenoso marca solo lo más arenoso.
+- Polvo fino y arena se ven igual de fríos; para caminar, los dos son "suelo blando".
+- Una alternativa con unidades (J m⁻² K⁻¹ s⁻½) es el mosaico **cuantitativo** de inercia térmica de THEMIS (Fergason, USGS); no está bajado.
+- El A\* todavía no usa `loose_soil.tif` (factor `loose_soil`, inactivo en `docs/seguridad.md`).
 
 ## Dosis de radiación por celda (`pipeline/radiation.py`) · MSL RAD · MODELED
 

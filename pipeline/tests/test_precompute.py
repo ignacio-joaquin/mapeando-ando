@@ -34,6 +34,24 @@ def write_dtm(path, z, px=1.0):
     return path
 
 
+def write_themis(data_dir, site="jezero", cold_cols=11, n=30, cold=40, warm=200, nodata_block=False):
+    """Recorte sintético del IR nocturno de THEMIS (uint8, 100 m/px, 0 = sin dato), como el que
+    deja fetch_science.sh. Empieza 1 km al oeste y al norte del DTM de write_dtm: la columna 10
+    cubre los primeros 100 m del DTM. Las columnas < `cold_cols` son frías (arena), el resto tibias."""
+    dn = np.full((n, n), warm, dtype="uint8")
+    dn[:, :cold_cols] = cold
+    if nodata_block:
+        dn[:, 12:] = 0
+    path = data_dir / "raw" / site / "themis" / "mc13_syrtis_major_nir_crop.tif"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(path, "w", driver="GTiff", width=n, height=n, count=1, dtype="uint8",
+                       crs=EQC_LATTS0, nodata=0,
+                       transform=from_origin(R * math.radians(LON0) - 1000, R * math.radians(LAT0) + 1000,
+                                             100, 100)) as ds:
+        ds.write(dn, 1)
+    return path
+
+
 def row_lat_deg(rows, px=1.0):
     return LAT0 - np.degrees((rows + 0.5) * px / R)
 
@@ -204,6 +222,7 @@ def crater(n=300, px=1.0):
 @needs_gdal
 def test_full_run(data_dir):
     write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_themis(data_dir)
     write_manifest(data_dir, "ok")
     assert precompute.main(["--site", "jezero"]) == 0
 
@@ -211,19 +230,37 @@ def test_full_run(data_dir):
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
         ["contours", "contours.gpkg", "coverage.geojson", "dem", "dose", "dose_rate.tif", "dtm.tif",
-         "hazard", "hazard.tif", "hillshade", "hillshade.tif", "roughness.tif", "skyview.tif", "slope",
-         "slope.tif", "terrain.json", "terrain_factor.tif"]
+         "hazard", "hazard.tif", "hillshade", "hillshade.tif", "loose_soil.tif", "roughness.tif",
+         "skyview.tif", "slope", "slope.tif", "terrain.json", "terrain_factor.tif", "themis_night.tif",
+         "thermal"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
         "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
+        "survival-thermal": "ok", "terrain-loose-soil": "ok",
         "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok",
         "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "relief-dem": "ok"}
+
+    # Capa térmica: badge "Mars Odyssey THEMIS · OBSERVED", el dato sin tocar y en COG.
+    thermal = index["layers"]["survival-thermal"]
+    assert (thermal["mission"], thermal["instrument"], thermal["provenance"]) == ("Mars Odyssey", "THEMIS", "OBSERVED")
+    assert thermal["tiles"]["status"] == "ok" and thermal["tiles"]["template"] == "thermal/{z}/{x}/{y}.png"
+    assert thermal["tiles"]["resampling"] == "near"                 # cuadros de 100 m, sin interpolar
+    assert thermal["display"]["stretch_dn"] == [40.0, 200.0]        # tiles estirados, solo visual
+    assert index["layers"]["terrain-loose-soil"]["provenance"] == "MODELED"
+    with rasterio.open(out / "themis_night.tif") as ds:
+        assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"
+        assert set(np.unique(ds.read(1))) <= {40, 200}       # los DN originales, sin remuestrear
+    # El peligro suma THEMIS: llanura plana fuera del cráter, oeste frío -> medio, este tibio -> bajo.
+    with rasterio.open(out / "hazard.tif") as ds:
+        hz = ds.read(1)
+    assert hz[280, 40] == 1 and hz[280, 260] == 0
     dose = index["layers"]["survival-dose"]
     assert dose["unit"] == "µSv/h" and dose["display"] == "budget" and dose["instrument"] == "RAD"
     assert any("dem200" in w for w in index["warnings"])  # el test no tiene DEM de 200 m: sigue con aviso
     hazard = index["layers"]["survival-hazard"]
-    assert hazard["provenance"] == "DERIVED" and hazard["instrument"] == "HiRISE DTM" and hazard["resolution"]
+    assert hazard["provenance"] == "DERIVED" and hazard["instrument"] == "HiRISE DTM + THEMIS" and hazard["resolution"]
+    assert hazard["summary"]["pct_raised_by_loose_soil"] > 0
     assert "error" not in index["layers"]["terrain-roughness"]
     assert index["radius_m"] == R
     assert index["source"]["mission"] == "MRO HiRISE"
@@ -437,6 +474,25 @@ def test_solo_tiles_curvas_que_anda_cambia_a_tiles(data_dir, monkeypatch):
 
 def test_solo_tiles_curvas_sin_corrida_previa(data_dir):
     assert precompute.main(["--site", "jezero", "--solo-tiles-curvas"]) == 2
+
+
+@needs_gdal
+def test_without_themis_hazard_still_runs(data_dir):
+    """Sin el recorte de THEMIS: la capa térmica queda en error con el motivo, el peligro sale
+    solo con la geometría (y lo avisa) y la corrida no cuenta como fallida."""
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_manifest(data_dir, "ok")
+    assert precompute.main(["--site", "jezero"]) == 0
+    out = data_dir / "output" / "jezero"
+    index = json.loads((out / "terrain.json").read_text())
+    assert index["layers"]["survival-thermal"]["status"] == "error"
+    assert "fetch_science.sh" in index["layers"]["survival-thermal"]["error"]
+    assert "tiles" not in index["layers"]["survival-thermal"]
+    hazard = index["layers"]["survival-hazard"]
+    assert hazard["status"] == "ok" and hazard["instrument"] == "HiRISE DTM"
+    assert "No distingue roca firme de arena suelta." in hazard["assumptions"]
+    assert any("sin THEMIS" in w for w in index["warnings"])
+    assert not (out / "thermal").exists()
 
 
 @needs_gdal

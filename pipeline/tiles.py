@@ -26,13 +26,13 @@ Los vectores (curvas de nivel) también van teselados, en tiles vectoriales MVT
 navegador lo baja entero aunque la capa esté apagada; los tiles se piden solo
 donde se mira, al zoom que se mira y con la capa prendida.
 
-precompute.py lo llama para la pendiente, el sombreado y el peligro (raster_a_tiles) y
-para las curvas (vector_a_tiles), y anota el zoom y los límites en terrain.json; a mano
+precompute.py lo llama para la pendiente, el sombreado, el térmico de THEMIS, el peligro
+y la dosis (raster_a_tiles) y para las curvas (vector_a_tiles), y anota el zoom y los límites en terrain.json; a mano
 sirve para cualquier otro raster o vectorial.
 
 El nombre de la carpeta de salida es CONTRATO: tiene que ser el último segmento
 de la plantilla `tiles` de web/src/map/layers.ts (`hillshade/`, `slope/`,
-`hazard/`, `ortho/`, `dem/`, `contours/`). Si no coincide, el frontend no la encuentra y la
+`thermal/`, `hazard/`, `dose/`, `ortho/`, `dem/`, `contours/`). Si no coincide, el frontend no la encuentra y la
 capa queda deshabilitada.
 
 Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr,
@@ -236,7 +236,8 @@ def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoo
     Los intermedios van a una carpeta oculta al lado de `outdir` y se borran al final.
     Una capa por clases (`color`) se remuestrea con el vecino más cercano: un promedio
     mezcla las clases e inventa colores que no están en la leyenda. `warp` es el remuestreo
-    al reproyectar: "near" para máscaras (0/1), donde un bilineal inventaría 0,5. Sin `warp`,
+    al reproyectar: "near" para máscaras (0/1), donde un bilineal inventaría 0,5, y para un dato observado
+    grueso (THEMIS a 100 m), que se tiene que ver en sus cuadros y no como un degradé. Sin `warp`,
     "near" para las rampas de RAMPAS_POR_CLASES y bilineal para el resto.
     """
     work = outdir.parent / f".{outdir.name}.work"
@@ -486,7 +487,7 @@ def main():
     ap.add_argument("--min-zoom", type=int, default=10, dest="min_zoom",
                     help="zoom desde el que entran los vectoriales")
     ap.add_argument("--color", choices=sorted(RAMPAS),
-                    help="rampa de color por rangos (pendiente o peligro)")
+                    help="rampa de color por rangos (pendiente, peligro o dosis)")
     ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
                     help="tope de zoom; por defecto lo deduce gdal2tiles del tamaño del pixel")
     ap.add_argument("--dem", action="store_true",
