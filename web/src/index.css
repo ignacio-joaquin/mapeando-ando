@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #161412;
+  --color-panel: #1e1b18;
+  --color-line: #3a342e;
+  --color-fg: #ece6de;
+  --color-muted: #a39a8f;
+  --color-rust: #e07a4a;
+  --color-ok: #5fbf86;
+  --color-warn: #e0a24a;
+  --color-alert: #e0564a;
+
+  /* Procedencia del dato (badge). A propósito fuera de la paleta de
+     seguridad ok/warn/alert: el tipo de fuente no es un nivel de riesgo. */
+  --color-observed: #6cb8e0;
+  --color-derived: #a993e8;
+  --color-modeled: #e08cc0;
+  --color-assumed: #c8c0b4;
+}
+
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Impresión: solo la tira (CuffChecklist), en blanco y negro, una página. */
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+@media print {
+  html, body, #root { height: auto; }
+  body { background: #fff; color: #000; }
+}

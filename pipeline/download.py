@@ -3,7 +3,7 @@
 
 - Reanuda descargas cortadas (curl -C -).
 - Encuentra archivos por patrón en un índice HTTP cuando no hay URL fija.
-- Recorta el DEM global de 200 m por sitio con lectura remota (GDAL /vsicurl/).
+- Recorta los DEM globales (MOLA-HRSC 200 m, MOLA 463 m) por sitio con lectura remota (GDAL /vsicurl/).
 - Verifica que cada raster abra (gdalinfo) y escribe DATA_DIR/manifest.json.
 - Opcional: sincroniza DATA_DIR/raw con S3 (--sync, usa la variable BUCKET).
 
@@ -81,8 +81,10 @@ def gdal_summary(path):
     }
 
 
-def crop_dem200(site, common, dest):
-    d = common["dem200"]
+GLOBAL_DEMS = ("dem200", "dem463")
+
+
+def crop_global_dem(site, d, dest):
     R = d["radius_m"]
     pad = site.get("horizon_pad_deg", 1.0)
     b = site["bbox"]
@@ -101,7 +103,7 @@ def crop_dem200(site, common, dest):
     ty = (lambda lat: lat) if in_degrees else (lambda lat: R * math.radians(lat))
     ulx, uly = tx(b["lon_min"] - pad), ty(b["lat_max"] + pad)
     lrx, lry = tx(b["lon_max"] + pad), ty(b["lat_min"] - pad)
-    log(f"crop dem200 for {site['id']} pad={pad}deg ({'deg' if in_degrees else 'm'}) -> {dest}")
+    log(f"crop {dest.stem} for {site['id']} pad={pad}deg ({'deg' if in_degrees else 'm'}) -> {dest}")
     cmd = ["gdal_translate", "-q", "-projwin", str(ulx), str(uly), str(lrx), str(lry),
            "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", src, str(dest)]
     rc = subprocess.run(cmd, env=env).returncode
@@ -148,16 +150,18 @@ def main():
         outdir = RAW / s["id"]
         for f in s["files"]:
             process_file(f, outdir, files)
-        dem = {"key": "dem200_crop", "kind": "raster", "desc": common["dem200"]["desc"], "mission": "MGS MOLA + MEX HRSC"}
-        dest = outdir / "dem200_crop.tif"
-        try:
-            crop_dem200(s, common, dest)
-            dem.update(path=str(dest.relative_to(DATA_DIR)), bytes=dest.stat().st_size, status="ok",
-                       raster=gdal_summary(dest))
-        except Exception as e:
-            dem.update(status="error", error=str(e)[:400])
-            log(f"ERROR dem200 {s['id']}: {e}")
-        files.append(dem)
+        for k in GLOBAL_DEMS:
+            dem = {"key": f"{k}_crop", "kind": "raster", "desc": common[k]["desc"],
+                   "mission": "MGS MOLA + MEX HRSC" if k == "dem200" else "MGS MOLA"}
+            dest = outdir / f"{k}_crop.tif"
+            try:
+                crop_global_dem(s, common[k], dest)
+                dem.update(path=str(dest.relative_to(DATA_DIR)), bytes=dest.stat().st_size, status="ok",
+                           raster=gdal_summary(dest))
+            except Exception as e:
+                dem.update(status="error", error=str(e)[:400])
+                log(f"ERROR {k} {s['id']}: {e}")
+            files.append(dem)
         manifest["sites"][s["id"]] = {"name": s["name"], "rover": s["rover"], "center": s["center"],
                                       "bbox": s["bbox"], "notes": s.get("notes"), "files": files}
 
