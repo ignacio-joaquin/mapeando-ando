@@ -76,6 +76,7 @@ El mapa no abre un COG. Después de `illumination.py`, este script tesela cada h
 - **Borde del DTM.** Cerca del borde, el terreno de afuera se ve con la resolución de la grilla lejana (250 m) y del DEM de 200 m.
 - **Huecos del DTM.** Los píxeles sin dato no proyectan sombra dentro del DTM, pero se completan con el DEM de 200 m en la escala lejana.
 - **Sol, no luz.** La máscara dice si hay sol directo. No calcula la luz difusa del cielo ni la que rebota en el terreno.
+- **Un sol sirve para su estación.** Si la salida cae en un sol que no se corrió, la API y el mapa usan la pila de otro sol con |ΔLs| ≤ 2°, de cualquier año marciano, a la misma hora solar local (ver `docs/context.md` §4). A la misma hora solar local, el Sol cambia solo con su declinación: ±2° de Ls son, como mucho, 0,9° de declinación, y la diferencia se nota más en las sombras con el Sol bajo. Ese resultado va `MODELED`. Por eso el `index.json` guarda `sol.ls_deg` y `site_center`.
 
 ## Costo medido (server de 2 vCPU y 7 GB)
 

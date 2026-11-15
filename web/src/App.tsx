@@ -13,11 +13,20 @@ import { ElevationProfile } from "./components/route/ElevationProfile";
 import { CuffChecklist } from "./components/route/CuffChecklist";
 import { SunTimeline } from "./components/SunTimeline";
 import { SHADOWS_LAYER_ID } from "./map/sun";
-import { fetchHealth, fetchSites, fetchTerrain, tileExists, usingFixtures } from "./api/client";
+import {
+  fetchCoverage,
+  fetchHealth,
+  fetchPlaces,
+  fetchSites,
+  fetchTerrain,
+  tileExists,
+  usingFixtures,
+} from "./api/client";
 import type { Health, SiteSummary, TerrainIndex } from "./api/schemas";
 import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
-import { useFreshRoute } from "./state/plan";
+import { useFreshRoute, usePlan } from "./state/plan";
+import { insideCoverage } from "./map/coverage";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
@@ -27,6 +36,8 @@ export function App() {
   const setActiveSite = useStore((s) => s.setActiveSite);
   const setAvailability = useStore((s) => s.setAvailability);
   const setTerrain = useStore((s) => s.setTerrain);
+  const setPlaces = useStore((s) => s.setPlaces);
+  const setCoverage = useStore((s) => s.setCoverage);
   const view = useStore((s) => s.view);
   const plan = useFreshRoute();
 
@@ -39,6 +50,18 @@ export function App() {
         if (!alive) return;
         setHealth(h);
         setSites(s.sites);
+        // Un enlace con un ?site= que no existe: se cae al primero y la travesía
+        // del enlace se descarta (sus puntos eran de otro lugar).
+        const wanted = useStore.getState().activeSiteId;
+        const first = s.sites[0];
+        if (first && !s.sites.some((x) => x.id === wanted)) {
+          useStore.getState().setActiveSite(first.id);
+          const plan = usePlan.getState();
+          // switchSite (no clear) deja el plan ya en el sitio nuevo: si no, el efecto de
+          // RoutePlanner lo ve distinto, resetea la travesía y borra este aviso.
+          plan.switchSite(first.id);
+          plan.setNotice(`El enlace pedía el sitio "${wanted}", que no existe: abrí ${first.name}.`);
+        }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       }
@@ -55,6 +78,7 @@ export function App() {
     let alive = true;
     setTerrain(null);
     setAvailability({});
+    setCoverage(null);
     void (async () => {
       let terrain: TerrainIndex | null = null;
       try {
@@ -62,6 +86,17 @@ export function App() {
         if (alive) setTerrain(terrain);
       } catch (e) {
         if (alive) setTerrain(null, e instanceof Error ? e.message : String(e));
+      }
+      // La huella del DTM, para rechazar destinos sin terreno de 1 m. Si falla,
+      // el planificador sigue y avisa que no pudo verificar.
+      try {
+        const coverage = await fetchCoverage(activeSiteId, terrain);
+        if (alive) {
+          setCoverage(coverage);
+          if (coverage) usePlan.getState().dropOutside((p) => insideCoverage(coverage, p));
+        }
+      } catch {
+        if (alive) setCoverage(null);
       }
       const available: Record<string, boolean> = {};
       for (const spec of LAYERS) {
@@ -79,7 +114,23 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [activeSiteId, setAvailability, setTerrain]);
+  }, [activeSiteId, setAvailability, setTerrain, setCoverage]);
+
+  // Lugares del sitio para el buscador de destinos (pipeline/places.py).
+  useEffect(() => {
+    let alive = true;
+    setPlaces(null);
+    fetchPlaces(activeSiteId)
+      .then((p) => {
+        if (alive) setPlaces(p);
+      })
+      .catch((e: unknown) => {
+        if (alive) setPlaces(null, e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeSiteId, setPlaces]);
 
   const site = sites.find((s) => s.id === activeSiteId) ?? sites[0];
 

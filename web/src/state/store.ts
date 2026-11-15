@@ -5,7 +5,8 @@
 import { create } from "zustand";
 import { LAYERS } from "../map/layers";
 import type { LatLon } from "../mars/geo";
-import type { TerrainIndex } from "../api/schemas";
+import type { Coverage, PlacesIndex, TerrainIndex } from "../api/schemas";
+import { siteFromUrl } from "./share";
 
 export interface LayerState {
   readonly visible: boolean;
@@ -21,6 +22,12 @@ interface AppState {
   readonly terrain: TerrainIndex | null;
   /** terrain.json existe pero no se pudo leer (contrato roto, error del server). */
   readonly terrainError: string | null;
+  /** places.json del sitio activo (pipeline/places.py). null = todavía no hay. */
+  readonly places: PlacesIndex | null;
+  /** places.json existe pero no se pudo leer. */
+  readonly placesError: string | null;
+  /** Huella del DTM de 1 m (coverage.geojson). null = todavía no hay: no se puede verificar. */
+  readonly coverage: Coverage | null;
   /** Posición del cursor sobre el mapa. */
   readonly cursor: LatLon | null;
   /** Punto fijado con un clic (inspector). */
@@ -36,6 +43,8 @@ interface AppState {
   /** Disponibilidad de todas las capas de una vez (al cambiar de sitio o de índice). */
   setAvailability: (available: Readonly<Record<string, boolean>>) => void;
   setTerrain: (terrain: TerrainIndex | null, error?: string | null) => void;
+  setPlaces: (places: PlacesIndex | null, error?: string | null) => void;
+  setCoverage: (coverage: Coverage | null) => void;
   setCursor: (p: LatLon | null) => void;
   setPicked: (p: LatLon | null) => void;
   setInstant: (d: Date) => void;
@@ -47,10 +56,14 @@ const initialLayers: Record<string, LayerState> = Object.fromEntries(
 );
 
 export const useStore = create<AppState>((set) => ({
-  activeSiteId: "jezero",
+  // Un enlace compartido elige el sitio; si no, Jezero.
+  activeSiteId: siteFromUrl() ?? "jezero",
   layers: initialLayers,
   terrain: null,
   terrainError: null,
+  places: null,
+  placesError: null,
+  coverage: null,
   cursor: null,
   picked: null,
   instant: new Date(),
@@ -81,6 +94,8 @@ export const useStore = create<AppState>((set) => ({
       ),
     })),
   setTerrain: (terrain, error = null) => set({ terrain, terrainError: error }),
+  setPlaces: (places, error = null) => set({ places, placesError: error }),
+  setCoverage: (coverage) => set({ coverage }),
   setCursor: (cursor) => set({ cursor }),
   setPicked: (picked) => set({ picked }),
   setInstant: (instant) => set({ instant }),
