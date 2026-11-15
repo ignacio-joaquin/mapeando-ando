@@ -50,6 +50,18 @@ const SLOPE_LEGEND: readonly LegendStop[] = SLOPE_CLASSES.map((c) => ({
   label: c.label,
 }));
 
+/**
+ * Clases de peligro de terreno (hazard.tif, pipeline/terrain_layers.py): manda la peor
+ * entre la pendiente (mismos cortes que SLOPE_CLASSES) y la rugosidad σ. Los colores son
+ * los de RAMPAS["peligro"] en pipeline/tiles.py: si cambian acá, cambian allá.
+ */
+const HAZARD_LEGEND: readonly LegendStop[] = [
+  { color: "#2f7d4f", label: "bajo: < 10° y σ < 0,15 m" },
+  { color: "#e0a24a", label: "medio: 10–20° o σ 0,15–0,25 m" },
+  { color: "#e07a4a", label: "alto: 20–25° o σ 0,25–0,40 m" },
+  { color: "#e0564a", label: "no transitable: ≥ 25° o σ ≥ 0,40 m" },
+];
+
 export interface LayerSpec {
   readonly id: string;
   readonly label: string;
@@ -149,24 +161,27 @@ export const LAYERS: readonly LayerSpec[] = [
   },
   {
     id: "survival-hazard",
-    label: "Peligro",
+    label: "Peligro de terreno",
     group: "supervivencia",
-    unit: "índice 0–1",
+    unit: "clase",
     source: {
-      provenance: "MODELED",
+      provenance: "DERIVED",
       mission: "MRO",
-      instrument: "HiRISE DTM + ortho",
+      instrument: "HiRISE DTM",
       resolution: "1 m/px",
-      source: "Índice del pipeline a partir del DTM y la ortoimagen HiRISE",
-      assumptions: ["Índice propio, no una medición: combina terreno con pesos definidos por el equipo"],
+      source: "Calculado por el pipeline desde el DTM HiRISE (USGS)",
+      assumptions: [
+        "Manda la peor entre la clase de pendiente y la de rugosidad σ (desvío estándar del relieve en 5 m, sin la tendencia)",
+        "σ ≈ la mitad de la altura de los escalones: σ 0,40 m ≈ bloques de ~1 m",
+        "Un DTM de 1 m no ve rocas sueltas de menos de ~3–5 m",
+        "No distingue roca firme de arena suelta",
+        "Solo geometría del terreno: no incluye gravedad, traje ni carga",
+      ],
     },
-    legend: [
-      { color: "#2f7d4f", label: "bajo" },
-      { color: "#e0a24a", label: "medio" },
-      { color: "#e0564a", label: "alto" },
-    ],
+    legend: HAZARD_LEGEND,
     tiles: "/tiles/{site}/hazard/{z}/{x}/{y}.png",
     kind: "raster",
+    categorical: true,
     defaultVisible: false,
   },
   {

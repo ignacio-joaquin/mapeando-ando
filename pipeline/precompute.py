@@ -6,8 +6,10 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   slope.tif         pendiente en grados, COG, misma grilla que el DTM
   hillshade.tif     sombreado del relieve, COG (solo visual)
   contours.geojson  curvas de nivel en lon/lat planetocéntricas (este positivo)
-  slope/, hillshade/  tiles XYZ PNG para el mapa (pipeline/tiles.py); la pendiente, con los
-                    colores de la leyenda de web/src/map/layers.ts
+  roughness.tif     rugosidad σ (m) y terrain_factor.tif, η de Pandolf (pipeline/terrain_layers.py)
+  hazard.tif        peligro de terreno por clases: pendiente + rugosidad (pipeline/terrain_layers.py)
+  slope/, hillshade/, hazard/  tiles XYZ PNG para el mapa (pipeline/tiles.py); pendiente y
+                    peligro, con los colores de la leyenda de web/src/map/layers.ts
   terrain.json      procedencia, parámetros, estado de cada capa y zoom/límites de los tiles.
                     El frontend lo lee para saber qué capa puede prender.
 
@@ -44,6 +46,7 @@ from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import terrain_layers  # noqa: E402
 import terrain_shadows as ts  # noqa: E402
 import tiles  # noqa: E402
 
@@ -69,7 +72,8 @@ MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DT
 
 # Capas que se teselan para el mapa: carpeta de salida y rampa de color de tiles.py.
 # La carpeta es CONTRATO: el último segmento de la plantilla `tiles` de web/src/map/layers.ts.
-TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None)}
+TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None),
+                "survival-hazard": ("hazard", "peligro")}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
 
@@ -407,10 +411,60 @@ def main(argv=None):
         "crs": MARS_LONGLAT,
     }
 
+    # 5. Peligro de terreno: pendiente + rugosidad (pipeline/terrain_layers.py). Usa la pendiente
+    #    del paso 2, así que si esa falló, este también. Deja además la rugosidad y el η de
+    #    Pandolf, que no van al mapa pero los usa el modelo de consumibles.
+    def hazard_step():
+        if layers["relief-slope"].get("status") != "ok":
+            raise RuntimeError("no hay pendiente: falló el paso relief-slope")
+        summary = terrain_layers.compute(dtm, out / "slope.tif", work)
+        run(["gdal_translate", *COG_OPTS, "-co", "RESAMPLING=NEAREST",   # clases: sin promediar
+             str(work / "hazard.tif"), str(work / "hazard_cog.tif")])
+        publish(work / "hazard_cog.tif", out / "hazard.tif")
+        for name, layer_id in (("roughness", "terrain-roughness"), ("terrain_factor", "terrain-factor")):
+            to_cog(work / f"{name}.tif", work / f"{name}_cog.tif")
+            publish(work / f"{name}_cog.tif", out / f"{name}.tif")
+            layers[layer_id]["status"] = "ok"
+            layers[layer_id].pop("error", None)
+        resolution = layers["relief-slope"].get("resolution")
+        for layer_id in ("survival-hazard", "terrain-roughness", "terrain-factor"):
+            if resolution:
+                layers[layer_id]["resolution"] = resolution
+        layers["survival-hazard"]["summary"] = summary
+
+    hazard_source = {"provenance": "DERIVED", "mission": "MRO", "instrument": "HiRISE DTM"}
+    hazard_assumptions = [
+        "Solo geometría del terreno: no incluye gravedad, traje ni carga.",
+        "Un DTM de 1 m no ve rocas sueltas de menos de ~3-5 m: la rugosidad marca zonas con bloques, no rocas.",
+        "No distingue roca firme de arena suelta.",
+        "El corte de rugosidad más bajo (σ 0,15 m) está cerca de la precisión vertical del DTM (decenas de cm).",
+    ]
+    layers["survival-hazard"] = {
+        "file": "hazard.tif", "unit": "clase", **hazard_source, "nodata": terrain_layers.HAZARD_NODATA,
+        "classes": dict(enumerate(terrain_layers.HAZARD_CLASSES)),
+        "params": {"slope_cuts_deg": list(terrain_layers.SLOPE_CUTS_DEG),
+                   "roughness_cuts_m": list(terrain_layers.ROUGHNESS_CUTS_M),
+                   "trend_window_m": terrain_layers.TREND_WINDOW_M,
+                   "roughness_window_m": terrain_layers.ROUGHNESS_WINDOW_M},
+        "method": "max(clase de pendiente, clase de rugosidad σ); cortes con ≥, como api/planner.py.",
+        "assumptions": hazard_assumptions,
+    }
+    layers["terrain-roughness"] = {
+        "file": "roughness.tif", "unit": "m", **hazard_source, "status": "error", "error": "no se calculó",
+        "method": f"desvío estándar en {terrain_layers.ROUGHNESS_WINDOW_M} m del residuo del DTM "
+                  f"tras restar el promedio en {terrain_layers.TREND_WINDOW_M} m",
+    }
+    layers["terrain-factor"] = {
+        "file": "terrain_factor.tif", "unit": "η (Pandolf)", **hazard_source, "status": "error",
+        "error": "no se calculó",
+        "params": {"anchors_m": list(terrain_layers.ETA_ANCHORS_M), "values": list(terrain_layers.ETA_VALUES)},
+        "note": "Solo rugosidad: en Pandolf la pendiente entra aparte como el grado G de la ruta.",
+    }
+
     # Un paso que falla no frena a los demás: el terrain.json dice qué quedó y qué no.
     failed = False
     for layer_id, fn in (("relief-slope", slope_step), ("relief-hillshade", hillshade_step),
-                         ("relief-contours", contours_step)):
+                         ("relief-contours", contours_step), ("survival-hazard", hazard_step)):
         try:
             fn()
             layers[layer_id]["status"] = "ok"
@@ -419,7 +473,7 @@ def main(argv=None):
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
-    # 5. Tiles PNG para el mapa, desde los COG que quedaron bien.
+    # 6. Tiles PNG para el mapa, desde los COG que quedaron bien.
     missing_tools = tiles.faltan_herramientas()
     for layer_id, (folder, color) in TILED_LAYERS.items():
         layer = layers[layer_id]
@@ -437,7 +491,7 @@ def main(argv=None):
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
 
-    # 6. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    # 7. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
     #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
     #    25 cm/px y teselarla compite por disco y CPU con la descarga.
