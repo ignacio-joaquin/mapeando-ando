@@ -18,7 +18,7 @@
 import { marsBearingDeg, marsDistanceM } from "../mars/geo";
 import { ltstAt } from "../mars/mars24";
 import { LOCAL_GEOMETRY, type SourceInfo } from "../domain/provenance";
-import { formatBearing, formatDistanceM } from "../components/route/format";
+import { formatBearing, formatDistanceM, formatMinutes } from "../components/route/format";
 import type {
   Direction,
   LimitingFactor,
@@ -88,14 +88,22 @@ const MISSING_LANDMARKS: SourceInfo = {
 };
 
 /** Respaldo por rumbo de un tramo recto: lo único honesto sin landmarks. */
-function bearingFallback(distanceM: number, bearingDeg: number): Direction {
+/**
+ * Respaldo por rumbo de un tramo recto: lo único honesto sin landmarks. Sin Sol
+ * ni confirmaciones: el ejemplo no calcula la posición del Sol ni la línea de vista.
+ */
+function bearingFallback(distanceM: number, bearingDeg: number, minutes: number): Direction {
   return {
     kind: "fallback_bearing",
-    text: `Ejemplo sin landmarks evaluados: mantené el rumbo ${formatBearing(bearingDeg)} durante ${formatDistanceM(distanceM)}.`,
+    text: `Ejemplo sin landmarks evaluados: mantené el rumbo ${formatBearing(bearingDeg)} durante unos ${formatMinutes(minutes)} (${formatDistanceM(distanceM)}).`,
     landmark: null,
     distance: mv(distanceM, "m", STRAIGHT_LINE),
+    duration: mv(minutes, "min", EXAMPLE),
+    clock: null,
     relative_bearing_deg: null,
     visible_fraction: mv(null, null, MISSING_LANDMARKS),
+    checks: [],
+    until: null,
   };
 }
 
@@ -130,7 +138,7 @@ export function exampleRoute(req: RouteRequest): RouteResponse {
       duration: mv((d / 1000 / p.walkSpeedKmh) * 60, "min", EXAMPLE),
       bearing: mv(bearing, "°", STRAIGHT_LINE),
       max_slope: mv(null, "°", MISSING_DTM),
-      directions: [bearingFallback(d, bearing)],
+      directions: [bearingFallback(d, bearing, (d / 1000 / p.walkSpeedKmh) * 60)],
     });
   }
 

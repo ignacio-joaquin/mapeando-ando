@@ -16,7 +16,7 @@ import {
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Point, Polygon } from "geojson";
-import { midpoint, routeSteps, type RouteStep } from "../domain/steps";
+import { midpoint, offset, pathLength, routeSteps, type RouteStep } from "../domain/steps";
 import { geojsonUrl, LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
 import { readyTiles, terrainLayer, usesGeojson } from "./terrain";
 import { TERRAIN_TRUE_SCALE } from "../mars/constants";
@@ -24,6 +24,7 @@ import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
 import { useStore } from "../state/store";
+import { useEdu, type CameraSpec } from "../state/edu";
 import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
@@ -37,6 +38,28 @@ import {
   placesToGeoJSON,
 } from "./places";
 import { PlacePopup } from "../components/route/PlacePopup";
+import { CONTACT_COLOR, CONTACT_HATCH_IMAGE, CONTACT_LAYER_ID, useContact } from "../state/contact";
+
+/** Las tres capas de la zona de contacto: se prenden y apagan juntas. */
+const CONTACT_LAYERS = [CONTACT_LAYER_ID, `${CONTACT_LAYER_ID}-hatch`, `${CONTACT_LAYER_ID}-edge`] as const;
+
+/** Rayado diagonal de 8 px para "sin contacto", generado acá: no hay sprites en el estilo. */
+function hatchImage(hex: string): { width: number; height: number; data: Uint8Array } {
+  const size = 8;
+  const data = new Uint8Array(size * size * 4);
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if ((x + y) % size > 1) continue; // línea de 2 px a 45°
+      const k = (y * size + x) * 4;
+      data[k] = r ?? 0;
+      data[k + 1] = g ?? 0;
+      data[k + 2] = b ?? 0;
+      data[k + 3] = 255;
+    }
+  }
+  return { width: size, height: size, data };
+}
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -109,6 +132,10 @@ interface Props {
 export function MapView({ center, bbox, siteId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  /** Reencuadre pendiente de la lección: si el mapa cambia de tamaño justo después del vuelo. */
+  const refitRef = useRef<(() => void) | null>(null);
+  /** Sube en cada vuelo: solo el último traba el zoom al terminar (uno cortado, no). */
+  const flyGenRef = useRef(0);
   const setCursor = useStore((s) => s.setCursor);
   const setPicked = useStore((s) => s.setPicked);
   const layers = useStore((s) => s.layers);
@@ -177,7 +204,15 @@ export function MapView({ center, bbox, siteId }: Props) {
       else plan.addPoint(p);
     });
     mapRef.current = map;
+    // El contenedor cambia de tamaño sin que cambie la ventana (el modo
+    // entrenamiento esconde paneles): sin esto el mapa queda estirado.
+    const resize = new ResizeObserver(() => {
+      map.resize();
+      refitRef.current?.();
+    });
+    resize.observe(containerRef.current);
     return () => {
+      resize.disconnect();
       map.remove();
       mapRef.current = null;
       readyRef.current = false;
@@ -226,6 +261,60 @@ export function MapView({ center, bbox, siteId }: Props) {
     };
     whenReady(map, apply);
   }, [bbox]);
+
+  // 2a. Cámara del modo entrenamiento (src/edu/): vuela a donde pide el paso y,
+  //     si la lección lo pide, traba el zoom ahí. El mapa se sigue pudiendo mover.
+  const camera = useEdu((s) => s.camera);
+  const zoomLock = useEdu((s) => s.zoomLock);
+  const zoomRangeRef = useRef<readonly [number, number] | null>(null);
+  const zoomRange = (map: MapLibreMap) => {
+    zoomRangeRef.current ??= [map.getMinZoom(), map.getMaxZoom()];
+    return zoomRangeRef.current;
+  };
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !camera) return;
+    whenReady(map, () => {
+      // Destrabar antes de volar: con min = max el vuelo no puede cambiar el zoom.
+      const [min, max] = zoomRange(map);
+      setZoomRange(map, min, max);
+      const target = cameraTarget(camera.spec, bbox);
+      const fly = (duration: number) => {
+        const gen = ++flyGenRef.current;
+        map.once("moveend", () => {
+          if (gen === flyGenRef.current && useEdu.getState().zoomLock) lockZoom(map);
+        });
+        if (target.kind === "bounds") map.fitBounds(target.bounds, { padding: 80, duration, maxZoom: 17 });
+        else map.flyTo({ center: target.center, zoom: target.zoom, duration });
+      };
+      fly(1200);
+      // El paso suele mostrar paneles nuevos (perfil, veredicto) que achican el
+      // mapa recién después del vuelo: durante un rato, un cambio de tamaño reencuadra.
+      const until = Date.now() + 2500;
+      refitRef.current = () => {
+        if (Date.now() > until) {
+          refitRef.current = null;
+          return;
+        }
+        // Cortar el vuelo en curso antes de destrabar: su moveend ya no traba nada.
+        flyGenRef.current++;
+        map.stop();
+        setZoomRange(map, min, max);
+        fly(0);
+      };
+    });
+  }, [camera, bbox]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!zoomLock) {
+      const [min, max] = zoomRange(map);
+      setZoomRange(map, min, max);
+    } else if (!map.isMoving()) {
+      // Si está volando, lo traba el moveend del vuelo.
+      lockZoom(map);
+    }
+  }, [zoomLock]);
 
   // 2b. Contorno del terreno de 1 m (coverage.geojson). Sin esto, el usuario se
   //     entera de que un punto no sirve recién cuando el clic se rechaza. Línea
@@ -608,16 +697,17 @@ export function MapView({ center, bbox, siteId }: Props) {
         id: "route-line",
         type: "line",
         source: "route",
-        filter: ["!=", ["get", "class"], "unknown"],
+        filter: ["all", ["!=", ["get", "class"], "unknown"], ["!", ["get", "straight"]]],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": color, "line-width": 5 },
       });
-      // Tramos sin evaluar (falta DTM): punteada, para que no se lea como "ok".
+      // Tramos sin evaluar (falta DTM) y tramos sin camino (línea recta A→B, que no es
+      // una ruta): punteada, para que no se lean como un camino transitable.
       map.addLayer({
         id: "route-line-unknown",
         type: "line",
         source: "route",
-        filter: ["==", ["get", "class"], "unknown"],
+        filter: ["any", ["==", ["get", "class"], "unknown"], ["get", "straight"]],
         paint: { "line-color": color, "line-width": 4, "line-dasharray": [1.5, 1.2] },
       });
       // Los pines quedan arriba de la ruta.
@@ -666,6 +756,37 @@ export function MapView({ center, bbox, siteId }: Props) {
           filter: ["==", ["get", "part"], "sight"],
           paint: { "line-color": "#ece6de", "line-width": 1.5, "line-dasharray": [2, 2] },
         });
+        // El Sol del paso: rayo amarillo hacia el Sol y la sombra, oscura, para el otro lado.
+        map.addLayer({
+          id: "route-step-sun",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sun"],
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#f2c94c", "line-width": 3 },
+        });
+        map.addLayer({
+          id: "route-step-shadow",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "shadow"],
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#0b0a09", "line-width": 6, "line-opacity": 0.8 },
+        });
+        map.addLayer({
+          id: "route-step-sun-label",
+          type: "symbol",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sun-label"],
+          layout: {
+            "text-field": ["get", "label"],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 12,
+            "text-anchor": "left",
+            "text-offset": [0.4, 0],
+          },
+          paint: { "text-color": "#f2c94c", "text-halo-color": "#0b0a09", "text-halo-width": 1.5 },
+        });
         map.addLayer({
           id: "landmarks-points",
           type: "circle",
@@ -708,6 +829,70 @@ export function MapView({ center, bbox, siteId }: Props) {
     };
     whenReady(map, apply);
   }, [result, activeStep]);
+
+  // 5c. Contacto con el hábitat (id de contrato: habitat-contact). Zona con línea
+  //     de vista a la antena de A, de /api/sites/{site}/viewshed. Sin contacto va
+  //     rayado además de rojo: no se comunica solo por color. Debajo de la ruta.
+  const viewshed = useContact((s) => s.viewshed);
+  const contactVisible = useContact((s) => s.visible);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data: FeatureCollection = viewshed?.geojson ?? { type: "FeatureCollection", features: [] };
+      const visibility = contactVisible ? "visible" : "none";
+      const src = map.getSource(CONTACT_LAYER_ID);
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+        for (const id of CONTACT_LAYERS) map.setLayoutProperty(id, "visibility", visibility);
+        return;
+      }
+      if (!map.hasImage(CONTACT_HATCH_IMAGE)) map.addImage(CONTACT_HATCH_IMAGE, hatchImage(CONTACT_COLOR.no_contact));
+      map.addSource(CONTACT_LAYER_ID, { type: "geojson", data });
+      const before = ["coverage-outline", "route-casing"].find((id) => map.getLayer(id));
+      map.addLayer(
+        {
+          id: CONTACT_LAYER_ID,
+          type: "fill",
+          source: CONTACT_LAYER_ID,
+          layout: { visibility },
+          paint: {
+            "fill-color": [
+              "match",
+              ["get", "class"],
+              ...Object.entries(CONTACT_COLOR).flat(),
+              CONTACT_COLOR.unknown,
+            ] as unknown as ExpressionSpecification,
+            "fill-opacity": ["match", ["get", "class"], "contact", 0.16, "no_contact", 0.22, 0.1],
+          },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: `${CONTACT_LAYER_ID}-hatch`,
+          type: "fill",
+          source: CONTACT_LAYER_ID,
+          filter: ["==", ["get", "class"], "no_contact"],
+          layout: { visibility },
+          paint: { "fill-pattern": CONTACT_HATCH_IMAGE, "fill-opacity": 0.8 },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: `${CONTACT_LAYER_ID}-edge`,
+          type: "line",
+          source: CONTACT_LAYER_ID,
+          filter: ["==", ["get", "class"], "contact"],
+          layout: { visibility },
+          paint: { "line-color": CONTACT_COLOR.contact, "line-width": 1.2, "line-opacity": 0.9 },
+        },
+        before,
+      );
+    };
+    whenReady(map, apply);
+  }, [viewshed, contactVisible]);
 
   // 6. Pines de lugares (places.json), como en Google Maps. Los mismos lugares
   //    que el buscador; se filtran por tipo desde el panel de capas. Al
@@ -859,6 +1044,64 @@ export function MapView({ center, bbox, siteId }: Props) {
   );
 }
 
+type CameraTarget =
+  | { readonly kind: "bounds"; readonly bounds: [[number, number], [number, number]] }
+  | { readonly kind: "center"; readonly center: [number, number]; readonly zoom: number };
+
+/** Zoom al que se centra el hábitat cuando no hay ruta para encuadrar. */
+const HABITAT_ZOOM = 15;
+
+/** A dónde va la cámara de una lección: el sitio o la travesía del alumno, nunca un punto inventado. */
+function cameraTarget(spec: CameraSpec, bbox: Bbox): CameraTarget {
+  const site: CameraTarget = {
+    kind: "bounds",
+    bounds: [
+      [bbox.lon_min, bbox.lat_min],
+      [bbox.lon_max, bbox.lat_max],
+    ],
+  };
+  const { waypoints, result } = usePlan.getState();
+  const habitat = waypoints[0];
+  if (spec.kind === "site") return site;
+  if (spec.kind === "habitat") {
+    return habitat ? { kind: "center", center: [habitat.lon, habitat.lat], zoom: spec.zoom } : site;
+  }
+  // La ruta calculada si corresponde a estos puntos (con ida y vuelta trae una
+  // parada más: la vuelta al hábitat); si no, los puntos.
+  const stops = result?.route.stops.length ?? -1;
+  const legs = result && (stops === waypoints.length || stops === waypoints.length + 1) ? result.route.legs : [];
+  const pts: (readonly [number, number])[] =
+    legs.length > 0 ? legs.flatMap((l) => l.coordinates) : waypoints.map((w) => [w.lon, w.lat] as const);
+  if (pts.length >= 2) {
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    return {
+      kind: "bounds",
+      bounds: [
+        [Math.min(...xs), Math.min(...ys)],
+        [Math.max(...xs), Math.max(...ys)],
+      ],
+    };
+  }
+  return habitat ? { kind: "center", center: [habitat.lon, habitat.lat], zoom: HABITAT_ZOOM } : site;
+}
+
+function lockZoom(map: MapLibreMap): void {
+  const z = map.getZoom();
+  setZoomRange(map, z, z);
+}
+
+/**
+ * Cambia el rango de zoom. Los botones + y − de MapLibre se actualizan recién
+ * con un "move": el jumpTo en el lugar lo dispara (salvo en pleno vuelo, que
+ * no se corta; el vuelo mismo los actualiza).
+ */
+function setZoomRange(map: MapLibreMap, min: number, max: number): void {
+  map.setMinZoom(min);
+  map.setMaxZoom(max);
+  if (!map.isMoving()) map.jumpTo({ zoom: map.getZoom() });
+}
+
 const LANDMARKS_SOURCE = "route-landmarks";
 const STEP_SOURCE = "route-step";
 
@@ -886,10 +1129,13 @@ function landmarksToGeoJSON(steps: readonly RouteStep[], active: RouteStep | und
   return { type: "FeatureCollection", features: [...seen.values()] };
 }
 
-/** El trecho resaltado y, si nombra un landmark, la línea de vista hacia él. */
-function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineString> {
+/**
+ * El trecho resaltado; si nombra un landmark, la línea de vista hacia él; y si
+ * hay Sol a esa hora, hacia dónde está (y para dónde cae la sombra).
+ */
+function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineString | Point> {
   if (!step) return { type: "FeatureCollection", features: [] };
-  const features: Feature<LineString>[] = [
+  const features: Feature<LineString | Point>[] = [
     {
       type: "Feature",
       properties: { part: "stretch" },
@@ -904,6 +1150,23 @@ function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineStrin
       geometry: { type: "LineString", coordinates: [[mx, my], [step.aim[0], step.aim[1]]] },
     });
   }
+  const sun = step.direction.sun;
+  if (sun && sun.elevation_deg > 0) {
+    const mid = midpoint(step.path);
+    // Un largo que se vea a la escala del trecho, sin tapar media pantalla.
+    const len = Math.min(Math.max(pathLength(step.path) * 0.35, 120), 800);
+    const toSun = offset(mid, sun.azimuth_deg, len);
+    const shadow = offset(mid, sun.azimuth_deg + 180, len * 0.6);
+    features.push(
+      { type: "Feature", properties: { part: "sun" }, geometry: { type: "LineString", coordinates: [[...mid], [...toSun]] } },
+      { type: "Feature", properties: { part: "shadow" }, geometry: { type: "LineString", coordinates: [[...mid], [...shadow]] } },
+      {
+        type: "Feature",
+        properties: { part: "sun-label", label: `☀ Sol ${Math.round(sun.elevation_deg)}°` },
+        geometry: { type: "Point", coordinates: [...toSun] },
+      },
+    );
+  }
   return { type: "FeatureCollection", features };
 }
 
@@ -912,7 +1175,14 @@ function legsToGeoJSON(legs: readonly RouteLeg[]): FeatureCollection<LineString>
     type: "FeatureCollection",
     features: legs.map((l) => ({
       type: "Feature",
-      properties: { class: l.class, from: l.from, to: l.to },
+      // Un tramo bloqueado con solo dos puntos es la línea recta A→B que deja el
+      // planificador cuando no encuentra paso: no es un camino.
+      properties: {
+        class: l.class,
+        from: l.from,
+        to: l.to,
+        straight: l.class === "blocked" && l.coordinates.length === 2,
+      },
       geometry: { type: "LineString", coordinates: l.coordinates.map(([x, y]) => [x, y]) },
     })),
   };

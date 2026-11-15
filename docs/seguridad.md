@@ -117,6 +117,10 @@ Geometría sobre el DTM, con estos supuestos (todos van en `assumptions`):
 
 Rendimiento medido en una laptop: 0,44 s para 90 000 celdas (una grilla de A\* de 300 × 300).
 
+La misma cuenta, en una grilla alrededor del hábitat en vez de sobre la ruta, es la capa **Contacto con el hábitat** del mapa (`GET /api/sites/{site}/viewshed`, `api/viewshed.py`): muestra desde dónde hay vista antes de planificar.
+
+**Cómo se explica un límite roto.** `evaluate` guarda dónde empieza y termina la racha más larga (minuto desde la salida y km recorrido). El `note` del límite dice cuántos minutos, entre qué minutos y entre qué km del recorrido, y qué hacer (mirar la capa, mover el hábitat o el destino, o sumar una parada con vista). El resumen del NO-GO va corto: "No va: 20 min seguidos sin vista al hábitat (máximo 10), del minuto 11 al 31. Mirá la capa «Contacto con el hábitat»."
+
 ## Tests
 
 - `api/tests/test_safety.py`: lógica pura, sin rasters. Incluye el caso **MAP-25**: la misma ruta a tres horas de salida da GO, CAUTION y NO-GO.

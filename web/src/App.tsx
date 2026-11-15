@@ -6,6 +6,7 @@ import { Inspector } from "./components/Inspector";
 import { MarsClock } from "./components/MarsClock";
 import { ScaleBar } from "./components/ScaleBar";
 import { FixtureBanner } from "./components/FixtureBanner";
+import { CurrentConditions } from "./components/CurrentConditions";
 import { ProvenanceBadge } from "./components/ProvenanceBadge";
 import { MARS24 } from "./domain/provenance";
 import { RoutePlanner } from "./components/route/RoutePlanner";
@@ -27,6 +28,7 @@ import { availableFromTerrain } from "./map/terrain";
 import { useStore } from "./state/store";
 import { useFreshRoute, usePlan } from "./state/plan";
 import { insideCoverage } from "./map/coverage";
+import { EduOverlay, EduToggle } from "./edu/EduOverlay";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
@@ -138,6 +140,7 @@ export function App() {
     <>
       {/* Solo en impresión: la tira de la travesía (CuffChecklist). */}
       <CuffChecklist />
+      <EduOverlay />
       <div className="flex h-full flex-col print:hidden">
         <FixtureBanner />
 
@@ -164,6 +167,8 @@ export function App() {
             ))}
           </nav>
 
+          <EduToggle />
+
           <p className="ml-auto text-[11px] text-muted">
             {error ? (
               <span className="text-alert">API: {error}</span>
@@ -189,7 +194,8 @@ export function App() {
           </aside>
 
           <main className="flex min-w-0 flex-1 flex-col">
-            <div className="relative min-h-0 flex-1">
+            {site ? <CurrentConditions siteId={site.id} /> : null}
+            <div data-edu="map" className="relative min-h-0 flex-1">
             {site ? (
               <>
                 <MapView center={site.center} bbox={site.bbox} siteId={site.id} />
@@ -224,11 +230,13 @@ export function App() {
             {/* El perfil va debajo del mapa, como pide el ticket: se lee junto
                 con la ruta dibujada, no en otra pantalla. */}
             {site ? <SunTimeline siteId={site.id} lat={site.center.lat} lon={site.center.lon} /> : null}
-            <ElevationProfile profile={plan?.route.profile} />
+            <div data-edu="profile">
+              <ElevationProfile profile={plan?.route.profile} />
+            </div>
           </main>
 
-          <aside className="w-80 shrink-0 overflow-y-auto border-l border-line bg-panel/40 p-3">
-            <section className="mb-4">
+          <aside data-edu="right" className="w-80 shrink-0 overflow-y-auto border-l border-line bg-panel/40 p-3">
+            <section data-edu="clock" className="mb-4">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
                   Reloj marciano
@@ -243,7 +251,7 @@ export function App() {
               )}
             </section>
 
-            <section className="mb-4 border-t border-line pt-4">
+            <section data-edu="inspector" className="mb-4 border-t border-line pt-4">
               <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
                 Inspector
               </h2>
@@ -254,7 +262,7 @@ export function App() {
               )}
             </section>
 
-            <section className="border-t border-line pt-4">
+            <section data-edu="layers" className="border-t border-line pt-4">
               <h2 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">
                 Capas
               </h2>

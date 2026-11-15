@@ -60,3 +60,85 @@ body {
   html, body, #root { height: auto; }
   body { background: #fff; color: #000; }
 }
+
+/* Modo entrenamiento (src/edu/): el paso de la lección resalta o tapa piezas
+   marcadas con data-edu. Resaltar es borde + etiqueta, no solo color. */
+body[data-edu-focus~="verdict"] [data-edu="verdict"],
+body[data-edu-focus~="breakdown"] [data-edu="breakdown"],
+body[data-edu-focus~="depart"] [data-edu="depart"],
+body[data-edu-focus~="sun-timeline"] [data-edu="sun-timeline"],
+body[data-edu-focus~="layers"] [data-edu="layers"],
+body[data-edu-focus~="points"] [data-edu="points"],
+body[data-edu-focus~="search"] [data-edu="search"] {
+  outline: 3px dashed var(--color-rust);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+body[data-edu-hide~="verdict"] [data-edu="verdict"],
+body[data-edu-hide~="breakdown"] [data-edu="breakdown"] {
+  position: relative;
+  min-height: 3rem;
+}
+/* visibility: hidden también lo saca del lector de pantalla: no se filtra la respuesta. */
+body[data-edu-hide~="verdict"] [data-edu="verdict"] > *,
+body[data-edu-hide~="breakdown"] [data-edu="breakdown"] > * {
+  visibility: hidden;
+}
+body[data-edu-hide~="verdict"] [data-edu="verdict"]::after,
+body[data-edu-hide~="breakdown"] [data-edu="breakdown"]::after {
+  content: "Tapado por la lección";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--color-line);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+/* Modo entrenamiento: la lección va mostrando la interfaz de a poco. Con
+   data-edu-ui en <body>, una pieza se ve solo si está en data-edu-show. */
+body[data-edu-ui]:not([data-edu-show~="verdict"]) [data-edu="verdict"],
+body[data-edu-ui]:not([data-edu-show~="breakdown"]) [data-edu="breakdown"],
+body[data-edu-ui]:not([data-edu-show~="depart"]) [data-edu="depart"],
+body[data-edu-ui]:not([data-edu-show~="sun-timeline"]) [data-edu="sun-timeline"],
+body[data-edu-ui]:not([data-edu-show~="layers"]) [data-edu="layers"],
+body[data-edu-ui]:not([data-edu-show~="points"]) [data-edu="points"],
+body[data-edu-ui]:not([data-edu-show~="search"]) [data-edu="search"],
+body[data-edu-ui]:not([data-edu-show~="profile"]) [data-edu="profile"],
+body[data-edu-ui]:not([data-edu-show~="clock"]) [data-edu="clock"],
+body[data-edu-ui]:not([data-edu-show~="inspector"]) [data-edu="inspector"],
+body[data-edu-ui]:not([data-edu-show~="share"]) [data-edu="share"],
+body[data-edu-ui]:not([data-edu-show~="tools"]) [data-edu="tools"] {
+  display: none !important;
+}
+body[data-edu-ui]:not([data-edu-show~="clock"]):not([data-edu-show~="inspector"]):not([data-edu-show~="layers"]) [data-edu="right"] {
+  display: none !important;
+}
+
+/* Tarjetas del entrenamiento: entran suave y festejan sin marear. */
+@keyframes edu-card-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes edu-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes edu-pop {
+  0% { transform: scale(0.92); opacity: 0; }
+  60% { transform: scale(1.03); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes edu-spin {
+  to { transform: rotate(360deg); }
+}
+.edu-card-in { animation: edu-card-in 220ms ease-out both; }
+.edu-fade { animation: edu-fade 250ms ease-out both; }
+.edu-pop { animation: edu-pop 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+.edu-spin { animation: edu-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .edu-card-in, .edu-fade, .edu-pop, .edu-spin { animation: none; }
+}
