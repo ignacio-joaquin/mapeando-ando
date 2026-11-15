@@ -145,6 +145,8 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 2. Si no se precomputó, el de la **misma estación** más cercano: |ΔLs| ≤ 2° (`SOL_REUSE_MAX_DLS_DEG` en los dos lados; si cambia uno, cambia el otro), de cualquier año marciano. Se compara el Ls de la medianoche local de cada sol (Mars24 en `api/mars_time.py` y `web/src/mars/mars24.ts`, el mismo algoritmo). La pila se usa con todos sus instantes corridos a la medianoche local de la fecha pedida: misma hora solar local, mismas bandas y mismos tiles. Necesita `ls_deg` y `site_center.lon` en el `index.json` (las pilas viejas sin ellos solo sirven para su sol).
 3. Si tampoco hay, la luz queda sin evaluar y el veredicto lo dice. Nunca se rellena.
 
+La luz no frena la ruta: `/api/route` nunca genera la pila en el request (la precomputa el pipeline). Sin pila, con una que no se puede abrir o con una banda que no se puede leer, el A\* planea igual con pendiente y contacto, sin la sombra en el costo, y el `summary` dice qué faltó.
+
 Una pila reutilizada viaja como `MODELED`, con el sol de origen, ΔLs y la diferencia de declinación en `assumptions`; el `summary` del veredicto lo dice ("la luz se estimó con las sombras del sol …") y el deslizador muestra un aviso de "Estimado" con texto, no solo con color.
 
 **`GET /tiles/{site}/terrain.json` (lo escribe `pipeline/precompute.py`, lo lee `web/`).** Índice de las capas de relieve de un sitio; el frontend prende una capa solo si este archivo dice que está lista. Lo valida `TerrainIndexSchema` en `web/src/api/schemas.ts`.

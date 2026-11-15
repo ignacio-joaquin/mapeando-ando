@@ -1,6 +1,5 @@
 """POST /api/route: planificador 4D (api/planner.py) con rasters sintéticos."""
 import heapq
-import json
 import math
 import subprocess
 from datetime import datetime
@@ -90,25 +89,54 @@ class TestSinDatos:
         assert body["data_quality"]["light_evaluated"] is False
         assert body["data_quality"]["light_source"] == "exact"
 
-    def test_si_falta_luz_se_generan_las_capas_antes_de_planear(self, client, site, monkeypatch):
+    def test_sin_pila_la_ruta_sale_sin_luz_y_no_corre_el_pipeline(self, client, site, monkeypatch):
+        # La API nunca genera la pila en el request: planea con el terreno y avisa.
         write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
-        calls = []
 
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            if any(str(arg).endswith("pipeline/illumination.py") for arg in cmd):
-                write_shadow_stack(site)
-            elif any(str(arg).endswith("pipeline/shadow_tiles.py") for arg in cmd):
-                base = site / "output" / "jezero" / "illumination"
-                catalog = {"generated_at": "2026-11-15T00:00:00Z", "sols": [{"tag": "20261115T0000Z"}]}
-                (base / "catalog.json").write_text(json.dumps(catalog))
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        def no_run(cmd, **kwargs):
+            raise AssertionError(f"la API no tiene que correr el pipeline: {cmd}")
 
-        monkeypatch.setattr("api.illumination.subprocess.run", fake_run)
-        body = client.post("/api/route", json=request(band_time(13))).json()
-        assert body["data_quality"]["light_status"] == "complete"
-        assert any(str(cmd[1]).endswith("pipeline/illumination.py") for cmd in calls)
-        assert any(str(cmd[1]).endswith("pipeline/shadow_tiles.py") for cmd in calls)
+        monkeypatch.setattr(subprocess, "run", no_run)
+        res = client.post("/api/route", json=request(band_time(13)))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["legs"][0]["class"] == "ok"
+        assert len(body["legs"][0]["coordinates"]) > 2   # pasó por el A*, no es la línea recta
+        assert body["data_quality"]["terrain_status"] == "complete"
+        assert body["data_quality"]["light_status"] == "missing"
+        assert "no se evaluó la luz" in body["verdict"]["summary"]
+        shadow = next(f for f in body["cost"]["factors"] if f["id"] == "shadow")
+        assert shadow["active"] is False
+
+    def test_pila_ilegible_la_ruta_sale_sin_luz(self, client, site):
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        d = write_shadow_stack(site)
+        (d / "shadow_hourly.tif").write_bytes(b"no es un GeoTIFF")
+        res = client.post("/api/route", json=request(band_time(13)))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["legs"][0]["class"] == "ok"
+        assert body["data_quality"]["light_status"] == "missing"
+        assert "no se pudo leer la pila de sombras" in body["verdict"]["summary"]
+        daylight = next(lim for lim in body["verdict"]["limits"] if lim["id"] == "daylight")
+        assert daylight["status"] == "not_evaluated"
+
+    def test_banda_ilegible_a_mitad_de_ruta_sigue_sin_la_sombra(self, client, site, monkeypatch):
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        write_shadow_stack(site)
+
+        def broken(*args, **kwargs):
+            raise OSError("banda corrupta")
+
+        monkeypatch.setattr(planner, "sample_on_points", broken)
+        res = client.post("/api/route", json=request(band_time(13)))
+        assert res.status_code == 200
+        body = res.json()
+        leg = body["legs"][0]
+        assert leg["class"] == "ok"
+        assert leg["shadow_fraction"]["value"] is None   # no se informa una fracción a medias
+        assert body["data_quality"]["light_status"] == "partial"
+        assert "no se pudo leer la pila de sombras en algunas horas" in body["verdict"]["summary"]
 
     def test_fecha_invalida_responde_422(self, client, site):
         body = request(band_time(13)) | {"depart_utc": "mañana a la tarde"}

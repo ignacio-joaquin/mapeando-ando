@@ -48,8 +48,8 @@ from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg
                           segment_consumption)
 from .contact import ASSUMPTIONS as CONTACT_ASSUMPTIONS
 from .contact import ContactField
-from .illumination import (NODATA_U8, SHADOW, SOL_REUSE_MAX_DLS_DEG, ShadowStack, apply_affine, ensure_illumination_for_time,
-                           parse_utc, sample_on_points)
+from .illumination import (NODATA_U8, SHADOW, SOL_REUSE_MAX_DLS_DEG, ShadowStack, apply_affine, parse_utc,
+                           sample_on_points, stack_for_time)
 from .terrain import MARS_LONGLAT, MARS_RADIUS_M, _norm_lon, densify, haversine_m
 
 SPEED_M_S = 0.8          # el mismo default de /api/route/consumables
@@ -249,6 +249,7 @@ class ShadowSampler:
         self.times = [t for _, t, _, _ in stack.bands]
         self.band_ids = [b for b, _, _, _ in stack.bands]
         self.cache: dict[int, list[int]] = {}
+        self.failed = False  # alguna banda no se pudo leer: el tramo no midió la sombra entera
 
     def band_at(self, t: float) -> int | None:
         i = bisect.bisect_left(self.times, t)
@@ -261,7 +262,12 @@ class ShadowSampler:
             return None
         arr = self.cache.get(band)
         if arr is None:
-            arr = sample_on_points(self.ds, band, self.xs, self.ys, self.cell_m, self.pixel_m).ravel().tolist()
+            try:
+                arr = sample_on_points(self.ds, band, self.xs, self.ys, self.cell_m, self.pixel_m).ravel().tolist()
+            except (OSError, ValueError):
+                # Banda ilegible: esa hora queda sin dato y la ruta sigue sin la sombra.
+                arr = [NODATA_U8] * self.xs.size
+                self.failed = True
             self.cache[band] = arr
         val = arr[v]
         return None if val == NODATA_U8 else val
@@ -415,6 +421,7 @@ class LegPlan:
     slopes: list[float | None] = field(default_factory=list)    # por paso, al final del paso
     visible: list[bool | None] = field(default_factory=list)    # por paso, al final del paso
     cost_s: dict[str, float] = field(default_factory=dict)      # aporte de cada factor (s)
+    shadow_unreadable: bool = False  # la pila estaba pero alguna banda no se pudo leer
     # Solo en tramos bloqueados: la línea recta A→B medida sobre el terreno (ver
     # _measure_line). Es para el perfil de elevación, no un camino: no entra en los
     # consumibles, la duración ni el costo, que siguen saliendo de `steps`.
@@ -548,7 +555,9 @@ def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack |
     if sampler is not None:
         shade = [sampler.at(t, r * cols_n + c) for (r, c), t in zip(path, times)]
         seen = [v for v in shade if v is not None]
-        if seen:
+        # Con una banda ilegible no se sabe cuánto del tramo fue en sombra: queda sin
+        # medir (la luz pasa a "partial"), no se informa una fracción sobre lo que se leyó.
+        if seen and not sampler.failed:
             shadow_fraction = sum(v == SHADOW for v in seen) / len(seen)
 
     # Desglose del costo: el mismo que minimizó astar(), paso por paso.
@@ -573,6 +582,9 @@ def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack |
     missing_z = sum(z is None for z in elev)
     if missing_z:
         plan.notes.append(f"{missing_z} de {len(elev)} puntos sin cota del DTM: ahí se tomó el terreno plano")
+    if sampler is not None and sampler.failed:
+        plan.shadow_unreadable = True
+        plan.notes.append("No se pudo leer la pila de sombras en alguna hora: el tramo no tuvo en cuenta la sombra")
     return plan
 
 
@@ -769,21 +781,32 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
     t_depart = parse_utc(depart_utc)
     pts = [(float(w["lat"]), float(w["lon"])) for w in waypoints]
     slope_path, dtm_path, slope_meta = _terrain_inputs(data_dir, site_id)
-    stack = ensure_illumination_for_time(data_dir, site_id, t_depart, repo_dir)
+    # La luz es opcional: solo se lee la pila que ya precomputó el pipeline (la API nunca
+    # la genera: tarda minutos y usa GB de RAM). Sin pila, o con una que no se puede leer,
+    # la ruta sale igual, sin la sombra en el costo y con la luz sin evaluar.
+    stack = stack_for_time(data_dir, site_id, t_depart)
     caveats: list[str] = []
     if slope_path is None:
         caveats.append("sin la pendiente procesada los tramos van en línea recta y el terreno no se evaluó")
-    if stack is None:
+
+    slope_ds = rasterio.open(slope_path) if slope_path else None
+    dtm_ds = rasterio.open(dtm_path) if dtm_path else None
+    shadow_ds = None
+    unreadable_tag = None
+    if stack is not None:
+        try:
+            shadow_ds = rasterio.open(stack.tif)
+        except OSError:  # RasterioIOError hereda de OSError: tif roto o a medio escribir
+            stack, unreadable_tag = None, stack.tag
+    if unreadable_tag is not None:
+        caveats.append(f"no se evaluó la luz: no se pudo leer la pila de sombras del sol {unreadable_tag}")
+    elif stack is None:
         tope = f"{SOL_REUSE_MAX_DLS_DEG:g}".replace(".", ",")
         caveats.append("no se evaluó la luz: falta la pila de sombras de ese sol y no hay otra de la misma "
                        f"estación (±{tope}° Ls)")
     elif stack.reuse is not None:
         dls = f"{stack.reuse.dls:+.1f}".replace(".", ",")
         caveats.append(f"la luz se estimó con las sombras del sol {stack.tag}, de la misma estación (ΔLs {dls}°)")
-
-    slope_ds = rasterio.open(slope_path) if slope_path else None
-    dtm_ds = rasterio.open(dtm_path) if dtm_path else None
-    shadow_ds = rasterio.open(stack.tif) if stack else None
     # La línea de vista tiene que cubrir la ventana del A* del tramo más largo (ver build_grid).
     longest = max(haversine_m(*pts[i], *pts[i + 1]) for i in range(len(pts) - 1))
     contact = (ContactField.from_dtm(dtm_ds, pts[0], pts, max(MIN_MARGIN_M, MARGIN_FRACTION * longest))
@@ -933,6 +956,8 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         summary += " Cuidado: " + "; ".join(assessment.reasons) + "."
     if any(leg["class"] == "unknown" for leg in legs) and slope_path is not None:
         caveats.append("hay tramos con terreno sin evaluar")
+    if any(plan.shadow_unreadable for plan in legs_plan):
+        caveats.append("no se pudo leer la pila de sombras en algunas horas: esos tramos no tuvieron en cuenta la sombra")
     if caveats:
         summary += " Ojo: " + "; ".join(caveats) + "."
 
