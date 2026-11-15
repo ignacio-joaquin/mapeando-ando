@@ -15,7 +15,7 @@ import {
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from "geojson";
 import { geojsonUrl, LAYERS, tileUrl } from "./layers";
-import { readyTiles } from "./terrain";
+import { readyTiles, usesGeojson } from "./terrain";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
 import { useStore } from "../state/store";
@@ -246,7 +246,7 @@ export function MapView({ center, bbox, siteId }: Props) {
         const state = layers[spec.id];
         if (!state) continue;
         const tiles = readyTiles(terrain, spec.id);
-        const geojson = tiles ? null : geojsonUrl(spec, siteId);
+        const geojson = !tiles && usesGeojson(spec, terrain) ? geojsonUrl(spec, siteId) : null;
         const usable = state.available && (tiles !== null || geojson !== null);
 
         if (keys.get(spec.id) !== sourceKey && (map.getLayer(spec.id) || map.getSource(spec.id))) {
@@ -262,9 +262,9 @@ export function MapView({ center, bbox, siteId }: Props) {
         }
 
         // Vectoriales (curvas de nivel): tiles MVT. MapLibre pide solo los de
-        // la vista, y ninguno mientras la capa está apagada. Sin tiles (corrida
-        // vieja del pipeline), el GeoJSON entero, y recién al prender la capa:
-        // en Gale pesa cientos de MB.
+        // la vista, y ninguno mientras la capa está apagada. Si terrain.json dice
+        // que la capa es un GeoJSON (corrida vieja, o el teselado falló), el GeoJSON
+        // entero, y recién al prender la capa: en Gale pesa cientos de MB.
         if (spec.kind === "vector") {
           if (!existing) {
             if (tiles) {
@@ -285,7 +285,8 @@ export function MapView({ center, bbox, siteId }: Props) {
                 id: spec.id,
                 type: "line",
                 source: spec.id,
-                ...(tiles ? { "source-layer": spec.sourceLayer ?? spec.id } : {}),
+                // La capa del MVT la dice terrain.json; la de layers.ts es el respaldo.
+                ...(tiles ? { "source-layer": tiles.layer ?? spec.sourceLayer ?? spec.id } : {}),
                 paint: {
                   "line-color": spec.legend[0]?.color ?? "#e0a24a",
                   // Finas de lejos y más marcadas de cerca: de otro modo, a

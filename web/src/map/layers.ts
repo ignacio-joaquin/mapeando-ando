@@ -75,7 +75,10 @@ export interface LayerSpec {
   readonly tiles: string;
   /** "vector" = tiles MVT (.pbf); "raster" = tiles PNG. */
   readonly kind: "raster" | "vector";
-  /** Capa dentro de los tiles MVT (`source-layer`). Solo para las vectoriales. */
+  /**
+   * Capa dentro de los tiles MVT (`source-layer`). Solo para las vectoriales. Manda
+   * `tiles.layer` de terrain.json; esto es el respaldo si el índice no lo trae.
+   */
   readonly sourceLayer?: string;
   /**
    * GeoJSON entero de una vectorial, para corridas del pipeline de antes de los
