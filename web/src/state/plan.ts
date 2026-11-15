@@ -17,7 +17,7 @@
 import { create } from "zustand";
 import type { LatLon } from "../mars/geo";
 import type { PlannedRoute } from "../api/client";
-import { cargoKg, MAX_EXTRA_KG } from "../domain/equipment";
+import { cargoKg, clampExtraKg } from "../domain/equipment";
 import { useStore } from "./store";
 import { planFromUrl } from "./share";
 
@@ -202,8 +202,7 @@ export const usePlan = create<PlanState>((set) => ({
   setRoundTrip: (roundTrip) => set({ roundTrip }),
   toggleEquipment: (id) =>
     set((s) => ({ kit: s.kit.includes(id) ? s.kit.filter((k) => k !== id) : [...s.kit, id] })),
-  setExtraKg: (kg) =>
-    set({ extraKg: Number.isFinite(kg) ? Math.min(Math.max(0, kg), MAX_EXTRA_KG) : 0 }),
+  setExtraKg: (kg) => set({ extraKg: clampExtraKg(kg) }),
   setClickMode: (clickMode) => set({ clickMode }),
   // Una ruta nueva trae otras indicaciones: la resaltada ya no corresponde.
   setResult: (result, key = null) => set({ result, resultKey: result ? key : null, activeStep: null }),

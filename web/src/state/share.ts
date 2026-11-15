@@ -6,9 +6,10 @@
  * Cada punto es `lat,lon,minutos[,id de lugar]`, en orden: hábitat, paradas,
  * destino. `ret=0` = solo ida; sin `ret`, la travesía vuelve al hábitat. El texto de las tareas no viaja (alarga el enlace y no cambia el
  * cálculo). La carga sí: `kit=drill,camera` (ids de domain/equipment.ts) y
- * `kg=5` (carga libre). Este módulo no importa los stores: store.ts lo usa al arrancar.
+ * `kg=5` (carga libre), también sin puntos: la carga es de la EVA, no de la
+ * travesía. Este módulo no importa los stores: store.ts lo usa al arrancar.
  */
-import { isEquipmentId, MAX_EXTRA_KG } from "../domain/equipment";
+import { clampExtraKg, isEquipmentId } from "../domain/equipment";
 import type { LatLon } from "../mars/geo";
 
 export interface SharedPoint extends LatLon {
@@ -56,8 +57,7 @@ export function encodePlan(
 ): string {
   const q = new URLSearchParams({ site: siteId, depart: departAt.toISOString() });
   if (!roundTrip) q.set("ret", "0");
-  if (cargo.kit.length > 0) q.set("kit", cargo.kit.join(","));
-  if (cargo.extraKg > 0) q.set("kg", String(cargo.extraKg));
+  setCargo(q, cargo);
   if (points.length > 0) {
     q.set(
       "pts",
@@ -70,6 +70,21 @@ export function encodePlan(
     );
   }
   return `?${q.toString()}`;
+}
+
+/**
+ * Enlace sin travesía: solo el sitio y la carga. Sin `depart`, para que
+ * recargar no deje fija una hora vieja.
+ */
+export function encodeSite(siteId: string, cargo: SharedCargo = { kit: [], extraKg: 0 }): string {
+  const q = new URLSearchParams({ site: siteId });
+  setCargo(q, cargo);
+  return `?${q.toString()}`;
+}
+
+function setCargo(q: URLSearchParams, cargo: SharedCargo): void {
+  if (cargo.kit.length > 0) q.set("kit", cargo.kit.join(","));
+  if (cargo.extraKg > 0) q.set("kg", String(cargo.extraKg));
 }
 
 /** Lee la travesía de un query string. Lo que no se entiende se descarta, no se adivina. */
@@ -97,13 +112,13 @@ export function decodePlan(qs: string): SharedPlan {
     roundTrip: q.get("ret") !== "0",
     points,
     kit,
-    extraKg: Number.isFinite(kg) ? Math.min(Math.max(0, Math.round(kg * 10) / 10), MAX_EXTRA_KG) : 0,
+    extraKg: clampExtraKg(kg),
   };
 }
 
 export function planFromUrl(): SharedPlan | null {
   const q = search();
-  if (!q?.has("pts") && !q?.has("depart")) return null;
+  if (!q || !["pts", "depart", "kit", "kg"].some((k) => q.has(k))) return null;
   return decodePlan(q.toString());
 }
 

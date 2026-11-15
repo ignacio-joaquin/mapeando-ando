@@ -8,7 +8,7 @@ import { LEG_CLASS_COLOR, LEG_CLASS_LABEL, stopLabel, waypointLabel } from "../.
 import { formatLatLon } from "../../mars/geo";
 import { insideCoverage, UNVERIFIED_MESSAGE } from "../../map/coverage";
 import { planKey, routeWaypoints, useFreshRoute, usePlan, type Waypoint } from "../../state/plan";
-import { encodePlan, writePlanToUrl } from "../../state/share";
+import { encodePlan, encodeSite, writePlanToUrl } from "../../state/share";
 import { useStore } from "../../state/store";
 import { DestinationSearch } from "./DestinationSearch";
 import { PlaceCard } from "./PlaceCard";
@@ -66,7 +66,7 @@ export function RoutePlanner() {
   useEffect(() => {
     writePlanToUrl(
       waypoints.length === 0
-        ? `?site=${encodeURIComponent(siteId)}`
+        ? encodeSite(siteId, { kit, extraKg })
         : encodePlan(siteId, departAt, waypoints, roundTrip, { kit, extraKg }),
     );
   }, [siteId, departAt, waypoints, roundTrip, kit, extraKg]);

@@ -109,6 +109,14 @@ export const itemKg = (e: EquipmentItem): number => e.parts.reduce((s, p) => s +
 /** Tope de la carga libre (muestras juntadas, otro equipo). El server acepta hasta 500 kg. */
 export const MAX_EXTRA_KG = 100;
 
+/**
+ * Carga libre válida: 0–MAX_EXTRA_KG, redondeada a 0,1 kg (lo que entra en el
+ * enlace). La usan el panel y el enlace: así un enlace abre con la misma carga.
+ */
+export function clampExtraKg(kg: number): number {
+  return Number.isFinite(kg) ? Math.min(Math.max(0, Math.round(kg * 10) / 10), MAX_EXTRA_KG) : 0;
+}
+
 /** Masa total que va a la API: equipo elegido + carga libre, redondeada a gramos. */
 export function cargoKg(ids: readonly string[], extraKg: number): number {
   const kit = ids.reduce((s, id) => {
