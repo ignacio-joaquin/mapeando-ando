@@ -14,18 +14,24 @@ que ninguno tenga que saber del otro.
   python pipeline/tiles.py --input /data/output/jezero/slope.tif \
                            --out /data/output/jezero/slope --color pendiente
   python pipeline/tiles.py --vector /data/output/jezero/contours.gpkg \
-                           --out /data/output/jezero/contours.geojson
+                           --out /data/output/jezero/contours --layer contours
 
-precompute.py lo llama para la pendiente, el sombreado y el peligro (raster_a_tiles) y anota
-el zoom y los límites en terrain.json; a mano sirve para cualquier otro raster.
+Los vectores (curvas de nivel) también van teselados, en tiles vectoriales MVT
+`{z}/{x}/{y}.pbf`: un GeoJSON de un DTM de 100 km pesa cientos de MB y el
+navegador lo baja entero aunque la capa esté apagada; los tiles se piden solo
+donde se mira, al zoom que se mira y con la capa prendida.
+
+precompute.py lo llama para la pendiente, el sombreado y el peligro (raster_a_tiles) y
+para las curvas (vector_a_tiles), y anota el zoom y los límites en terrain.json; a mano
+sirve para cualquier otro raster o vectorial.
 
 El nombre de la carpeta de salida es CONTRATO: tiene que ser el último segmento
 de la plantilla `tiles` de web/src/map/layers.ts (`hillshade/`, `slope/`,
-`hazard/`, `ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
+`hazard/`, `ortho/`, `contours/`). Si no coincide, el frontend no la encuentra y la
 capa queda deshabilitada.
 
-Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr),
-que ya instala deploy/bootstrap.sh.
+Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr,
+ogrinfo), que ya instala deploy/bootstrap.sh.
 """
 import argparse
 import json
@@ -73,10 +79,11 @@ RAMPAS["dosis"] = [
 # bilineal entre la clase 0 y la 3 inventa un 1,5 que no existe.
 RAMPAS_POR_CLASES = {"peligro"}
 
-# Un GeoJSON más pesado que esto no abre con poca banda.
-MAX_GEOJSON_MB = 20
+# Tiles vectoriales: a z14 un tile tiene 4096 unidades de lado y cada una mide ~0,3 m
+# en Marte, más fino que el DTM de 1 m. Más cerca, MapLibre agranda el z14.
+VECTOR_MAX_ZOOM = 14
 
-HERRAMIENTAS = ["gdalwarp", "gdaldem", "gdal2tiles.py", "gdal_edit.py", "ogr2ogr"]
+HERRAMIENTAS = ["gdalwarp", "gdaldem", "gdal2tiles.py", "gdal_edit.py", "ogr2ogr", "ogrinfo"]
 
 
 def log(msg):
@@ -194,15 +201,47 @@ def raster_a_tiles(src: Path, outdir: Path, color=None, resampling=None, max_zoo
         shutil.rmtree(work, ignore_errors=True)
 
 
-def vector_a_geojson(src: Path, dest: Path, simplify_deg: float = 0.00001) -> None:
-    dest.unlink(missing_ok=True)
-    run(["ogr2ogr", "-f", "GeoJSON", "-t_srs", MARS_LONGLAT,
-         "-simplify", simplify_deg, dest, src])
-    mb = dest.stat().st_size / 1e6
-    log(f"{dest.name}: {mb:.1f} MB")
-    if mb > MAX_GEOJSON_MB:
-        log(f"AVISO: pasa los {MAX_GEOJSON_MB} MB; con poca banda no abre. "
-            "Generá las curvas con más equidistancia o simplificá más.")
+def extension_vector(src: Path) -> list[float]:
+    """[oeste, sur, este, norte] de todas las capas de un vectorial en lon/lat."""
+    out = subprocess.run(["ogrinfo", "-json", "-so", "-al", str(src)], capture_output=True, text=True, check=True)
+    cajas = [g["extent"] for capa in json.loads(out.stdout)["layers"]
+             for g in capa.get("geometryFields", []) if g.get("extent")]
+    if not cajas:
+        raise RuntimeError(f"{src} no tiene ninguna geometría")
+    return [round(v, 6) for v in (min(c[0] for c in cajas), min(c[1] for c in cajas),
+                                  max(c[2] for c in cajas), max(c[3] for c in cajas))]
+
+
+def vector_a_tiles(src: Path, outdir: Path, capa: str, minzooms: dict[str, int],
+                   max_zoom: int = VECTOR_MAX_ZOOM) -> dict:
+    """Tesela un vectorial en lon/lat de Marte como tiles MVT `{z}/{x}/{y}.pbf`.
+
+    `minzooms` dice desde qué zoom entra cada capa de `src` (ej. las curvas maestras
+    desde lejos, el resto recién de cerca). Todas salen juntas en la capa `capa` del
+    MVT, que es el `source-layer` del mapa. Mismo truco que a_crs_web(): el lon/lat de
+    Marte se etiqueta como EPSG:4326 sin mover las coordenadas.
+    """
+    work = outdir.parent / f".{outdir.name}.work"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    try:
+        conf = {nombre: {"target_name": capa, "minzoom": z, "maxzoom": max_zoom} for nombre, z in minzooms.items()}
+        min_zoom = min(minzooms.values())
+        # Sin comprimir: los gzipea nginx, igual que los JSON. Comprimidos de antemano
+        # habría que servirlos con Content-Encoding a mano.
+        run(["ogr2ogr", "-f", "MVT", "-a_srs", "EPSG:4326",
+             "-dsco", "FORMAT=DIRECTORY", "-dsco", "TILE_EXTENSION=pbf", "-dsco", "COMPRESS=NO",
+             "-dsco", f"MINZOOM={min_zoom}", "-dsco", f"MAXZOOM={max_zoom}",
+             "-dsco", "CONF=" + json.dumps(conf), work / "tiles", src])
+        n = sum(1 for _ in (work / "tiles").rglob("*.pbf"))
+        if n == 0:
+            raise RuntimeError(f"ogr2ogr no generó ningún tile de {src}")
+        info = {"template": f"{outdir.name}/{{z}}/{{x}}/{{y}}.pbf", "minzoom": min_zoom, "maxzoom": max_zoom,
+                "bounds": extension_vector(src), "count": n, "layer": capa}
+        publicar_carpeta(work / "tiles", outdir)
+        return info
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
@@ -210,8 +249,11 @@ def main():
     fuente = ap.add_mutually_exclusive_group(required=True)
     fuente.add_argument("--input", type=Path, help="raster de entrada (GeoTIFF o COG)")
     fuente.add_argument("--vector", type=Path, help="vectorial de entrada (GPKG, SHP)")
-    ap.add_argument("--out", type=Path, required=True,
-                    help="carpeta de tiles, o archivo .geojson si es vectorial")
+    ap.add_argument("--out", type=Path, required=True, help="carpeta de tiles")
+    ap.add_argument("--layer", default="contours",
+                    help="nombre de la capa dentro de los tiles vectoriales (el source-layer del mapa)")
+    ap.add_argument("--min-zoom", type=int, default=10, dest="min_zoom",
+                    help="zoom desde el que entran los vectoriales")
     ap.add_argument("--color", choices=sorted(RAMPAS),
                     help="rampa de color por rangos (pendiente o peligro)")
     ap.add_argument("--max-zoom", type=int, default=None, dest="max_zoom",
@@ -231,7 +273,12 @@ def main():
         if not args.vector.exists():
             sys.exit(f"No existe {args.vector}")
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        vector_a_geojson(args.vector, args.out)
+        capas = subprocess.run(["ogrinfo", "-q", "-json", "-so", str(args.vector)], capture_output=True,
+                               text=True, check=True)
+        nombres = [c["name"] for c in json.loads(capas.stdout)["layers"]]
+        info = vector_a_tiles(args.vector, args.out, args.layer, {n: args.min_zoom for n in nombres},
+                              max_zoom=args.max_zoom or VECTOR_MAX_ZOOM)
+        log(f"{info['count']} tiles en {args.out} (zoom {info['minzoom']}-{info['maxzoom']})")
         log(f"Listo en {(time.time() - t0) / 60:.1f} min")
         return
 

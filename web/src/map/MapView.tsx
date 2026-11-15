@@ -14,7 +14,7 @@ import {
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import type { Feature, FeatureCollection, LineString, Polygon } from "geojson";
-import { LAYERS, tileUrl } from "./layers";
+import { geojsonUrl, LAYERS, tileUrl } from "./layers";
 import { readyTiles } from "./terrain";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
@@ -202,7 +202,8 @@ export function MapView({ center, bbox, siteId }: Props) {
         const state = layers[spec.id];
         if (!state) continue;
         const tiles = readyTiles(terrain, spec.id);
-        const usable = state.available && (spec.kind === "vector" || tiles !== null);
+        const geojson = tiles ? null : geojsonUrl(spec, siteId);
+        const usable = state.available && (tiles !== null || geojson !== null);
 
         if (keys.get(spec.id) !== sourceKey && (map.getLayer(spec.id) || map.getSource(spec.id))) {
           if (map.getLayer(spec.id)) map.removeLayer(spec.id);
@@ -216,16 +217,31 @@ export function MapView({ center, bbox, siteId }: Props) {
           continue;
         }
 
-        // Vectoriales (curvas de nivel): un GeoJSON que sirve el pipeline en
-        // /tiles/<sitio>/contours.geojson. MapLibre lo descarga solo.
+        // Vectoriales (curvas de nivel): tiles MVT. MapLibre pide solo los de
+        // la vista, y ninguno mientras la capa está apagada. Sin tiles (corrida
+        // vieja del pipeline), el GeoJSON entero, y recién al prender la capa:
+        // en Gale pesa cientos de MB.
         if (spec.kind === "vector") {
           if (!existing) {
-            map.addSource(spec.id, { type: "geojson", data: tileUrl(spec, siteId) });
+            if (tiles) {
+              map.addSource(spec.id, {
+                type: "vector",
+                tiles: [tileUrl(spec, siteId)],
+                minzoom: tiles.minzoom,
+                maxzoom: tiles.maxzoom,
+                bounds: tiles.bounds,
+              });
+            } else if (geojson && state.visible) {
+              map.addSource(spec.id, { type: "geojson", data: geojson });
+            } else {
+              continue;
+            }
             map.addLayer(
               {
                 id: spec.id,
                 type: "line",
                 source: spec.id,
+                ...(tiles ? { "source-layer": spec.sourceLayer ?? spec.id } : {}),
                 paint: {
                   "line-color": spec.legend[0]?.color ?? "#e0a24a",
                   // Finas de lejos y más marcadas de cerca: de otro modo, a
