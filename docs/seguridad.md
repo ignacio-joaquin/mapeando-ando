@@ -99,8 +99,8 @@ costo = Σ celdas Δt · (1 + Σ_k w_k · r_k(x, t))
 | `slope` | Pendiente | **2,0** | pendiente / pendiente máxima; sin dato = 1 | activo |
 | `shadow` | Sombra / frío | **1,0** | 1 en sombra a la hora de llegada, 0 al sol o sin dato | activo si hay pila de sombras |
 | `contact` | Sin contacto con el hábitat | **1,0** | 1 sin línea de vista o sin dato, 0 con vista | activo si hay DTM |
-| `roughness` | Rugosidad | 1,0 | — | inactivo: falta la capa |
-| `loose_soil` | Suelo suelto (THEMIS) | 1,0 | — | inactivo: falta la inercia térmica procesada |
+| `roughness` | Rugosidad | 1,0 | — | inactivo: la capa existe (`roughness.tif`) pero el A\* no la lee |
+| `loose_soil` | Suelo suelto (THEMIS) | 1,0 | — | inactivo: la capa existe (`loose_soil.tif`) pero el A\* no la lee; hoy refuerza el peligro de terreno del mapa |
 | `radiation` | Radiación por terreno | 1,0 | — | inactivo: la tasa de base es igual en todas las celdas |
 
 Los pesos se cambian en `CostWeights` de `api/planner.py` y en esta tabla. Con estos defaults, una celda de 20° en sombra y sin contacto cuesta 1 + 1,6 + 1 + 1 = 4,6 veces su tiempo de caminata. La respuesta trae `cost` con el peso de cada factor y cuántos minutos-equivalentes aportó en la ruta elegida. Los inactivos van con `minutes: null` y el motivo.
@@ -116,6 +116,10 @@ Geometría sobre el DTM, con estos supuestos (todos van en `assumptions`):
 - Hasta 128 muestras por rayo.
 
 Rendimiento medido en una laptop: 0,44 s para 90 000 celdas (una grilla de A\* de 300 × 300).
+
+La misma cuenta, en una grilla alrededor del hábitat en vez de sobre la ruta, es la capa **Contacto con el hábitat** del mapa (`GET /api/sites/{site}/viewshed`, `api/viewshed.py`): muestra desde dónde hay vista antes de planificar.
+
+**Cómo se explica un límite roto.** `evaluate` guarda dónde empieza y termina la racha más larga (minuto desde la salida y km recorrido). El `note` del límite dice cuántos minutos, entre qué minutos y entre qué km del recorrido, y qué hacer (mirar la capa, mover el hábitat o el destino, o sumar una parada con vista). El resumen del NO-GO va corto: "No va: 20 min seguidos sin vista al hábitat (máximo 10), del minuto 11 al 31. Mirá la capa «Contacto con el hábitat»."
 
 ## Tests
 

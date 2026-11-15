@@ -1,9 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Map as MapLibreMap,
   Marker,
   NavigationControl,
   GeoJSONSource,
+  Popup,
   type ExpressionSpecification,
   type MapMouseEvent,
   type StyleSpecification,
@@ -13,9 +15,12 @@ import {
 // ve y en el build el worker no se emite (404 → nginx devuelve index.html y el mapa no
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
-import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from "geojson";
-import { LAYERS, tileUrl } from "./layers";
-import { readyTiles } from "./terrain";
+import type { Feature, FeatureCollection, LineString, MultiPolygon, Point, Polygon } from "geojson";
+import { midpoint, offset, pathLength, routeSteps, type RouteStep } from "../domain/steps";
+import { geojsonUrl, LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
+import { readyTiles, terrainLayer, usesGeojson } from "./terrain";
+import { TERRAIN_TRUE_SCALE } from "../mars/constants";
+import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
 import { useSun } from "../state/sun";
 import { useStore } from "../state/store";
@@ -23,6 +28,37 @@ import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
 import { checkCoverage } from "./coverage";
+import {
+  addPinImages,
+  PLACE_KINDS,
+  PLACES_LAYER,
+  PLACES_SELECTED_LAYER,
+  PLACES_SOURCE,
+  placesToGeoJSON,
+} from "./places";
+import { PlacePopup } from "../components/route/PlacePopup";
+import { CONTACT_COLOR, CONTACT_HATCH_IMAGE, CONTACT_LAYER_ID, useContact } from "../state/contact";
+
+/** Las tres capas de la zona de contacto: se prenden y apagan juntas. */
+const CONTACT_LAYERS = [CONTACT_LAYER_ID, `${CONTACT_LAYER_ID}-hatch`, `${CONTACT_LAYER_ID}-edge`] as const;
+
+/** Rayado diagonal de 8 px para "sin contacto", generado acá: no hay sprites en el estilo. */
+function hatchImage(hex: string): { width: number; height: number; data: Uint8Array } {
+  const size = 8;
+  const data = new Uint8Array(size * size * 4);
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if ((x + y) % size > 1) continue; // línea de 2 px a 45°
+      const k = (y * size + x) * 4;
+      data[k] = r ?? 0;
+      data[k + 1] = g ?? 0;
+      data[k + 2] = b ?? 0;
+      data[k + 3] = 255;
+    }
+  }
+  return { width: size, height: size, data };
+}
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -32,7 +68,15 @@ import { checkCoverage } from "./coverage";
  * Las medidas que se le muestran al usuario (escala, distancias) NO salen de
  * MapLibre: salen de src/mars/geo.ts con el radio marciano. Servir los tiles en
  * la proyección del DTM (Equidistant Cylindrical) es trabajo del pipeline.
+ *
+ * En 3D la misma limitación estira el terreno en horizontal R_Tierra / R_Marte;
+ * el relieve se estira igual (TERRAIN_TRUE_SCALE) para que las pendientes se
+ * vean como son.
  */
+
+/** Inclinación de la cámara al pasar a 3D, y el tope. En 2D el tope es 0. */
+const PITCH_3D = 55;
+const MAX_PITCH_3D = 70;
 
 setWorkerUrl(maplibreWorkerUrl);
 
@@ -109,6 +153,8 @@ export function MapView({ center, bbox, siteId }: Props) {
       style: emptyStyle,
       center: [center.lon, center.lat],
       zoom: 12,
+      // Arranca en 2D: sin inclinar, para que la barra de escala valga en todo el mapa.
+      maxPitch: 0,
       attributionControl: false,
     });
     // Primer listener de "load": los once("load") de los otros efectos corren
@@ -117,15 +163,29 @@ export function MapView({ center, bbox, siteId }: Props) {
     map.on("load", () => {
       readyRef.current = true;
     });
-    map.addControl(new NavigationControl({ showCompass: false }), "top-right");
+    // Brújula: en 3D se puede girar, y tiene que haber cómo volver al norte.
+    map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     map.on("mousemove", (e: MapMouseEvent) => setCursor({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
     map.on("mouseout", () => setCursor(null));
+    map.on("mouseenter", PLACES_LAYER, () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", PLACES_LAYER, () => (map.getCanvas().style.cursor = ""));
     // La barra de escala sigue al zoom real del mapa (y a la latitud del centro).
     const syncView = () =>
-      useStore.getState().setView({ zoom: map.getZoom(), lat: map.getCenter().lat });
+      useStore
+        .getState()
+        .setView({ zoom: map.getZoom(), lat: map.getCenter().lat, pitch: map.getPitch() });
     map.on("move", syncView);
     map.on("load", syncView);
     map.on("click", (e: MapMouseEvent) => {
+      // Un pin de lugar le gana al clic en el mapa: abre su ficha y no suma un punto.
+      const hit = map.getLayer(PLACES_LAYER)
+        ? map.queryRenderedFeatures(e.point, { layers: [PLACES_LAYER] })[0]
+        : undefined;
+      const hitId = hit?.properties?.["id"];
+      if (typeof hitId === "string") {
+        useStore.getState().setSelectedPlace(hitId);
+        return;
+      }
       const p = { lat: e.lngLat.lat, lon: e.lngLat.lng };
       // El modo se lee al momento del clic: el handler se registra una sola vez.
       const plan = usePlan.getState();
@@ -246,7 +306,8 @@ export function MapView({ center, bbox, siteId }: Props) {
         const state = layers[spec.id];
         if (!state) continue;
         const tiles = readyTiles(terrain, spec.id);
-        const usable = state.available && (spec.kind === "vector" || tiles !== null);
+        const geojson = !tiles && usesGeojson(spec, terrain) ? geojsonUrl(spec, siteId) : null;
+        const usable = state.available && (tiles !== null || geojson !== null);
 
         if (keys.get(spec.id) !== sourceKey && (map.getLayer(spec.id) || map.getSource(spec.id))) {
           if (map.getLayer(spec.id)) map.removeLayer(spec.id);
@@ -260,16 +321,32 @@ export function MapView({ center, bbox, siteId }: Props) {
           continue;
         }
 
-        // Vectoriales (curvas de nivel): un GeoJSON que sirve el pipeline en
-        // /tiles/<sitio>/contours.geojson. MapLibre lo descarga solo.
+        // Vectoriales (curvas de nivel): tiles MVT. MapLibre pide solo los de
+        // la vista, y ninguno mientras la capa está apagada. Si terrain.json dice
+        // que la capa es un GeoJSON (corrida vieja, o el teselado falló), el GeoJSON
+        // entero, y recién al prender la capa: en Gale pesa cientos de MB.
         if (spec.kind === "vector") {
           if (!existing) {
-            map.addSource(spec.id, { type: "geojson", data: tileUrl(spec, siteId) });
+            if (tiles) {
+              map.addSource(spec.id, {
+                type: "vector",
+                tiles: [tileUrl(spec, siteId)],
+                minzoom: tiles.minzoom,
+                maxzoom: tiles.maxzoom,
+                bounds: tiles.bounds,
+              });
+            } else if (geojson && state.visible) {
+              map.addSource(spec.id, { type: "geojson", data: geojson });
+            } else {
+              continue;
+            }
             map.addLayer(
               {
                 id: spec.id,
                 type: "line",
                 source: spec.id,
+                // La capa del MVT la dice terrain.json; la de layers.ts es el respaldo.
+                ...(tiles ? { "source-layer": tiles.layer ?? spec.sourceLayer ?? spec.id } : {}),
                 paint: {
                   "line-color": spec.legend[0]?.color ?? "#e0a24a",
                   // Finas de lejos y más marcadas de cerca: de otro modo, a
@@ -403,6 +480,55 @@ export function MapView({ center, bbox, siteId }: Props) {
     });
   }, [shadowKey, shadowOn, shadowOpacity, sunSol]);
 
+  // 3b. Relieve 3D. La fuente raster-dem se arma cuando terrain.json la trae lista
+  //     (y se rearma si cambia el sitio o la corrida); el botón prende o apaga el
+  //     terreno sobre ella. Sin relief-dem el mapa queda en 2D y el botón lo dice.
+  const view3d = useStore((s) => s.view3d);
+  const setView3d = useStore((s) => s.setView3d);
+  const demTiles = readyTiles(terrain, RELIEF_DEM_ID);
+  const demLayer = terrainLayer(terrain, RELIEF_DEM_ID);
+  const demEncoding = demLayer?.encoding;
+  const demReady = demTiles !== null && demEncoding !== undefined;
+  const demKeyRef = useRef("");
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const key = `${siteId}|${terrain?.generated_at ?? ""}`;
+    const apply = () => {
+      if (map.getSource(RELIEF_DEM_ID) && (demKeyRef.current !== key || !demReady)) {
+        map.setTerrain(null);
+        map.removeSource(RELIEF_DEM_ID);
+      }
+      if (demTiles && demEncoding && !map.getSource(RELIEF_DEM_ID)) {
+        map.addSource(RELIEF_DEM_ID, {
+          type: "raster-dem",
+          tiles: [`/tiles/${siteId}/${demTiles.template}`],
+          tileSize: 256,
+          minzoom: demTiles.minzoom,
+          maxzoom: demTiles.maxzoom,
+          bounds: demTiles.bounds,
+          encoding: "custom",
+          redFactor: demEncoding.red_factor,
+          greenFactor: demEncoding.green_factor,
+          blueFactor: demEncoding.blue_factor,
+          baseShift: demEncoding.base_shift,
+        });
+        demKeyRef.current = key;
+      }
+      if (view3d && demReady) {
+        map.setTerrain({ source: RELIEF_DEM_ID, exaggeration: TERRAIN_TRUE_SCALE });
+        map.setMaxPitch(MAX_PITCH_3D);
+        if (map.getPitch() < 10) map.easeTo({ pitch: PITCH_3D, duration: 700 });
+      } else {
+        map.setTerrain(null);
+        // Tope 0: la cámara vuelve a mirar derecho hacia abajo y no se puede inclinar.
+        map.setMaxPitch(0);
+        if (map.getBearing() !== 0) map.easeTo({ bearing: 0, duration: 400 });
+      }
+    };
+    whenReady(map, apply);
+  }, [view3d, demReady, siteId, terrain]);
+
   // El contenedor de MapLibre va adentro de otro div: maplibre-gl.css le pone
   // `position: relative` a .maplibregl-map y le gana al `absolute inset-0` de
   // Tailwind (que va en @layer). Sin el wrapper el mapa mide 0 px de alto.
@@ -504,27 +630,419 @@ export function MapView({ center, bbox, siteId }: Props) {
         id: "route-line",
         type: "line",
         source: "route",
-        filter: ["!=", ["get", "class"], "unknown"],
+        filter: ["all", ["!=", ["get", "class"], "unknown"], ["!", ["get", "straight"]]],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": color, "line-width": 5 },
       });
-      // Tramos sin evaluar (falta DTM): punteada, para que no se lea como "ok".
+      // Tramos sin evaluar (falta DTM) y tramos sin camino (línea recta A→B, que no es
+      // una ruta): punteada, para que no se lean como un camino transitable.
       map.addLayer({
         id: "route-line-unknown",
         type: "line",
         source: "route",
-        filter: ["==", ["get", "class"], "unknown"],
+        filter: ["any", ["==", ["get", "class"], "unknown"], ["get", "straight"]],
         paint: { "line-color": color, "line-width": 4, "line-dasharray": [1.5, 1.2] },
       });
+      // Los pines quedan arriba de la ruta.
+      if (map.getLayer(PLACES_SELECTED_LAYER)) map.moveLayer(PLACES_SELECTED_LAYER);
+      if (map.getLayer(PLACES_LAYER)) map.moveLayer(PLACES_LAYER);
     };
     whenReady(map, apply);
   }, [result]);
 
+  // 5b. Indicaciones (ver DirectionsList): los landmarks de la ruta con su nombre
+  //     (id de contrato: landmarks-points) y, para el paso resaltado, su trecho y
+  //     la línea de vista desde la mitad del trecho hasta lo que se mira.
+  const activeStep = usePlan((s) => s.activeStep);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const steps = routeSteps(result?.route);
+    const step = activeStep ? steps[activeStep.index] : undefined;
+    const apply = () => {
+      const marks = landmarksToGeoJSON(steps, step);
+      const lines = stepToGeoJSON(step);
+      const ms = map.getSource(LANDMARKS_SOURCE);
+      const ls = map.getSource(STEP_SOURCE);
+      if (ms instanceof GeoJSONSource && ls instanceof GeoJSONSource) {
+        ms.setData(marks);
+        ls.setData(lines);
+      } else {
+        map.addSource(STEP_SOURCE, { type: "geojson", data: lines });
+        map.addSource(LANDMARKS_SOURCE, { type: "geojson", data: marks });
+        // El trecho, como un halo debajo de la línea de color de la ruta.
+        map.addLayer(
+          {
+            id: "route-step-highlight",
+            type: "line",
+            source: STEP_SOURCE,
+            filter: ["==", ["get", "part"], "stretch"],
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: { "line-color": "#ece6de", "line-width": 14, "line-opacity": 0.45 },
+          },
+          map.getLayer("route-line") ? "route-line" : undefined,
+        );
+        map.addLayer({
+          id: "route-sight-line",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sight"],
+          paint: { "line-color": "#ece6de", "line-width": 1.5, "line-dasharray": [2, 2] },
+        });
+        // El Sol del paso: rayo amarillo hacia el Sol y la sombra, oscura, para el otro lado.
+        map.addLayer({
+          id: "route-step-sun",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sun"],
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#f2c94c", "line-width": 3 },
+        });
+        map.addLayer({
+          id: "route-step-shadow",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "shadow"],
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#0b0a09", "line-width": 6, "line-opacity": 0.8 },
+        });
+        map.addLayer({
+          id: "route-step-sun-label",
+          type: "symbol",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sun-label"],
+          layout: {
+            "text-field": ["get", "label"],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 12,
+            "text-anchor": "left",
+            "text-offset": [0.4, 0],
+          },
+          paint: { "text-color": "#f2c94c", "text-halo-color": "#0b0a09", "text-halo-width": 1.5 },
+        });
+        map.addLayer({
+          id: "landmarks-points",
+          type: "circle",
+          source: LANDMARKS_SOURCE,
+          paint: {
+            "circle-radius": ["case", ["get", "active"], 9, 6],
+            "circle-color": "#0b0a09",
+            "circle-stroke-color": ["case", ["get", "active"], "#e07a4a", "#ece6de"],
+            "circle-stroke-width": ["case", ["get", "active"], 3, 2],
+          },
+        });
+        map.addLayer({
+          id: "landmarks-labels",
+          type: "symbol",
+          source: LANDMARKS_SOURCE,
+          layout: {
+            "text-field": ["get", "name"],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": ["case", ["get", "active"], 13, 11],
+            "text-anchor": "left",
+            "text-offset": [0.9, 0],
+            "text-optional": true,
+          },
+          paint: { "text-color": "#ece6de", "text-halo-color": "#0b0a09", "text-halo-width": 1.5 },
+        });
+      }
+      // Con un clic en el paso, el mapa encuadra el trecho y lo que se mira.
+      if (step && activeStep?.pinned) {
+        const pts = step.aim ? [...step.path, step.aim] : [...step.path];
+        const lons = pts.map((p) => p[0]);
+        const lats = pts.map((p) => p[1]);
+        map.fitBounds(
+          [
+            [Math.min(...lons), Math.min(...lats)],
+            [Math.max(...lons), Math.max(...lats)],
+          ],
+          { padding: 70, maxZoom: 16, duration: 500 },
+        );
+      }
+    };
+    whenReady(map, apply);
+  }, [result, activeStep]);
+
+  // 5c. Contacto con el hábitat (id de contrato: habitat-contact). Zona con línea
+  //     de vista a la antena de A, de /api/sites/{site}/viewshed. Sin contacto va
+  //     rayado además de rojo: no se comunica solo por color. Debajo de la ruta.
+  const viewshed = useContact((s) => s.viewshed);
+  const contactVisible = useContact((s) => s.visible);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data: FeatureCollection = viewshed?.geojson ?? { type: "FeatureCollection", features: [] };
+      const visibility = contactVisible ? "visible" : "none";
+      const src = map.getSource(CONTACT_LAYER_ID);
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+        for (const id of CONTACT_LAYERS) map.setLayoutProperty(id, "visibility", visibility);
+        return;
+      }
+      if (!map.hasImage(CONTACT_HATCH_IMAGE)) map.addImage(CONTACT_HATCH_IMAGE, hatchImage(CONTACT_COLOR.no_contact));
+      map.addSource(CONTACT_LAYER_ID, { type: "geojson", data });
+      const before = ["coverage-outline", "route-casing"].find((id) => map.getLayer(id));
+      map.addLayer(
+        {
+          id: CONTACT_LAYER_ID,
+          type: "fill",
+          source: CONTACT_LAYER_ID,
+          layout: { visibility },
+          paint: {
+            "fill-color": [
+              "match",
+              ["get", "class"],
+              ...Object.entries(CONTACT_COLOR).flat(),
+              CONTACT_COLOR.unknown,
+            ] as unknown as ExpressionSpecification,
+            "fill-opacity": ["match", ["get", "class"], "contact", 0.16, "no_contact", 0.22, 0.1],
+          },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: `${CONTACT_LAYER_ID}-hatch`,
+          type: "fill",
+          source: CONTACT_LAYER_ID,
+          filter: ["==", ["get", "class"], "no_contact"],
+          layout: { visibility },
+          paint: { "fill-pattern": CONTACT_HATCH_IMAGE, "fill-opacity": 0.8 },
+        },
+        before,
+      );
+      map.addLayer(
+        {
+          id: `${CONTACT_LAYER_ID}-edge`,
+          type: "line",
+          source: CONTACT_LAYER_ID,
+          filter: ["==", ["get", "class"], "contact"],
+          layout: { visibility },
+          paint: { "line-color": CONTACT_COLOR.contact, "line-width": 1.2, "line-opacity": 0.9 },
+        },
+        before,
+      );
+    };
+    whenReady(map, apply);
+  }, [viewshed, contactVisible]);
+
+  // 6. Pines de lugares (places.json), como en Google Maps. Los mismos lugares
+  //    que el buscador; se filtran por tipo desde el panel de capas. Al
+  //    superponerse queda el de mayor rango (IAU > muestras > objetivos > …).
+  const places = useStore((s) => s.places);
+  const placeKinds = useStore((s) => s.placeKinds);
+  const selectedPlaceId = useStore((s) => s.selectedPlaceId);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data = placesToGeoJSON(places?.places ?? []);
+      const src = map.getSource(PLACES_SOURCE);
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+      } else {
+        addPinImages(map);
+        map.addSource(PLACES_SOURCE, { type: "geojson", data });
+        // Anillo del lugar con la ficha abierta, debajo del pin.
+        map.addLayer({
+          id: PLACES_SELECTED_LAYER,
+          type: "circle",
+          source: PLACES_SOURCE,
+          filter: ["==", ["get", "id"], ""],
+          paint: {
+            "circle-radius": 14,
+            "circle-color": "rgba(224,122,74,0.25)",
+            "circle-stroke-color": "#e07a4a",
+            "circle-stroke-width": 3,
+          },
+        });
+        map.addLayer({
+          id: PLACES_LAYER,
+          type: "symbol",
+          source: PLACES_SOURCE,
+          layout: {
+            "icon-image": ["concat", "place-pin-", ["get", "kind"]],
+            "icon-anchor": "bottom",
+            "icon-allow-overlap": false,
+            "icon-padding": 1,
+            "symbol-sort-key": ["get", "rank"],
+            // Nombres solo de cerca, y se caen antes que el pin si no entran.
+            "text-field": ["step", ["zoom"], "", 14, ["get", "name"]],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 12,
+            "text-anchor": "top",
+            "text-offset": [0, 0.2],
+            "text-optional": true,
+            "text-max-width": 10,
+          },
+          paint: {
+            "text-color": "#ece6de",
+            "text-halo-color": "#0b0a09",
+            "text-halo-width": 1.5,
+          },
+        });
+      }
+      const kinds = PLACE_KINDS.filter((k) => placeKinds[k]);
+      map.setFilter(PLACES_LAYER, ["in", ["get", "kind"], ["literal", kinds]]);
+      map.setFilter(PLACES_SELECTED_LAYER, ["==", ["get", "id"], selectedPlaceId ?? ""]);
+      // La ruta va por debajo de los pines: si no, la línea los tapa.
+      if (map.getLayer("route-casing")) map.moveLayer(PLACES_SELECTED_LAYER);
+      if (map.getLayer("route-casing")) map.moveLayer(PLACES_LAYER);
+    };
+    whenReady(map, apply);
+  }, [places, placeKinds, selectedPlaceId]);
+
+  // 7. Ficha del pin tocado. El popup de MapLibre aloja un div y React dibuja
+  //    adentro con un portal, así la ficha usa los mismos componentes que el panel.
+  const [popupNode] = useState(() => document.createElement("div"));
+  const popupRef = useRef<Popup | null>(null);
+  const selectedPlace = places?.places.find((p) => p.id === selectedPlaceId) ?? null;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!selectedPlace) {
+      popupRef.current?.remove();
+      return;
+    }
+    let popup = popupRef.current;
+    if (!popup) {
+      popup = new Popup({
+        closeButton: true,
+        closeOnClick: false,
+        maxWidth: "none",
+        offset: [0, -30],
+        // Sin foco automático: si no, el badge de procedencia abre su tooltip encima de la ficha.
+        focusAfterOpen: false,
+      })
+        .setDOMContent(popupNode);
+      // Cerrar con la cruz (o con Escape) limpia la selección.
+      popup.on("close", () => {
+        if (useStore.getState().selectedPlaceId) useStore.getState().setSelectedPlace(null);
+      });
+      popupRef.current = popup;
+    }
+    popup.setLngLat([selectedPlace.lon, selectedPlace.lat]);
+    if (!popup.isOpen()) popup.addTo(map);
+  }, [selectedPlace, popupNode]);
+  // Al desmontar el mapa, el popup se va con él.
+  useEffect(() => () => {
+    popupRef.current?.remove();
+    popupRef.current = null;
+  }, []);
+
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
+      <div className="absolute right-3 bottom-3 flex flex-col items-end gap-1">
+        <button
+          type="button"
+          aria-pressed={view3d && demReady}
+          disabled={!demReady}
+          onClick={() => setView3d(!view3d)}
+          title={
+            demReady
+              ? "Relieve a escala real. Arrastrá con el botón derecho (o Ctrl + arrastrar) para girar e inclinar."
+              : "El relieve 3D espera al pipeline (relief-dem en terrain.json)."
+          }
+          className="min-h-11 min-w-16 rounded border-2 border-fg/70 bg-bg/90 px-3 text-sm font-bold text-fg shadow-lg hover:bg-panel disabled:cursor-not-allowed disabled:border-line disabled:text-muted aria-pressed:border-rust aria-pressed:bg-rust/20"
+        >
+          {view3d && demReady ? "Ver en 2D" : "Ver en 3D"}
+        </button>
+        {!demReady ? (
+          <span className="rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+            3D: esperando el pipeline
+          </span>
+        ) : view3d ? (
+          <span className="flex items-center gap-1.5 rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
+            relieve a escala real · ×{TERRAIN_TRUE_SCALE.toFixed(2)} por el radio
+            <ProvenanceBadge
+              source={{
+                ...RELIEF_DEM_SOURCE,
+                resolution: demLayer?.resolution ?? RELIEF_DEM_SOURCE.resolution,
+                assumptions: [...(RELIEF_DEM_SOURCE.assumptions ?? []), ...(demLayer?.assumptions ?? [])],
+              }}
+              side="top"
+            />
+          </span>
+        ) : null}
+      </div>
+      {selectedPlace
+        ? createPortal(
+            <PlacePopup place={selectedPlace} onClose={() => useStore.getState().setSelectedPlace(null)} />,
+            popupNode,
+          )
+        : null}
     </div>
   );
+}
+
+const LANDMARKS_SOURCE = "route-landmarks";
+const STEP_SOURCE = "route-step";
+
+/** Un punto por landmark de la ruta (sin repetir), en el lugar que se mira. */
+function landmarksToGeoJSON(steps: readonly RouteStep[], active: RouteStep | undefined): FeatureCollection<Point> {
+  const seen = new Map<string, Feature<Point>>();
+  for (const st of steps) {
+    const lm = st.direction.landmark;
+    if (!lm || !st.aim) continue;
+    const key = `${lm.id}|${st.aim[0]}|${st.aim[1]}`;
+    const isActive = active?.index === st.index;
+    const prev = seen.get(key);
+    if (prev) {
+      if (isActive) prev.properties = { ...prev.properties, active: true };
+      continue;
+    }
+    // El borde de un cráter se nombra como tal: el punto no es el centro.
+    const name = lm.target ? `${lm.name} (borde)` : lm.name;
+    seen.set(key, {
+      type: "Feature",
+      properties: { name, active: isActive },
+      geometry: { type: "Point", coordinates: [st.aim[0], st.aim[1]] },
+    });
+  }
+  return { type: "FeatureCollection", features: [...seen.values()] };
+}
+
+/**
+ * El trecho resaltado; si nombra un landmark, la línea de vista hacia él; y si
+ * hay Sol a esa hora, hacia dónde está (y para dónde cae la sombra).
+ */
+function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineString | Point> {
+  if (!step) return { type: "FeatureCollection", features: [] };
+  const features: Feature<LineString | Point>[] = [
+    {
+      type: "Feature",
+      properties: { part: "stretch" },
+      geometry: { type: "LineString", coordinates: step.path.map(([x, y]) => [x, y]) },
+    },
+  ];
+  if (step.aim) {
+    const [mx, my] = midpoint(step.path);
+    features.push({
+      type: "Feature",
+      properties: { part: "sight" },
+      geometry: { type: "LineString", coordinates: [[mx, my], [step.aim[0], step.aim[1]]] },
+    });
+  }
+  const sun = step.direction.sun;
+  if (sun && sun.elevation_deg > 0) {
+    const mid = midpoint(step.path);
+    // Un largo que se vea a la escala del trecho, sin tapar media pantalla.
+    const len = Math.min(Math.max(pathLength(step.path) * 0.35, 120), 800);
+    const toSun = offset(mid, sun.azimuth_deg, len);
+    const shadow = offset(mid, sun.azimuth_deg + 180, len * 0.6);
+    features.push(
+      { type: "Feature", properties: { part: "sun" }, geometry: { type: "LineString", coordinates: [[...mid], [...toSun]] } },
+      { type: "Feature", properties: { part: "shadow" }, geometry: { type: "LineString", coordinates: [[...mid], [...shadow]] } },
+      {
+        type: "Feature",
+        properties: { part: "sun-label", label: `☀ Sol ${Math.round(sun.elevation_deg)}°` },
+        geometry: { type: "Point", coordinates: [...toSun] },
+      },
+    );
+  }
+  return { type: "FeatureCollection", features };
 }
 
 function legsToGeoJSON(legs: readonly RouteLeg[]): FeatureCollection<LineString> {
@@ -532,7 +1050,14 @@ function legsToGeoJSON(legs: readonly RouteLeg[]): FeatureCollection<LineString>
     type: "FeatureCollection",
     features: legs.map((l) => ({
       type: "Feature",
-      properties: { class: l.class, from: l.from, to: l.to },
+      // Un tramo bloqueado con solo dos puntos es la línea recta A→B que deja el
+      // planificador cuando no encuentra paso: no es un camino.
+      properties: {
+        class: l.class,
+        from: l.from,
+        to: l.to,
+        straight: l.class === "blocked" && l.coordinates.length === 2,
+      },
       geometry: { type: "LineString", coordinates: l.coordinates.map(([x, y]) => [x, y]) },
     })),
   };
@@ -542,7 +1067,7 @@ function markerClass(kind: ReturnType<typeof waypointLabel>["kind"], open: boole
   const base =
     "grid size-7 cursor-grab place-items-center rounded-full border-2 text-xs font-bold shadow-lg active:cursor-grabbing";
   const tone =
-    kind === "origin"
+    kind === "origin" || kind === "return"
       ? "border-fg bg-ok text-bg"
       : kind === "destination"
         ? "border-fg bg-alert text-bg"

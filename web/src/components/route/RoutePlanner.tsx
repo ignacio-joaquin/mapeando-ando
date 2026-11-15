@@ -3,18 +3,20 @@ import { planRoute } from "../../api/client";
 import { EXAMPLE_PARAMS } from "../../api/routeFixture";
 import type { MeasuredValue, RouteLeg, RouteStop } from "../../api/schemas";
 import { MARS24_LTST } from "../../domain/provenance";
-import { LEG_CLASS_COLOR, LEG_CLASS_LABEL, waypointLabel } from "../../map/route";
+import { LEG_CLASS_COLOR, LEG_CLASS_LABEL, stopLabel, waypointLabel } from "../../map/route";
 import { formatLatLon } from "../../mars/geo";
 import { insideCoverage, UNVERIFIED_MESSAGE } from "../../map/coverage";
-import { planKey, useFreshRoute, usePlan, type Waypoint } from "../../state/plan";
+import { planKey, routeWaypoints, useFreshRoute, usePlan, type Waypoint } from "../../state/plan";
 import { encodePlan, writePlanToUrl } from "../../state/share";
 import { useStore } from "../../state/store";
 import { DestinationSearch } from "./DestinationSearch";
 import { PlaceCard } from "./PlaceCard";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
+import { HabitatContact } from "./HabitatContact";
 import { SafetyBreakdown } from "./SafetyBreakdown";
 import { VerdictCard } from "./VerdictCard";
+import { DirectionsList } from "./DirectionsList";
 import { StationPhoto } from "./StationPhoto";
 import {
   earthShort,
@@ -33,19 +35,21 @@ import {
  * sale); el destino (B) se elige buscando, con un lugar sugerido o con otro
  * clic; después se suman paradas en el medio. Cada cambio (puntos, permanencia,
  * hora de salida) recalcula contra /api/route; mientras el server no lo tenga,
- * usa el planificador de ejemplo y lo dice. La travesía queda en la URL para
+ * usa el planificador de ejemplo y lo dice. Por defecto el cálculo incluye la
+ * vuelta al hábitat (se puede apagar). La travesía queda en la URL para
  * compartirla.
  */
 export function RoutePlanner() {
   const siteId = useStore((s) => s.activeSiteId);
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
+  const roundTrip = usePlan((s) => s.roundTrip);
   const clickMode = usePlan((s) => s.clickMode);
   const result = useFreshRoute();
   const status = usePlan((s) => s.status);
   const notice = usePlan((s) => s.notice);
   const coverage = useStore((s) => s.coverage);
-  const { setDepartAt, setClickMode, setResult, setStatus, setNotice, clear, reverse } =
+  const { setDepartAt, setRoundTrip, setClickMode, setResult, setStatus, setNotice, clear, reverse } =
     usePlan.getState();
 
   // Cambiar de sitio arranca una travesía nueva (salvo la que trajo un enlace).
@@ -58,9 +62,9 @@ export function RoutePlanner() {
     writePlanToUrl(
       waypoints.length === 0
         ? `?site=${encodeURIComponent(siteId)}`
-        : encodePlan(siteId, departAt, waypoints),
+        : encodePlan(siteId, departAt, waypoints, roundTrip),
     );
-  }, [siteId, departAt, waypoints]);
+  }, [siteId, departAt, waypoints, roundTrip]);
 
   // Recalcular ante cualquier cambio, con un respiro para no pedir por tecla.
   useEffect(() => {
@@ -72,7 +76,7 @@ export function RoutePlanner() {
     const ctl = new AbortController();
     // La respuesta queda marcada con la huella de este pedido: si los puntos
     // cambian mientras tanto, la UI la trata como vieja y no la muestra.
-    const key = planKey(siteId, departAt, waypoints);
+    const key = planKey(siteId, departAt, waypoints, roundTrip);
     // Ya, no después del respiro: un error del pedido anterior no aplica a este.
     setStatus({ kind: "loading" });
     const t = setTimeout(() => {
@@ -80,7 +84,7 @@ export function RoutePlanner() {
         {
           site: siteId,
           depart_utc: departAt.toISOString(),
-          waypoints: waypoints.map((w) => ({
+          waypoints: routeWaypoints(waypoints, roundTrip).map((w) => ({
             lat: w.lat,
             lon: w.lon,
             task: w.task.trim() || null,
@@ -104,11 +108,14 @@ export function RoutePlanner() {
       clearTimeout(t);
       ctl.abort();
     };
-  }, [waypoints, departAt, siteId, setResult, setStatus]);
+  }, [waypoints, departAt, roundTrip, siteId, setResult, setStatus]);
 
   const route = result?.route ?? null;
   const origin = waypoints[0];
   const firstStop = route?.stops[0];
+  // Con ida y vuelta, la respuesta trae un tramo y una parada más que la lista.
+  const returnLeg = roundTrip ? route?.legs[waypoints.length - 1] : undefined;
+  const returnStop = roundTrip ? route?.stops[waypoints.length] : undefined;
 
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -156,6 +163,8 @@ export function RoutePlanner() {
         <p className="text-[11px] text-warn">⚠ {UNVERIFIED_MESSAGE}</p>
       ) : null}
 
+      <HabitatContact />
+
       {/* Hora de salida */}
       <section className="rounded border border-line p-2">
         <label className="flex flex-col gap-1 text-xs">
@@ -187,6 +196,22 @@ export function RoutePlanner() {
             <ProvenanceBadge source={MARS24_LTST} align="left" />
           </p>
         ) : null}
+        <label className="mt-2 flex items-start gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={roundTrip}
+            onChange={(e) => setRoundTrip(e.target.checked)}
+            className="mt-0.5 size-4 accent-rust"
+          />
+          <span>
+            <span className="text-fg">Incluir la vuelta al hábitat</span>
+            <span className="block text-[11px] text-muted">
+              {roundTrip
+                ? "El veredicto cuenta O2, batería, dosis y luz hasta volver a A."
+                : "Solo ida: el veredicto termina en el destino, sin la vuelta."}
+            </span>
+          </span>
+        </label>
       </section>
 
       {/* Veredicto */}
@@ -201,6 +226,8 @@ export function RoutePlanner() {
             {...(route.data_quality ? { dataQuality: route.data_quality } : {})}
           />
           {result?.example ? <ExampleNotice /> : null}
+          {/* Las indicaciones van arriba: es lo que se usa afuera, con el casco puesto. */}
+          <DirectionsList route={route} example={result?.example ?? false} />
           <SafetyBreakdown verdict={route.verdict} cost={route.cost} />
           <div className="flex gap-2">
             <button
@@ -233,6 +260,7 @@ export function RoutePlanner() {
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
               Recorrido · {waypoints.length} {waypoints.length === 1 ? "punto" : "puntos"}
+              {roundTrip && waypoints.length >= 2 ? " · ida y vuelta" : ""}
             </h3>
             <span className="flex gap-2 text-[11px]">
               <button type="button" onClick={reverse} className="text-muted hover:text-fg">
@@ -273,6 +301,12 @@ export function RoutePlanner() {
                 ) : null}
               </li>
             ))}
+            {returnLeg && returnStop ? (
+              <li>
+                <LegRow leg={returnLeg} reference={route?.legs[0]} />
+                <ReturnCard stop={returnStop} total={route?.stops.length ?? 0} reference={firstStop} />
+              </li>
+            ) : null}
           </ol>
 
           {waypoints.length >= 2 ? (
@@ -422,6 +456,9 @@ function StopCard({
   const outside = coverage !== null && !insideCoverage(coverage, waypoint);
   const label = waypointLabel(index, total);
   const isStation = label.kind === "station";
+  // Con vuelta, en el destino también se queda un rato: esos minutos cuentan.
+  const roundTrip = usePlan((s) => s.roundTrip);
+  const hasDwell = isStation || (roundTrip && label.kind === "destination");
 
   const dot =
     label.kind === "origin"
@@ -429,8 +466,6 @@ function StopCard({
       : label.kind === "destination"
         ? "bg-alert text-bg"
         : "bg-panel text-fg";
-
-  const badgeFor = (v: MeasuredValue, ref: MeasuredValue | undefined) => repeatedBadge(v, ref);
 
   return (
     <div
@@ -505,7 +540,7 @@ function StopCard({
           aria-label={`Tarea en ${label.long}`}
           className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-fg placeholder:text-muted/70"
         />
-        {isStation ? (
+        {hasDwell ? (
           <label className="flex items-center gap-1 text-[11px] text-muted">
             <input
               type="number"
@@ -523,50 +558,7 @@ function StopCard({
         ) : null}
       </div>
 
-      {stop ? (
-        <dl className="mt-2 grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-xs">
-          {stop.arrive_utc ? (
-            <>
-              <dt className="text-muted">Llega</dt>
-              <dd className="font-mono" title={`Tu hora: ${earthShort(stop.arrive_utc)}`}>
-                {ltstShort(stop.arrive_utc, stop.lon)} <span className="text-muted">LTST</span>
-              </dd>
-            </>
-          ) : null}
-          {stop.depart_utc ? (
-            <>
-              <dt className="text-muted">Sale</dt>
-              <dd className="font-mono" title={`Tu hora: ${earthShort(stop.depart_utc)}`}>
-                {ltstShort(stop.depart_utc, stop.lon)} <span className="text-muted">LTST</span>
-              </dd>
-            </>
-          ) : null}
-          <dt className="text-muted">O2</dt>
-          <dd className="text-right">
-            <Measure
-              data={stop.o2_remaining}
-              format={(v) => v.toFixed(1)}
-              badge={badgeFor(stop.o2_remaining, reference?.o2_remaining)}
-            />
-          </dd>
-          <dt className="text-muted">Batería</dt>
-          <dd className="text-right">
-            <Measure
-              data={stop.battery_remaining}
-              format={(v) => v.toFixed(0)}
-              badge={badgeFor(stop.battery_remaining, reference?.battery_remaining)}
-            />
-          </dd>
-          <dt className="text-muted">Dosis acumulada</dt>
-          <dd className="text-right">
-            <Measure
-              data={stop.dose_accumulated}
-              format={(v) => v.toFixed(3)}
-              badge={badgeFor(stop.dose_accumulated, reference?.dose_accumulated)}
-            />
-          </dd>
-        </dl>
-      ) : null}
+      {stop ? <StopValues stop={stop} reference={reference} /> : null}
 
       {open ? (
         <StationPhoto siteId={siteId} lat={waypoint.lat} lon={waypoint.lon} />
@@ -583,12 +575,97 @@ function StopCard({
   );
 }
 
+/** La vuelta al hábitat: solo lectura, porque es el mismo punto que A. */
+function ReturnCard({
+  stop,
+  total,
+  reference,
+}: {
+  readonly stop: RouteStop;
+  readonly total: number;
+  readonly reference: RouteStop | undefined;
+}) {
+  const label = stopLabel(total - 1, total, true);
+  return (
+    <div className="rounded border border-dashed border-line p-2">
+      <div className="flex items-start gap-2">
+        <span
+          aria-hidden
+          className="grid size-6 shrink-0 place-items-center rounded-full border-2 border-fg bg-ok text-[11px] font-bold text-bg"
+        >
+          {label.short}
+        </span>
+        <div className="min-w-0 flex-1">
+          <span className="font-semibold">{label.long}</span>
+          <p className="font-mono text-[11px] text-muted">{formatLatLon(stop)}</p>
+        </div>
+      </div>
+      <StopValues stop={stop} reference={reference} />
+    </div>
+  );
+}
+
+/** Horas y consumibles de una parada calculada. */
+function StopValues({
+  stop,
+  reference,
+}: {
+  readonly stop: RouteStop;
+  readonly reference: RouteStop | undefined;
+}) {
+  const badgeFor = (v: MeasuredValue, ref: MeasuredValue | undefined) => repeatedBadge(v, ref);
+  return (
+    <dl className="mt-2 grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-xs">
+      {stop.arrive_utc ? (
+        <>
+          <dt className="text-muted">Llega</dt>
+          <dd className="font-mono" title={`Tu hora: ${earthShort(stop.arrive_utc)}`}>
+            {ltstShort(stop.arrive_utc, stop.lon)} <span className="text-muted">LTST</span>
+          </dd>
+        </>
+      ) : null}
+      {stop.depart_utc ? (
+        <>
+          <dt className="text-muted">Sale</dt>
+          <dd className="font-mono" title={`Tu hora: ${earthShort(stop.depart_utc)}`}>
+            {ltstShort(stop.depart_utc, stop.lon)} <span className="text-muted">LTST</span>
+          </dd>
+        </>
+      ) : null}
+      <dt className="text-muted">O2</dt>
+      <dd className="text-right">
+        <Measure
+          data={stop.o2_remaining}
+          format={(v) => v.toFixed(1)}
+          badge={badgeFor(stop.o2_remaining, reference?.o2_remaining)}
+        />
+      </dd>
+      <dt className="text-muted">Batería</dt>
+      <dd className="text-right">
+        <Measure
+          data={stop.battery_remaining}
+          format={(v) => v.toFixed(0)}
+          badge={badgeFor(stop.battery_remaining, reference?.battery_remaining)}
+        />
+      </dd>
+      <dt className="text-muted">Dosis acumulada</dt>
+      <dd className="text-right">
+        <Measure
+          data={stop.dose_accumulated}
+          format={(v) => v.toFixed(3)}
+          badge={badgeFor(stop.dose_accumulated, reference?.dose_accumulated)}
+        />
+      </dd>
+    </dl>
+  );
+}
+
 function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference: RouteLeg | undefined }) {
   const color = LEG_CLASS_COLOR[leg.class];
   const same = (v: MeasuredValue, r: MeasuredValue | undefined) => repeatedBadge(v, r);
   return (
     <div className="ml-3 flex gap-3 border-l-4 py-1.5 pl-3 text-[11px]" style={{ borderColor: color }}>
-      <div className="flex flex-col gap-0.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="font-semibold" style={{ color }}>
           {LEG_CLASS_LABEL[leg.class]}
         </span>

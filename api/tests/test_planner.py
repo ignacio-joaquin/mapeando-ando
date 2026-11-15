@@ -77,6 +77,17 @@ class TestSinDatos:
         assert body["data_quality"]["light_status"] == "complete"
         assert "no se evaluó el contacto con el hábitat" in body["verdict"]["summary"]
 
+    def test_pila_sin_pendiente_la_luz_queda_a_medias(self, client, site):
+        # Con la pila se evalúa el atardecer, pero sin pendiente no hay A* y la sombra
+        # no entra en la ruta: ni "complete" ni "missing".
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        daylight = next(lim for lim in body["verdict"]["limits"] if lim["id"] == "daylight")
+        assert daylight["status"] != "not_evaluated"
+        assert body["data_quality"]["light_status"] == "partial"
+        assert body["data_quality"]["light_evaluated"] is False
+        assert body["data_quality"]["light_source"] == "exact"
+
     def test_fecha_invalida_responde_422(self, client, site):
         body = request(band_time(13)) | {"depart_utc": "mañana a la tarde"}
         assert client.post("/api/route", json=body).status_code == 422
@@ -104,6 +115,17 @@ class TestTerreno:
         assert "profile" in body
         assert "Ojo" not in body["verdict"]["summary"]
 
+    def test_el_perfil_se_colorea_con_la_pendiente_del_veredicto(self, client, site):
+        # DTM plano (desnivel 0 entre muestras) pero pendiente de 2° en cada celda: si el
+        # perfil usara el desnivel entre muestras daría 0°. Tiene que dar la del veredicto,
+        # para no pintar verde un tramo que el veredicto bloquea.
+        write_terrain(site, flat(2.0), dtm=np.zeros((N, N), dtype=np.float32))
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        slopes = body["profile"]["slope_deg"]
+        assert slopes and all(s == pytest.approx(2.0) for s in slopes)
+        assert max(slopes) == pytest.approx(body["legs"][0]["max_slope"]["value"])
+
     def test_esquiva_una_pared_por_el_hueco(self, client, site):
         slope = flat()
         slope[:, 100] = 40.0          # pared de norte a sur
@@ -121,6 +143,38 @@ class TestTerreno:
         assert body["legs"][0]["class"] == "blocked"
         assert body["verdict"]["status"] == "NO_GO"
         assert body["verdict"]["limiting_factor"] == "terrain"
+
+    def test_sin_camino_el_perfil_muestra_la_pared_en_su_lugar(self, client, site):
+        # Pared completa a mitad de camino (A en la columna 40, B en la 160, pared en la 100):
+        # no hay camino, pero el perfil tiene que salir igual, de la línea recta A→B medida,
+        # con la pendiente del veredicto en rojo justo donde está la pared.
+        slope = flat()
+        slope[:, 100] = 40.0
+        dtm = np.zeros((N, N), dtype=np.float32)
+        dtm[:, 100:] = 10.0                     # el escalón de la pared
+        write_terrain(site, slope, dtm=dtm)
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["legs"][0]["class"] == "blocked"
+        profile = body["profile"]
+        assert profile["straight_legs"] == [0]
+        slopes, dist = profile["slope_deg"], profile["distance_m"]
+        assert max(slopes) == pytest.approx(40.0)
+        wall = next(i for i, s in enumerate(slopes) if s >= 25.0)
+        assert dist[wall] / dist[-1] == pytest.approx(0.5, abs=0.05)
+        assert all(s == pytest.approx(2.0) for s in slopes[:wall])   # antes de la pared, transitable
+        assert profile["elevation_m"][-1] - profile["elevation_m"][0] == pytest.approx(10.0)
+
+    def test_sin_camino_y_sin_dtm_no_hay_perfil(self, client, site):
+        # Sin DTM no hay elevación que medir: el perfil no se inventa.
+        slope = flat()
+        slope[:, 100] = 40.0
+        write_terrain(site, slope)
+        assert "profile" not in client.post("/api/route", json=request(band_time(13))).json()
+
+    def test_con_camino_el_perfil_no_tiene_tramos_rectos(self, client, site):
+        write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))
+        body = client.post("/api/route", json=request(band_time(13))).json()
+        assert body["profile"]["straight_legs"] == []
 
     def test_pendiente_sin_dato_marca_el_tramo_unknown(self, client, site):
         slope = flat()
@@ -141,6 +195,14 @@ class TestTerreno:
         assert body["data_quality"]["terrain_status"] == "partial"
         assert body["data_quality"]["terrain_evaluated"] is False
         assert body["data_quality"]["terrain_source"] == "processed"
+
+    def test_tramo_fuera_del_dtm_deja_la_luz_a_medias(self, client, site):
+        write_terrain(site, flat())
+        write_shadow_stack(site)
+        body = client.post("/api/route", json=request(band_time(13), [A, latlon(ROW, 120), latlon(ROW, N + 50)])).json()
+        assert [leg["class"] for leg in body["legs"]] == ["ok", "unknown"]
+        assert body["legs"][1]["shadow_fraction"]["value"] is None
+        assert body["data_quality"]["light_status"] == "partial"
 
     def test_terreno_procesado_y_luz_exacta(self, client, site):
         write_terrain(site, flat(), dtm=np.zeros((N, N), dtype=np.float32))

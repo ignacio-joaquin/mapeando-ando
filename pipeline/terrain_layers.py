@@ -15,6 +15,11 @@ Salidas (misma grilla que el DTM):
                       La pendiente entra en Pandolf aparte, como el grado G de la ruta.
   hazard.tif          clase de peligro (uint8): 0 bajo, 1 medio, 2 alto, 3 no transitable,
                       255 sin dato. Manda la peor entre la clase de pendiente y la de rugosidad.
+                      Si se le pasa loose_soil.tif (pipeline/thermal.py, THEMIS de noche), el
+                      terreno "bajo" con suelo suelto probable sube a "medio": arena o grano
+                      fino en un piso plano y liso no bloquea, pero hunde el paso y cansa.
+                      THEMIS nunca sube una celda a "alto" ni a "no transitable": es un dato de
+                      100 m sobre una capa de 1 m, alcanza para avisar, no para bloquear.
 
 Solo geometría del terreno: no incluye gravedad, traje ni carga.
 Se procesa por bloques con borde extra, así que anda con DTMs grandes (Gale) sin costuras.
@@ -29,6 +34,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from rasterio.warp import Resampling, reproject
 from rasterio.windows import Window
 from scipy.ndimage import uniform_filter
 
@@ -53,6 +59,8 @@ ETA_VALUES = (1.1, 1.2, 1.5, 1.8)   # camino de tierra, matorral liviano, matorr
 
 HAZARD_CLASSES = ("bajo", "medio", "alto", "no transitable")
 HAZARD_NODATA = 255
+LOOSE_SOIL_CLASS = 1       # a qué clase sube el terreno "bajo" con suelo suelto probable
+LOOSE_NODATA = 255         # = thermal.LOOSE_NODATA
 BAD_Z_M = 1e5              # mismo valor que precompute.py: los DTM marcan nodata con ±3,4e38
 BLOCK = 2048               # tamaño de bloque de procesamiento (px)
 
@@ -95,12 +103,37 @@ def terrain_factor(rough_m):
     return np.where(np.isnan(rough_m), np.nan, eta)
 
 
-def hazard_class(slope_deg, rough_m):
-    """Clase 0-3 = max(clase de pendiente, clase de rugosidad); 255 si falta alguno."""
+def hazard_class(slope_deg, rough_m, loose=None):
+    """Clase 0-3 = max(clase de pendiente, clase de rugosidad); 255 si falta alguno.
+
+    `loose` (opcional, uint8 de loose_soil.tif en la misma grilla): donde vale 1 y la clase
+    es 0, sube a LOOSE_SOIL_CLASS. Sin dato térmico (255) la clase no cambia.
+    """
     missing = np.isnan(slope_deg) | np.isnan(rough_m)
     c_slope = np.searchsorted(SLOPE_CUTS_DEG, np.nan_to_num(slope_deg), side="right")
     c_rough = np.searchsorted(ROUGHNESS_CUTS_M, np.nan_to_num(rough_m), side="right")
-    return np.where(missing, HAZARD_NODATA, np.maximum(c_slope, c_rough)).astype("uint8")
+    cls = np.maximum(c_slope, c_rough)
+    if loose is not None:
+        cls = np.where(loose == 1, np.maximum(cls, LOOSE_SOIL_CLASS), cls)
+    return np.where(missing, HAZARD_NODATA, cls).astype("uint8")
+
+
+class LooseSoil:
+    """loose_soil.tif en memoria (son unos cientos de píxeles de 100 m por lado), para
+    llevarlo a cada bloque de la grilla del DTM con el vecino más cercano: cada píxel de
+    1 m toma el valor del píxel de THEMIS que lo contiene, sin promediar ni inventar."""
+
+    def __init__(self, path):
+        with rasterio.open(path) as ds:
+            self.data = ds.read(1)
+            self.transform, self.crs = ds.transform, ds.crs
+
+    def on(self, dst_transform, dst_crs, shape):
+        out = np.full(shape, LOOSE_NODATA, dtype="uint8")
+        reproject(self.data, out, src_transform=self.transform, src_crs=self.crs,
+                  src_nodata=LOOSE_NODATA, dst_transform=dst_transform, dst_crs=dst_crs,
+                  dst_nodata=LOOSE_NODATA, resampling=Resampling.nearest)
+        return out
 
 
 # ------------------------------------------------------------------ por bloques
@@ -110,15 +143,19 @@ def read(src, window):
     return np.where(np.isfinite(z) & (np.abs(z) < BAD_Z_M), z, np.nan)
 
 
-def compute(dtm_path, slope_path, out_dir):
+def compute(dtm_path, slope_path, out_dir, loose_soil_path=None):
     """Escribe roughness.tif, terrain_factor.tif y hazard.tif en out_dir (GTiff en bloques).
 
-    Devuelve un resumen con el % del terreno en cada clase.
+    `loose_soil_path` (opcional): loose_soil.tif de pipeline/thermal.py. Si está, el terreno
+    "bajo" con suelo suelto probable pasa a "medio".
+
+    Devuelve un resumen con el % del terreno en cada clase y, con THEMIS, el % que subió.
     """
     dtm_path, slope_path, out_dir = Path(dtm_path), Path(slope_path), Path(out_dir)
     for p in (dtm_path, slope_path):
         if not p.exists():
             raise MissingInput(f"Falta {p}. Corré antes pipeline/precompute.py para ese sitio.")
+    loose = LooseSoil(loose_soil_path) if loose_soil_path else None
 
     with rasterio.open(dtm_path) as dsrc, rasterio.open(slope_path) as ssrc:
         if (dsrc.width, dsrc.height) != (ssrc.width, ssrc.height):
@@ -136,6 +173,7 @@ def compute(dtm_path, slope_path, out_dir):
         prof_c = {**base, "dtype": "uint8", "nodata": HAZARD_NODATA, "predictor": 2}
 
         counts = np.zeros(len(HAZARD_CLASSES), dtype=np.int64)
+        raised = 0          # píxeles que THEMIS subió de "bajo" a "medio"
         out_dir.mkdir(parents=True, exist_ok=True)
         with rasterio.open(out_dir / "roughness.tif", "w", **prof_f) as o_r, \
              rasterio.open(out_dir / "terrain_factor.tif", "w", **prof_f) as o_e, \
@@ -149,14 +187,22 @@ def compute(dtm_path, slope_path, out_dir):
                     z = read(dsrc, Window(c0, r0, c1 - c0, r1 - r0))
                     rough = roughness(z, n_trend, n_win)[row - r0:row - r0 + h, col - c0:col - c0 + w]
                     slope = read(ssrc, win)
-                    cls = hazard_class(slope, rough)
+                    cls_geom = hazard_class(slope, rough)            # solo geometría
+                    cls = cls_geom
+                    if loose:
+                        ls = loose.on(dsrc.window_transform(win), dsrc.crs, (h, w))
+                        cls = hazard_class(slope, rough, ls)         # + suelo suelto
+                        raised += int(((cls_geom == 0) & (cls == LOOSE_SOIL_CLASS)).sum())
                     o_r.write(rough.astype("float32"), 1, window=win)
                     o_e.write(terrain_factor(rough).astype("float32"), 1, window=win)
                     o_h.write(cls, 1, window=win)
                     counts += np.bincount(cls[cls != HAZARD_NODATA], minlength=len(HAZARD_CLASSES))
 
     total = max(int(counts.sum()), 1)
-    return {"pct_by_class": {name: round(100 * int(c) / total, 2) for name, c in zip(HAZARD_CLASSES, counts)}}
+    summary = {"pct_by_class": {name: round(100 * int(c) / total, 2) for name, c in zip(HAZARD_CLASSES, counts)}}
+    if loose:
+        summary["pct_raised_by_loose_soil"] = round(100 * raised / total, 2)
+    return summary
 
 
 # ------------------------------------------------------------------ uso suelto
@@ -168,8 +214,10 @@ def main(argv=None):
     folder = Path(args.dir).expanduser()
     work = folder / ".terrain_layers.work"
     shutil.rmtree(work, ignore_errors=True)
+    loose = folder / "loose_soil.tif"     # si ya corriste pipeline/thermal.py en esta carpeta
     try:
-        summary = compute(folder / "dtm.tif", folder / "slope.tif", work)
+        summary = compute(folder / "dtm.tif", folder / "slope.tif", work,
+                          loose_soil_path=loose if loose.exists() else None)
     except MissingInput as e:
         print(f"Faltan datos: {e}", file=sys.stderr)
         shutil.rmtree(work, ignore_errors=True)
@@ -180,6 +228,8 @@ def main(argv=None):
     print(f"Listo -> {folder}")
     for name, pct in summary["pct_by_class"].items():
         print(f"  {name:15s} {pct:6.2f} %")
+    if "pct_raised_by_loose_soil" in summary:
+        print(f"  subió por suelo suelto (THEMIS): {summary['pct_raised_by_loose_soil']:.2f} %")
     return 0
 
 

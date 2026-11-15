@@ -1,7 +1,9 @@
 import { LAYERS, type LayerGroup } from "../map/layers";
-import { pipelineError, terrainLayer } from "../map/terrain";
+import { pipelineError, readyTiles, terrainLayer } from "../map/terrain";
 import { useStore } from "../state/store";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { PLACE_KIND_STYLE, PLACE_KINDS } from "../map/places";
+import { KIND_LABEL } from "../domain/places";
 
 const GROUP_LABEL: Record<LayerGroup, string> = {
   relieve: "Relieve",
@@ -20,6 +22,7 @@ export function LayerStack() {
   const setOpacity = useStore((s) => s.setOpacity);
   const terrain = useStore((s) => s.terrain);
   const terrainError = useStore((s) => s.terrainError);
+  const zoom = useStore((s) => s.view?.zoom ?? null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -34,13 +37,27 @@ export function LayerStack() {
             {GROUP_LABEL[group]}
           </h3>
           <ul className="flex flex-col gap-3">
-            {LAYERS.filter((l) => l.group === group).map((spec) => {
+            {LAYERS.filter((l) => l.group === group && !l.hidden).map((spec) => {
               const state = layers[spec.id];
               if (!state) return null;
               const disabled = !state.available;
               const failed = pipelineError(terrain, spec.id);
               // La resolución medida por el pipeline le gana a la nominal.
-              const resolution = terrainLayer(terrain, spec.id)?.resolution ?? spec.source.resolution;
+              const piped = terrainLayer(terrain, spec.id);
+              const resolution = piped?.resolution ?? spec.source.resolution;
+              // El badge dice lo que usó la corrida (terrain.json), no lo que podría haber usado.
+              const source = {
+                ...spec.source,
+                mission: piped?.mission !== undefined ? piped.mission : spec.source.mission,
+                instrument: piped?.instrument !== undefined ? piped.instrument : spec.source.instrument,
+              };
+              // Por debajo del zoom mínimo de sus tiles la capa no dibuja nada: sin este
+              // aviso, prenderla de lejos (Gale abre en zoom ~9) parece no hacer nada.
+              // Solo vectoriales: las raster van con tileSize 256 y MapLibre ya las dibuja
+              // desde un zoom antes de su minzoom, así que el aviso mentiría por uno.
+              const minzoom = spec.kind === "vector" ? readyTiles(terrain, spec.id)?.minzoom : undefined;
+              const tooFar =
+                !disabled && state.visible && minzoom !== undefined && zoom !== null && zoom < minzoom;
               return (
                 <li
                   key={spec.id}
@@ -64,13 +81,13 @@ export function LayerStack() {
                         <span className="text-xs text-muted">({spec.unit})</span>
                       ) : null}
                     </label>
-                    <ProvenanceBadge source={spec.source} />
+                    <ProvenanceBadge source={source} />
                   </div>
 
                   {disabled ? (
                     <p className="mt-1.5 text-xs text-warn" title={failed ?? undefined}>
                       {failed
-                        ? "⚠ El pipeline no pudo generarla. Hay que volver a correr precompute.py."
+                        ? `⚠ El pipeline no pudo generarla. Hay que volver a correr ${spec.script ?? "precompute.py"}.`
                         : "Esperando la salida del pipeline (MAP-9)."}
                     </p>
                   ) : (
@@ -91,6 +108,13 @@ export function LayerStack() {
                       </span>
                     </div>
                   )}
+
+                  {tooFar ? (
+                    <p role="status" className="mt-1.5 text-xs text-warn">
+                      🔍 Acercá el mapa para verla: aparece desde el zoom {minzoom} (ahora{" "}
+                      {zoom.toFixed(1)}).
+                    </p>
+                  ) : null}
 
                   {resolution ? <p className="mt-1 text-[10px] text-muted">{resolution}</p> : null}
 
@@ -117,6 +141,60 @@ export function LayerStack() {
           </ul>
         </section>
       ))}
+      <PlacePins />
     </div>
+  );
+}
+
+/**
+ * Pines de lugares en el mapa, por tipo. Un tipo sin lugares en este sitio
+ * (o sin places.json todavía) no se puede prender y lo dice.
+ */
+function PlacePins() {
+  const places = useStore((s) => s.places);
+  const placeKinds = useStore((s) => s.placeKinds);
+  const togglePlaceKind = useStore((s) => s.togglePlaceKind);
+  const counts = new Map<string, number>();
+  for (const p of places?.places ?? []) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
+
+  return (
+    <section>
+      <h3 className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">Lugares</h3>
+      {places === null ? (
+        <p className="text-xs text-warn">Esperando la salida del pipeline (places.json).</p>
+      ) : (
+        <ul className="flex flex-col gap-1 rounded border border-line p-2">
+          {PLACE_KINDS.map((kind) => {
+            const n = counts.get(kind) ?? 0;
+            const style = PLACE_KIND_STYLE[kind];
+            return (
+              <li key={kind}>
+                <label className={`flex min-h-8 items-center gap-2 text-sm ${n === 0 ? "opacity-60" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={placeKinds[kind] && n > 0}
+                    disabled={n === 0}
+                    onChange={() => togglePlaceKind(kind)}
+                    className="accent-rust"
+                  />
+                  <span
+                    aria-hidden
+                    className="inline-grid size-5 shrink-0 place-items-center rounded-full border border-black text-[10px] font-bold text-black"
+                    style={{ background: style.color }}
+                  >
+                    {style.glyph}
+                  </span>
+                  <span className="first-letter:uppercase">{KIND_LABEL[kind]}</span>
+                  <span className="ml-auto text-xs text-muted">{n}</span>
+                </label>
+              </li>
+            );
+          })}
+          <li className="mt-1 text-[11px] text-muted">
+            Tocá un pin para ver la ficha y sumarlo a la travesía. Cada lugar trae su procedencia.
+          </li>
+        </ul>
+      )}
+    </section>
   );
 }

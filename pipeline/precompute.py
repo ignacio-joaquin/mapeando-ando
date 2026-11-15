@@ -5,12 +5,18 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   dtm.tif           DTM como Cloud-Optimized GeoTIFF (copia del producto USGS, sin remuestrear)
   slope.tif         pendiente en grados, COG, misma grilla que el DTM
   hillshade.tif     sombreado del relieve, COG (solo visual)
-  contours.geojson  curvas de nivel en lon/lat planetocéntricas (este positivo)
+  contours.gpkg     curvas de nivel en lon/lat planetocéntricas (este positivo): maestras cada
+                    50 m en `contours_major`, el resto en `contours_minor`
+  contours/         tiles vectoriales MVT de las curvas: de lejos solo las maestras
   roughness.tif     rugosidad σ (m) y terrain_factor.tif, η de Pandolf (pipeline/terrain_layers.py)
-  hazard.tif        peligro de terreno por clases: pendiente + rugosidad (pipeline/terrain_layers.py)
+  themis_night.tif  IR nocturno de THEMIS (Mars Odyssey) recortado al DTM, 100 m, y
+                    loose_soil.tif, suelo suelto probable (pipeline/thermal.py)
+  hazard.tif        peligro de terreno por clases: pendiente + rugosidad, reforzado con el suelo
+                    suelto de THEMIS si está (pipeline/terrain_layers.py)
   dose_rate.tif     dosis equivalente por celda, µSv/h, y skyview.tif (pipeline/radiation.py)
-  slope/, hillshade/, hazard/, dose/  tiles XYZ PNG para el mapa (pipeline/tiles.py), con los
-                    colores de la leyenda de web/src/map/layers.ts
+  ice_consistency.tif  consistencia de hielo somero (0-1 m) de SWIM 2.0, ~3 km (pipeline/swim.py)
+  slope/, hillshade/, thermal/, hazard/, dose/, water/  tiles XYZ PNG para el mapa (pipeline/tiles.py),
+                    con los colores de la leyenda de web/src/map/layers.ts
   coverage.geojson  dónde hay DTM de 1 m de verdad (huella de los píxeles válidos), en lon/lat.
                     El planificador rechaza un destino que cae afuera.
   terrain.json      procedencia, parámetros, estado de cada capa y zoom/límites de los tiles.
@@ -27,6 +33,7 @@ la esfera de 3396190 m (terrain_shadows.ground_jacobian).
 Uso:
   python pipeline/precompute.py --site jezero --prueba   # recorte de 2x2 km en DATA_DIR/prueba/
   python pipeline/precompute.py --site jezero            # DTM completo en DATA_DIR/output/
+  python pipeline/precompute.py --site gale --solo-tiles-curvas  # solo los tiles de curvas ya hechas
 
 Sale con 0 si todo anduvo, 1 si falló alguna capa (las demás quedan) y 2 si faltan datos.
 """
@@ -35,6 +42,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -53,8 +61,10 @@ from rasterio.windows import Window
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import radiation  # noqa: E402
+import swim  # noqa: E402
 import terrain_layers  # noqa: E402
 import terrain_shadows as ts  # noqa: E402
+import thermal  # noqa: E402
 import tiles  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent          # carpeta raíz del repo
@@ -64,7 +74,12 @@ MARS_LONGLAT = f"+proj=longlat +R={ts.MARS_RADIUS_M:.0f} +no_defs"
 
 # Parámetros de las capas (los mismos para todos los sitios)
 CONTOUR_INTERVAL_M = 10    # igual que la leyenda de relief-contours en web/src/map/layers.ts
-CONTOUR_SIMPLIFY_M = 0.5   # medio píxel de 1 m: no se nota en el mapa y achica el GeoJSON
+CONTOUR_MAJOR_M = 50       # curvas maestras: las únicas que se ven de lejos
+CONTOUR_SIMPLIFY_M = 0.5   # medio píxel de 1 m: no se nota en el mapa y achica los tiles
+# Desde qué zoom entra cada nivel de curvas. Más lejos, las de 10 m son una mancha que tapa
+# el relieve y llenan los tiles: en Gale (DTM de ~107 x 33 km) son cientos de MB.
+CONTOUR_MAJOR_MIN_ZOOM = 10
+CONTOUR_MINOR_MIN_ZOOM = 13
 CONTOUR_DECIMALS = 6       # 1e-6° ≈ 6 cm en Marte
 HILLSHADE_Z = 3            # exageración vertical del sombreado (solo visual)
 HILLSHADE_AZIMUTH_DEG = 315
@@ -81,9 +96,19 @@ MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DT
 # Capas que se teselan para el mapa: carpeta de salida y rampa de color de tiles.py.
 # La carpeta es CONTRATO: el último segmento de la plantilla `tiles` de web/src/map/layers.ts.
 TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None),
-                "survival-hazard": ("hazard", "peligro"), "survival-dose": ("dose", "dosis")}
+                "survival-thermal": ("thermal", None),
+                "survival-hazard": ("hazard", "peligro"), "survival-dose": ("dose", "dosis"),
+                "survival-water": ("water", "agua")}
+# Capas que se teselan con vecino más cercano aunque no tengan rampa por clases: THEMIS es de
+# 100 m y se tiene que ver en sus cuadros, no interpolado.
+NEAREST_TILES = {"survival-thermal"}
+# Zoom máximo fijo para capas de píxel muy grande. gdal2tiles deduce el zoom del píxel: con los
+# ~3 km de SWIM se queda en z5, donde un píxel del tile mide ~5 km y el borde de cada cuadrado
+# cae corrido hasta medio píxel al agrandar. En z10 el error baja a ~80 m y son pocos tiles.
+FIXED_MAX_ZOOM = {"survival-water": 10}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
+DEM_LAYER = "relief-dem"     # relieve 3D del mapa (tiles raster-dem, ver tiles.dem_a_tiles)
 
 GTIFF_OPTS = ["-co", "TILED=YES", "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER"]
 COG_OPTS = ["-of", "COG", "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=YES", "-co", "BIGTIFF=IF_SAFER"]
@@ -329,13 +354,98 @@ def publish(tmp, dst):
     os.replace(tmp, dst)
 
 
+# ------------------------------------------------------------------ curvas de nivel
+
+CONTOUR_PARAMS = {"interval_m": CONTOUR_INTERVAL_M, "major_m": CONTOUR_MAJOR_M, "attribute": "elev",
+                  "simplify_m": CONTOUR_SIMPLIFY_M}
+CONTOUR_ASSUMPTIONS = [f"De lejos (zoom < {CONTOUR_MINOR_MIN_ZOOM}) solo se dibujan las curvas "
+                       f"cada {CONTOUR_MAJOR_M} m."]
+# Si los tiles no salen y queda el contours.geojson de una corrida anterior, el mapa usa ese.
+# No se verifica que ese GeoJSON salga del mismo DTM que esta corrida: el texto no lo afirma.
+CONTOUR_GEOJSON_ASSUMPTIONS = ["Curvas de una corrida anterior, en un GeoJSON entero: los tiles de esta "
+                               "corrida no salieron. Salen del DTM que había en esa corrida; todas las "
+                               "curvas a cualquier zoom."]
+
+
+def split_contours(src, dst, srs_flag="-t_srs"):
+    """Separa las curvas maestras del resto en dos capas de un GPKG en lon/lat de Marte.
+
+    `srs_flag` "-t_srs" reproyecta (curvas recién salidas del DTM); "-a_srs" solo etiqueta
+    (un contours.geojson viejo, que ya está en lon/lat de Marte pero GeoJSON lo lee como WGS84).
+    """
+    major = f"CAST(elev AS INTEGER) % {CONTOUR_MAJOR_M} = 0"
+    for name, where, update in (("contours_major", major, []), ("contours_minor", f"NOT ({major})", ["-update"])):
+        run(["ogr2ogr", "-f", "GPKG", *update, srs_flag, MARS_LONGLAT, "-where", where, "-nln", name,
+             str(dst), str(src)])
+
+
+def contour_tiles(out):
+    """Tiles MVT de out/contours.gpkg en out/contours/: de lejos solo las maestras."""
+    return {"status": "ok", **tiles.vector_a_tiles(
+        out / "contours.gpkg", out / "contours", "contours",
+        {"contours_major": CONTOUR_MAJOR_MIN_ZOOM, "contours_minor": CONTOUR_MINOR_MIN_ZOOM})}
+
+
+def retile_contours(out):
+    """Solo los tiles de las curvas, sobre una corrida que ya está hecha: minutos en vez de rehacer
+    pendiente y sombreado. Parte de contours.gpkg o, si es de antes de los tiles, de
+    contours.geojson. El GeoJSON se deja: si el teselado falla, `file` sigue apuntándolo y el
+    mapa lo dibuja como antes; la próxima corrida completa con tiles lo borra.
+
+    Devuelve 0 si anduvo, 1 si falló y 2 si no hay una corrida previa.
+    """
+    index_path = out / "terrain.json"
+    if not index_path.exists():
+        log(f"No hay {index_path}: primero hay que correr precompute.py completo.")
+        return 2
+    index = json.loads(index_path.read_text())
+    layer = index["layers"].get("relief-contours")
+    if not layer or layer.get("status") != "ok":
+        log("terrain.json no tiene curvas de nivel que hayan salido bien: hay que correr precompute.py completo.")
+        return 2
+    if (missing := tiles.faltan_herramientas()):
+        log("Faltan herramientas de GDAL: " + ", ".join(missing))
+        return 1
+    work = out / ".work-contours"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    try:
+        if not (out / "contours.gpkg").exists():
+            if not (out / "contours.geojson").exists():
+                log("No están ni contours.gpkg ni contours.geojson: hay que correr precompute.py completo.")
+                return 2
+            split_contours(out / "contours.geojson", work / "contours.gpkg", srs_flag="-a_srs")
+            publish(work / "contours.gpkg", out / "contours.gpkg")
+        try:
+            layer["tiles"] = contour_tiles(out)
+            ok = True
+        except Exception as e:
+            log(f"Falló el teselado de relief-contours: {e}")
+            layer["tiles"] = {"status": "error", "error": str(e)[:400]}
+            ok = False
+        if ok:
+            # Recién con los tiles listos el mapa deja el GeoJSON (si no, apagaría curvas que andaban).
+            layer.update(file="contours.gpkg", params=CONTOUR_PARAMS, assumptions=CONTOUR_ASSUMPTIONS)
+        # El mapa arma la clave de cada fuente con generated_at: si no cambia, una pestaña que vuelve
+        # a leer el índice sigue con la fuente GeoJSON aunque ya haya tiles.
+        index["generated_at"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
+        publish(work / "terrain.json", index_path)
+        if ok:
+            t = layer["tiles"]
+            log(f"tiles: {t['template']} zoom {t['minzoom']}-{t['maxzoom']}, {t['count']} tiles")
+        return 0 if ok else 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Precómputo de capas de terreno de un sitio")
     ap.add_argument("--site", required=True, help="id del sitio (nombre del JSON en sites/)")
     ap.add_argument("--out", help="carpeta base de salida (default: DATA_DIR/output, o DATA_DIR/prueba con --prueba)")
     ap.add_argument("--prueba", action="store_true",
                     help=f"procesar solo un recorte de {PRUEBA_PX}x{PRUEBA_PX} px del centro")
-    ap.add_argument("--no-tiles", action="store_true", help="no generar los tiles PNG del mapa")
+    ap.add_argument("--no-tiles", action="store_true", help="no generar los tiles del mapa")
     ap.add_argument("--ortho", action="store_true",
                     help="teselar también la ortoimagen del sitio. Va aparte porque es la capa "
                          "más cara: en Jezero son 7,4 GB a 25 cm/px y tarda horas")
@@ -348,11 +458,17 @@ def main(argv=None):
                          "ecuador marciano; 18 da ~0,32 m/px, cerca de los 25 cm nativos, pero "
                          "son ~4 veces más tiles). Va aparte de --max-zoom para no teselar el "
                          "relieve a un zoom que su píxel de 1 m no aprovecha")
+    ap.add_argument("--solo-tiles-curvas", action="store_true", dest="solo_tiles_curvas",
+                    help="solo generar los tiles de las curvas sobre una corrida ya hecha, sin rehacer "
+                         "las demás capas (minutos en vez de una hora en Gale)")
     args = ap.parse_args(argv)
 
     t0 = time.time()
     try:
         site = load_site(args.site)
+        if args.solo_tiles_curvas:
+            base = Path(args.out).expanduser() if args.out else DATA_DIR / ("prueba" if args.prueba else "output")
+            return retile_contours(base / site["id"])
         src = find_input(site, "dtm")
         width, height = raster_size(src)
     except DataNotReady as e:
@@ -455,15 +571,14 @@ def main(argv=None):
         run(["gdal_contour", "-a", "elev", "-i", str(CONTOUR_INTERVAL_M), str(dtm), str(work / "contours_raw.gpkg")])
         run(["ogr2ogr", "-f", "GPKG", "-simplify", str(CONTOUR_SIMPLIFY_M),
              str(work / "contours_simple.gpkg"), str(work / "contours_raw.gpkg")])
-        run(["ogr2ogr", "-f", "GeoJSON", "-t_srs", MARS_LONGLAT,
-             "-lco", f"COORDINATE_PRECISION={CONTOUR_DECIMALS}",
-             str(work / "contours.geojson"), str(work / "contours_simple.gpkg")])
-        publish(work / "contours.geojson", out / "contours.geojson")
+        split_contours(work / "contours_simple.gpkg", work / "contours.gpkg")
+        publish(work / "contours.gpkg", out / "contours.gpkg")
+        # El contours.geojson de una corrida anterior NO se borra acá: si después falla el
+        # teselado, es lo único que le queda al mapa. Se borra en el paso 8, con los tiles listos.
 
     layers["relief-contours"] = {
-        "file": "contours.geojson", "unit": "m", "provenance": "DERIVED", "mission": entry.get("mission"),
-        "params": {"interval_m": CONTOUR_INTERVAL_M, "attribute": "elev", "simplify_m": CONTOUR_SIMPLIFY_M},
-        "crs": MARS_LONGLAT,
+        "file": "contours.gpkg", "unit": "m", "provenance": "DERIVED", "mission": entry.get("mission"),
+        "params": CONTOUR_PARAMS, "crs": MARS_LONGLAT, "assumptions": CONTOUR_ASSUMPTIONS,
     }
 
     # 5. Cobertura: dónde hay DTM de 1 m de verdad. El planificador rechaza destinos afuera.
@@ -483,13 +598,76 @@ def main(argv=None):
                         "real del DTM puede quedar hasta una celda más afuera."],
     }
 
-    # 6. Peligro de terreno: pendiente + rugosidad (pipeline/terrain_layers.py). Usa la pendiente
-    #    del paso 2, así que si esa falló, este también. Deja además la rugosidad y el η de
-    #    Pandolf, que no van al mapa pero los usa el modelo de consumibles.
+    # 6. Térmico: IR nocturno de THEMIS (pipeline/thermal.py). La imagen va al mapa tal cual
+    #    (OBSERVED); el suelo suelto probable que sale de ella (MODELED) no se dibuja solo: entra
+    #    en el peligro de terreno del paso 7. Si falta THEMIS, el peligro sigue sin él.
+    def thermal_step():
+        summary = thermal.compute(site["id"], dtm, work, data_dir=DATA_DIR)
+        for name in ("themis_night", "loose_soil"):
+            to_cog(work / f"{name}.tif", work / f"{name}_cog.tif")
+            publish(work / f"{name}_cog.tif", out / f"{name}.tif")
+        layers["survival-thermal"]["summary"] = summary
+        if summary["display_dn"]:
+            lo, hi = summary["display_dn"]
+            layers["survival-thermal"]["display"] = {
+                "stretch_dn": [lo, hi],
+                "note": f"Tiles estirados entre el p{thermal.DISPLAY_PERCENTILES[0]} ({lo:g} DN) y el "
+                        f"p{thermal.DISPLAY_PERCENTILES[1]} ({hi:g} DN) del sitio, solo para que se vea el "
+                        "contraste. themis_night.tif guarda los DN originales.",
+            }
+        loose_layer = layers["terrain-loose-soil"]
+        loose_layer.update(status="ok", params={**loose_layer["params"],
+                                                "threshold_dn": summary["loose_threshold_dn"]})
+        loose_layer.pop("error", None)
+        index["warnings"].extend(summary["warnings"])
+
+    themis_source = {"mission": "Mars Odyssey", "instrument": "THEMIS", "resolution": "100 m/px"}
+    layers["survival-thermal"] = {
+        "file": "themis_night.tif", "unit": "DN (brillo relativo, 0-255)", "provenance": "OBSERVED",
+        **themis_source, "nodata": thermal.THEMIS_NODATA,
+        "source": "Mosaico controlado del IR nocturno de THEMIS (USGS Astrogeology / ASU), "
+                  "recortado al DTM sin remuestrear",
+        "assumptions": [
+            "Producto cualitativo de 8 bits: brillo relativo dentro del mosaico, no temperatura "
+            "ni inercia térmica en unidades.",
+            "Más tibio de noche = roca o suelo compacto; más frío = arena, polvo o grano fino.",
+            "Registro absoluto de ~150-275 m (1,5 a 2,75 píxeles de THEMIS).",
+            "En el mapa, brillo estirado entre el p2 y el p98 del sitio y en cuadros de 100 m "
+            "(vecino más cercano); el COG guarda los DN originales.",
+        ],
+    }
+    layers["terrain-loose-soil"] = {
+        "file": "loose_soil.tif", "unit": "clase", "provenance": "MODELED", **themis_source,
+        "nodata": thermal.LOOSE_NODATA, "classes": {0: "no", 1: "suelto probable"},
+        "status": "error", "error": "no se calculó",
+        "params": {"percentile": thermal.LOOSE_PERCENTILE, "min_contrast_dn": thermal.MIN_CONTRAST_DN},
+        "method": f"brillo nocturno en el {thermal.LOOSE_PERCENTILE} % más frío del sitio (percentiles "
+                  f"sobre los píxeles de THEMIS que tocan DTM; con empates puede marcar algo más), solo "
+                  f"si ese percentil queda a ≥ {thermal.MIN_CONTRAST_DN} DN de la mediana",
+        "assumptions": [
+            "Criterio relativo del equipo: marca lo más frío del sitio, no arena confirmada.",
+            "El polvo fino y la arena se ven igual de fríos: los dos hunden el paso.",
+        ],
+    }
+
+    # 7. Peligro de terreno: pendiente + rugosidad (pipeline/terrain_layers.py), con el suelo
+    #    suelto de THEMIS si el paso 6 salió bien. Usa la pendiente del paso 2, así que si esa
+    #    falló, este también. Deja además la rugosidad y el η de Pandolf, que no van al mapa
+    #    pero los usa el modelo de consumibles.
     def hazard_step():
         if layers["relief-slope"].get("status") != "ok":
             raise RuntimeError("no hay pendiente: falló el paso relief-slope")
-        summary = terrain_layers.compute(dtm, out / "slope.tif", work)
+        loose = out / "loose_soil.tif" if layers["terrain-loose-soil"]["status"] == "ok" else None
+        summary = terrain_layers.compute(dtm, out / "slope.tif", work, loose_soil_path=loose)
+        # La procedencia se anota después del cálculo: si falla, la capa no dice que usó THEMIS.
+        hazard = layers["survival-hazard"]
+        if loose:
+            hazard.update(mission="MRO + Mars Odyssey", instrument="HiRISE DTM + THEMIS",
+                          method=hazard["method"] + " Con THEMIS: 'bajo' con suelo suelto probable pasa a 'medio'.",
+                          assumptions=hazard_assumptions_themis)
+            hazard["params"]["loose_soil_class"] = terrain_layers.LOOSE_SOIL_CLASS
+        else:
+            index["warnings"].append("El peligro de terreno salió sin THEMIS: no distingue roca de arena suelta.")
         run(["gdal_translate", *COG_OPTS, "-co", "RESAMPLING=NEAREST",   # clases: sin promediar
              str(work / "hazard.tif"), str(work / "hazard_cog.tif")])
         publish(work / "hazard_cog.tif", out / "hazard.tif")
@@ -505,11 +683,16 @@ def main(argv=None):
         layers["survival-hazard"]["summary"] = summary
 
     hazard_source = {"provenance": "DERIVED", "mission": "MRO", "instrument": "HiRISE DTM"}
-    hazard_assumptions = [
+    hazard_common = [
         "Solo geometría del terreno: no incluye gravedad, traje ni carga.",
         "Un DTM de 1 m no ve rocas sueltas de menos de ~3-5 m: la rugosidad marca zonas con bloques, no rocas.",
-        "No distingue roca firme de arena suelta.",
         "El corte de rugosidad más bajo (σ 0,15 m) está cerca de la precisión vertical del DTM (decenas de cm).",
+    ]
+    hazard_assumptions = [*hazard_common, "No distingue roca firme de arena suelta."]
+    hazard_assumptions_themis = [
+        *hazard_common,
+        "Suelo suelto según THEMIS de noche (100 m, criterio relativo del equipo): solo sube 'bajo' "
+        "a 'medio', nunca bloquea. Se ve en cuadros de 100 m.",
     ]
     layers["survival-hazard"] = {
         "file": "hazard.tif", "unit": "clase", **hazard_source, "nodata": terrain_layers.HAZARD_NODATA,
@@ -533,7 +716,7 @@ def main(argv=None):
         "note": "Solo rugosidad: en Pandolf la pendiente entra aparte como el grado G de la ruta.",
     }
 
-    # 7. Dosis de radiación (pipeline/radiation.py): base de RAD × sky-view, normalizada en
+    # 8. Dosis de radiación (pipeline/radiation.py): base de RAD × sky-view, normalizada en
     #    Bradbury Landing. Grilla de 100 m. Si falta el DEM de 200 m sigue, con un aviso.
     def dose_step():
         summary = radiation.compute(site["id"], dtm, work, data_dir=DATA_DIR)
@@ -570,20 +753,55 @@ def main(argv=None):
         "resolution": dose_resolution, "status": "error", "error": "no se calculó",
     }
 
+    # 8b. Agua: consistencia de hielo somero (0-1 m) de SWIM 2.0 (pipeline/swim.py), recortada al
+    #    DTM sin remuestrear. Es un índice que combina varios orbitadores: MODELED. Si falta el
+    #    composite, la capa queda sin hacer y la corrida sigue.
+    def water_step():
+        summary = swim.compute(dtm, work, data_dir=DATA_DIR)
+        to_cog(work / "ice_consistency.tif", work / "ice_consistency_cog.tif")
+        publish(work / "ice_consistency_cog.tif", out / "ice_consistency.tif")
+        layers["survival-water"]["summary"] = summary
+        index["warnings"].extend(summary["warnings"])
+
+    layers["survival-water"] = {
+        "file": "ice_consistency.tif", "unit": "consistencia de hielo (-1 a +1)", "provenance": "MODELED",
+        "mission": "Odyssey + MGS + MRO", "instrument": "SWIM 2.0", "resolution": "~3 km/px",
+        "nodata": swim.SWIM_NODATA, "params": {"depth_m": "0-1", "file": swim.SWIM_FILE},
+        "source": "Composite de consistencia de hielo 0-1 m de SWIM 2.0 (Putzig, Morgan et al. 2020, "
+                  "PSI), recortado al DTM sin remuestrear",
+        "assumptions": [
+            "Índice, no medición: +1 = los datos son consistentes con hielo, 0 = sin indicio, "
+            "-1 = los datos van en contra.",
+            "Combina neutrones, térmico, geomorfología y radar con los pesos del equipo de SWIM.",
+            "El hidrógeno de minerales hidratados también sube el índice: un valor positivo débil "
+            "no confirma hielo.",
+            "Píxel de ~3 km: no ubica nada más chico que eso.",
+        ],
+    }
+
     # Un paso que falla no frena a los demás: el terrain.json dice qué quedó y qué no.
     failed = False
     for layer_id, fn in (("relief-slope", slope_step), ("relief-hillshade", hillshade_step),
                          ("relief-contours", contours_step), ("coverage", coverage_step),
-                         ("survival-hazard", hazard_step), ("survival-dose", dose_step)):
+                         ("survival-thermal", thermal_step),
+                         ("survival-hazard", hazard_step), ("survival-dose", dose_step),
+                         ("survival-water", water_step)):
         try:
             fn()
             layers[layer_id]["status"] = "ok"
+        except (thermal.MissingInput, swim.MissingInput) as e:
+            # THEMIS y SWIM son datos opcionales: si no se bajaron, la capa queda sin hacer y lo
+            # dice, pero la corrida no falla (el peligro sigue, solo con la geometría).
+            log(f"Sin {layer_id}: {e}")
+            layers[layer_id].update(status="error", error=str(e)[:400])
+            what = "capa térmica" if layer_id == "survival-thermal" else "capa de agua"
+            index["warnings"].append(f"Sin {what}: {e}")
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
-    # 8. Tiles PNG para el mapa, desde los COG que quedaron bien.
+    # 9. Tiles para el mapa: PNG desde los COG que quedaron bien, MVT para las curvas.
     missing_tools = tiles.faltan_herramientas()
     for layer_id, (folder, color) in TILED_LAYERS.items():
         layer = layers[layer_id]
@@ -593,15 +811,65 @@ def main(argv=None):
             failed = True
             layer["tiles"] = {"status": "error", "error": "Faltan herramientas de GDAL: " + ", ".join(missing_tools)}
             continue
+        # THEMIS se tesela desde su versión estirada (solo visual), si la hay.
+        src = out / layer["file"]
+        if layer_id == "survival-thermal" and (work / "themis_display.tif").exists():
+            src = work / "themis_display.tif"
+        near = layer_id in NEAREST_TILES
         try:
             layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(
-                out / layer["file"], out / folder, color=color, max_zoom=args.max_zoom)}
+                src, out / folder, color=color, max_zoom=args.max_zoom or FIXED_MAX_ZOOM.get(layer_id),
+                resampling="near" if near else None, warp="near" if near else None)}
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
 
-    # 9. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    # Las curvas, en tiles vectoriales: el navegador baja solo lo que mira.
+    contours = layers["relief-contours"]
+    if not args.no_tiles and contours.get("status") == "ok":
+        try:
+            if missing_tools:
+                raise RuntimeError("Faltan herramientas de GDAL: " + ", ".join(missing_tools))
+            contours["tiles"] = contour_tiles(out)
+        except Exception as e:
+            failed = True
+            log(f"Falló el teselado de relief-contours: {e}")
+            contours["tiles"] = {"status": "error", "error": str(e)[:400]}
+    # `file` le dice al mapa qué dibujar (docs/context.md §4): con tiles, contours.gpkg; sin
+    # tiles (fallaron o --no-tiles), el GeoJSON de una corrida anterior si está. Degradar, no
+    # romper: el GeoJSON viejo se borra solo cuando ya hay tiles, y después de publicar el índice.
+    drop_old_geojson = False
+    if contours.get("status") == "ok":
+        if contours.get("tiles", {}).get("status") == "ok":
+            drop_old_geojson = (out / "contours.geojson").exists()
+        elif (out / "contours.geojson").exists():
+            contours.update(file="contours.geojson", assumptions=CONTOUR_GEOJSON_ASSUMPTIONS)
+
+    # 9b. Relieve 3D: tiles raster-dem desde el DTM. Solo para levantar el mapa; los
+    #     valores que ve el usuario siguen saliendo del COG. Sin dtm.tif no hay nada.
+    if not args.no_tiles:
+        dem_px_m = math.radians(tiles.grados_por_pixel(tiles.DEM_MAX_ZOOM)) * ts.MARS_RADIUS_M
+        layers[DEM_LAYER] = {
+            "file": "dem", "unit": "m", "provenance": "DERIVED", "mission": entry.get("mission"),
+            "resolution": f"~{dem_px_m:.1f} m por píxel en el zoom máximo (DTM remuestreado para dibujar)",
+            "assumptions": [
+                "Solo para dibujar el relieve en 3D: ninguna medida sale de estos tiles.",
+                "Alturas sobre el punto más bajo del DTM (datum_m): la forma es la real, el cero no.",
+                f"Huecos del DTM de hasta ~{dem_px_m * tiles.DEM_FILL_PX:.0f} m rellenados por "
+                "interpolación para no dibujar pozos; fuera de la huella del DTM, plano.",
+            ],
+        }
+        try:
+            info = tiles.dem_a_tiles(dtm, out / "dem")
+            layers[DEM_LAYER].update(status="ok", datum_m=info.pop("datum_m"),
+                                     encoding=info.pop("encoding"), tiles={"status": "ok", **info})
+        except Exception as e:
+            failed = True
+            log(f"Falló el teselado de {DEM_LAYER}: {e}")
+            layers[DEM_LAYER].update(status="error", error=str(e)[:400])
+
+    # 10. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
     #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
     #    25 cm/px y teselarla compite por disco y CPU con la descarga.
@@ -631,6 +899,9 @@ def main(argv=None):
 
     (work / "terrain.json").write_text(json.dumps(index, indent=1, ensure_ascii=False))
     publish(work / "terrain.json", out / "terrain.json")
+    if drop_old_geojson:
+        # En Gale pesa cientos de MB y ya nadie lo pide: el índice publicado dice contours.gpkg.
+        (out / "contours.geojson").unlink(missing_ok=True)
     shutil.rmtree(work, ignore_errors=True)
 
     log("Listo. Archivos generados:")
@@ -644,7 +915,7 @@ def main(argv=None):
             log(f"  {layer['file']:17s} ERROR")
         t = layer.get("tiles")
         if t:
-            log(f"    tiles: {t['template']} zoom {t['minzoom']}-{t['maxzoom']}, {t['count']} PNG"
+            log(f"    tiles: {t['template']} zoom {t['minzoom']}-{t['maxzoom']}, {t['count']} tiles"
                 if t["status"] == "ok" else f"    tiles: ERROR {t['error']}")
     for w in index["warnings"]:
         log(f"Aviso: {w}")

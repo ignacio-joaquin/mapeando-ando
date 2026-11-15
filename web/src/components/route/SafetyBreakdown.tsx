@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { RouteCost, SafetyLimit, Verdict } from "../../api/schemas";
 import { Measure } from "../Measure";
+import { useContact } from "../../state/contact";
 import { FACTOR_LABEL } from "./VerdictCard";
 
 /**
@@ -108,6 +109,7 @@ function LimitRow({ limit: l, limiting }: { readonly limit: SafetyLimit; readonl
         </span>
       </span>
       {l.note ? <span className="text-muted">{l.note}</span> : null}
+      {l.id === "contact" && l.status !== "not_evaluated" ? <ShowContactButton /> : null}
     </li>
   );
 }
@@ -179,5 +181,22 @@ function Section(props: { readonly title: string; readonly open?: boolean; reado
       <summary className="cursor-pointer font-semibold text-fg">{props.title}</summary>
       <div className="mt-2">{props.children}</div>
     </details>
+  );
+}
+
+/** Prende la capa de contacto: es lo que muestra por qué la racha es la que es. */
+function ShowContactButton() {
+  const visible = useContact((s) => s.visible);
+  if (visible) {
+    return <span className="text-muted">En el mapa: rayado = sin contacto con el hábitat.</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => useContact.getState().setVisible(true)}
+      className="self-start rounded border border-line px-2 py-1 text-fg hover:border-rust"
+    >
+      Ver en el mapa dónde hay contacto
+    </button>
   );
 }

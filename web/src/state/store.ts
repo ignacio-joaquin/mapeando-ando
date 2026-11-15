@@ -5,7 +5,8 @@
 import { create } from "zustand";
 import { LAYERS } from "../map/layers";
 import type { LatLon } from "../mars/geo";
-import type { Coverage, PlacesIndex, TerrainIndex } from "../api/schemas";
+import type { Coverage, PlaceKind, PlacesIndex, TerrainIndex } from "../api/schemas";
+import { PLACE_KIND_STYLE, PLACE_KINDS } from "../map/places";
 import { siteFromUrl } from "./share";
 
 export interface LayerState {
@@ -26,6 +27,10 @@ interface AppState {
   readonly places: PlacesIndex | null;
   /** places.json existe pero no se pudo leer. */
   readonly placesError: string | null;
+  /** Qué tipos de lugar se dibujan como pines en el mapa. */
+  readonly placeKinds: Readonly<Record<PlaceKind, boolean>>;
+  /** Lugar con la ficha abierta sobre el mapa (id de places.json). */
+  readonly selectedPlaceId: string | null;
   /** Huella del DTM de 1 m (coverage.geojson). null = todavía no hay: no se puede verificar. */
   readonly coverage: Coverage | null;
   /** Posición del cursor sobre el mapa. */
@@ -35,7 +40,9 @@ interface AppState {
   /** Instante del planificador. Entrada del reloj y del deslizador. */
   readonly instant: Date;
   /** Vista actual del mapa (zoom y latitud del centro), para la barra de escala. */
-  readonly view: { readonly zoom: number; readonly lat: number } | null;
+  readonly view: { readonly zoom: number; readonly lat: number; readonly pitch: number } | null;
+  /** Relieve 3D prendido. Solo tiene efecto si terrain.json trae `relief-dem` listo. */
+  readonly view3d: boolean;
   setActiveSite: (id: string) => void;
   toggleLayer: (id: string) => void;
   setOpacity: (id: string, opacity: number) => void;
@@ -45,10 +52,13 @@ interface AppState {
   setTerrain: (terrain: TerrainIndex | null, error?: string | null) => void;
   setPlaces: (places: PlacesIndex | null, error?: string | null) => void;
   setCoverage: (coverage: Coverage | null) => void;
+  togglePlaceKind: (kind: PlaceKind) => void;
+  setSelectedPlace: (id: string | null) => void;
   setCursor: (p: LatLon | null) => void;
   setPicked: (p: LatLon | null) => void;
   setInstant: (d: Date) => void;
-  setView: (v: { zoom: number; lat: number }) => void;
+  setView: (v: { zoom: number; lat: number; pitch: number }) => void;
+  setView3d: (on: boolean) => void;
 }
 
 const initialLayers: Record<string, LayerState> = Object.fromEntries(
@@ -64,11 +74,16 @@ export const useStore = create<AppState>((set) => ({
   places: null,
   placesError: null,
   coverage: null,
+  placeKinds: Object.fromEntries(
+    PLACE_KINDS.map((k) => [k, PLACE_KIND_STYLE[k].defaultVisible]),
+  ) as Record<PlaceKind, boolean>,
+  selectedPlaceId: null,
   cursor: null,
   picked: null,
   instant: new Date(),
   view: null,
-  setActiveSite: (id) => set({ activeSiteId: id, picked: null }),
+  view3d: false,
+  setActiveSite: (id) => set({ activeSiteId: id, picked: null, selectedPlaceId: null }),
   toggleLayer: (id) =>
     set((s) => {
       const l = s.layers[id];
@@ -96,8 +111,11 @@ export const useStore = create<AppState>((set) => ({
   setTerrain: (terrain, error = null) => set({ terrain, terrainError: error }),
   setPlaces: (places, error = null) => set({ places, placesError: error }),
   setCoverage: (coverage) => set({ coverage }),
+  togglePlaceKind: (kind) => set((s) => ({ placeKinds: { ...s.placeKinds, [kind]: !s.placeKinds[kind] } })),
+  setSelectedPlace: (selectedPlaceId) => set({ selectedPlaceId }),
   setCursor: (cursor) => set({ cursor }),
   setPicked: (picked) => set({ picked }),
   setInstant: (instant) => set({ instant }),
   setView: (view) => set({ view }),
+  setView3d: (view3d) => set({ view3d }),
 }));

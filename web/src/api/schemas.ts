@@ -142,6 +142,93 @@ export interface RouteRequest {
  */
 export const LegClassSchema = z.enum(["ok", "caution", "limit", "blocked", "unknown"]);
 
+/**
+ * Indicaciones por landmarks de un tramo (`legs[].directions[]`), PROPUESTA
+ * del ticket de navegación por landmarks. Documentado en docs/context.md §4.
+ *
+ * - Una indicación por trecho (el tramo se parte donde el rumbo gira más de
+ *   30°), en orden. Las calcula api/directions.py.
+ * - `toward` / `keep_left` / `keep_right` / `away` / `turn` nombran un landmark
+ *   que se ve desde el trecho: `landmark` es obligatorio. `turn` = el trecho
+ *   empieza con un giro.
+ * - `fallback_sun` / `fallback_bearing` = no hay nada visible: `landmark` va
+ *   en null. Nunca se inventa un landmark para no caer en el respaldo.
+ */
+export const DirectionKindSchema = z.enum([
+  "toward",
+  "keep_left",
+  "keep_right",
+  "away",
+  "turn",
+  "fallback_sun",
+  "fallback_bearing",
+]);
+
+/** De dónde sale el landmark: catálogo IAU, cráteres de Robbins o pico extraído del DEM. */
+/** IAU / Robbins / DEM (cerros de places.json) o el mástil del hábitat (punto A). */
+export const LandmarkCatalogSchema = z.enum(["IAU", "Robbins", "DEM", "habitat"]);
+
+export const LandmarkSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  source: LandmarkCatalogSchema,
+  lat: z.number(),
+  lon: z.number(),
+  /** El punto que se mira, si no es el centro (ej. el borde de un cráter visto desde adentro). */
+  target: LatLonSchema.optional(),
+});
+
+const FALLBACK_KINDS: readonly string[] = ["fallback_sun", "fallback_bearing"];
+
+/** Procedencia sin valor: la de una confirmación o de la posición del Sol. */
+const SourceInfoSchema = MeasuredValueSchema.omit({ value: true, unit: true });
+
+/**
+ * "Vas bien si…": confirmaciones del trecho. `sun` = el Sol respecto del cuerpo y la
+ * sombra (o que a esa hora no sirve), `habitat` = se ve el mástil, `landmark` = cómo se
+ * ve la referencia principal (distancia y altura en dedos/puños).
+ */
+export const DirectionCheckSchema = SourceInfoSchema.extend({
+  kind: z.enum(["sun", "habitat", "landmark"]),
+  text: z.string(),
+});
+
+/** "Pará cuando…": lo que queda al costado al final del trecho. */
+export const DirectionUntilSchema = z.object({
+  text: z.string(),
+  landmark: LandmarkSchema.nullable(),
+});
+
+/** El Sol a la hora de paso por el trecho (SPICE de la pila de sombras, o Mars24). */
+export const DirectionSunSchema = SourceInfoSchema.extend({
+  azimuth_deg: z.number(),
+  elevation_deg: z.number(),
+});
+
+export const DirectionSchema = z
+  .object({
+    kind: DirectionKindSchema,
+    /** La indicación lista para leer, con la distancia del tramo. */
+    text: z.string(),
+    landmark: LandmarkSchema.nullable(),
+    distance: MeasuredValueSchema,
+    /** Ángulo del landmark respecto de la marcha (0 = al frente, + = derecha). null en los respaldos. */
+    relative_bearing_deg: z.number().nullable(),
+    /** Fracción 0–1 del tramo desde la que se ve el landmark. `value: null` en los respaldos. */
+    visible_fraction: MeasuredValueSchema,
+    /** Minutos del trecho según el modelo del traje. */
+    duration: MeasuredValueSchema.optional(),
+    /** Posición de reloj del landmark (12 = al frente, 3 = derecha). null en los respaldos. */
+    clock: z.number().int().min(1).max(12).nullable().optional(),
+    checks: z.array(DirectionCheckSchema).optional(),
+    until: DirectionUntilSchema.nullable().optional(),
+    sun: DirectionSunSchema.optional(),
+  })
+  .refine((d) => FALLBACK_KINDS.includes(d.kind) === (d.landmark === null), {
+    message: "Una indicación con landmark necesita `landmark`; un respaldo (fallback_*) no lo lleva.",
+    path: ["landmark"],
+  });
+
 export const RouteLegSchema = z.object({
   from: z.number().int(),
   to: z.number().int(),
@@ -154,6 +241,8 @@ export const RouteLegSchema = z.object({
   max_slope: MeasuredValueSchema,
   /** % de la ruta en sombra a la hora de paso. Solo si hay pila de sombras de ese sol. */
   shadow_fraction: MeasuredValueSchema.optional(),
+  /** Indicaciones por landmarks. Opcional: el server todavía no las calcula. */
+  directions: z.array(DirectionSchema).optional(),
 });
 
 export const RouteStopSchema = z.object({
@@ -259,6 +348,12 @@ export const ProfileSchema = z.object({
   elevation_m: z.array(z.number()),
   slope_deg: z.array(z.number()),
   leg_starts: z.array(z.number()),
+  /**
+   * Tramos sin camino (el planificador no encontró paso): su parte del perfil es la
+   * línea recta A→B medida sobre el DTM, no una ruta. Sirve para ver dónde está lo que
+   * bloquea. Opcional: el planificador de ejemplo y /api/route/consumables no lo mandan.
+   */
+  straight_legs: z.array(z.number()).optional(),
 });
 
 export const TerrainStatusSchema = z.enum(["complete", "partial", "missing"]);
@@ -368,17 +463,39 @@ export const TileSetSchema = z.discriminatedUnion("status", [
     maxzoom: z.number().int(),
     /** [oeste, sur, este, norte] */
     bounds: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+    /** Solo tiles vectoriales: capa dentro del MVT (el `source-layer` del mapa). */
+    layer: z.string().optional(),
   }),
   z.object({ status: z.literal("error"), error: z.string() }),
 ]);
+
+/**
+ * Cómo viene la altura escondida en el RGB de los tiles de relieve 3D
+ * (`relief-dem`): h = R·red + G·green + B·blue − base. Lo decide
+ * pipeline/tiles.py (DEM_ENCODING) y se le pasa tal cual a MapLibre.
+ */
+export const DemEncodingSchema = z.object({
+  red_factor: z.number(),
+  green_factor: z.number(),
+  blue_factor: z.number(),
+  base_shift: z.number(),
+});
 
 export const TerrainLayerSchema = z.object({
   file: z.string(),
   status: z.enum(["ok", "error"]),
   /** Tamaño real del píxel sobre el suelo, cuando el pipeline lo mide. */
   resolution: z.string().optional(),
+  /** Misión e instrumento que de verdad usó la corrida (ej. peligro con o sin THEMIS). */
+  mission: z.string().nullable().optional(),
+  instrument: z.string().nullable().optional(),
   error: z.string().optional(),
   tiles: TileSetSchema.optional(),
+  /** Solo `relief-dem`: altura (m) que corresponde al 0 de los tiles, el punto más bajo del DTM. */
+  datum_m: z.number().optional(),
+  /** Solo `relief-dem`: codificación de la altura en los PNG. */
+  encoding: DemEncodingSchema.optional(),
+  assumptions: z.array(z.string()).optional(),
 });
 
 export const TerrainIndexSchema = z.object({
@@ -395,7 +512,7 @@ export const TerrainIndexSchema = z.object({
  * Sin este archivo (404) el buscador dice que espera al pipeline.
  * Documentado en docs/context.md §4.
  */
-export const PlaceKindSchema = z.enum(["iau", "sample", "target", "heli", "rover", "crater"]);
+export const PlaceKindSchema = z.enum(["iau", "sample", "target", "heli", "rover", "crater", "landmark", "depression", "orbital"]);
 
 export const PlaceSchema = z.object({
   id: z.string(),
@@ -447,6 +564,47 @@ export const CoverageSchema = z.object({
       ]),
     }),
   ),
+});
+
+/**
+ * GET /api/sites/{site}/viewshed?lat=&lon= (api/viewshed.py): desde dónde hay
+ * línea de vista (contacto por radio) con un hábitat puesto en (lat, lon). La
+ * misma geometría que el límite "minutos seguidos sin contacto" del
+ * planificador. Lo dibuja la capa `habitat-contact`.
+ *
+ * `geojson: null` + `note` = no se pudo calcular (falta el DTM, hábitat fuera
+ * del DTM): no se dibuja nada, se avisa.
+ */
+export const ContactClassSchema = z.enum(["contact", "no_contact", "unknown"]);
+export const ViewshedSchema = z.object({
+  site: z.string(),
+  habitat: LatLonSchema,
+  note: z.string().nullable(),
+  radius_m: z.number().optional(),
+  cell_m: z.number().optional(),
+  fractions: z.record(ContactClassSchema, z.number()).optional(),
+  source: z
+    .object({
+      provenance: ProvenanceSchema,
+      mission: z.string().nullable(),
+      instrument: z.string().nullable(),
+      resolution: z.string().optional(),
+      source: z.string().optional(),
+      assumptions: z.array(z.string()).readonly().optional(),
+    })
+    .optional(),
+  geojson: z
+    .object({
+      type: z.literal("FeatureCollection"),
+      features: z.array(
+        z.object({
+          type: z.literal("Feature"),
+          properties: z.object({ class: ContactClassSchema }),
+          geometry: z.object({ type: z.literal("Polygon"), coordinates: z.array(RingSchema).min(1) }),
+        }),
+      ),
+    })
+    .nullable(),
 });
 
 /**
@@ -516,6 +674,8 @@ export type Place = z.infer<typeof PlaceSchema>;
 export type PlaceKind = z.infer<typeof PlaceKindSchema>;
 export type PlacesIndex = z.infer<typeof PlacesIndexSchema>;
 export type Coverage = z.infer<typeof CoverageSchema>;
+export type Viewshed = z.infer<typeof ViewshedSchema>;
+export type ContactClass = z.infer<typeof ContactClassSchema>;
 export type TileSet = z.infer<typeof TileSetSchema>;
 export type TerrainLayer = z.infer<typeof TerrainLayerSchema>;
 export type TerrainIndex = z.infer<typeof TerrainIndexSchema>;
@@ -527,6 +687,11 @@ export type LegClass = z.infer<typeof LegClassSchema>;
 export type RouteLeg = z.infer<typeof RouteLegSchema>;
 export type RouteStop = z.infer<typeof RouteStopSchema>;
 export type LimitingFactor = z.infer<typeof LimitingFactorSchema>;
+export type DirectionKind = z.infer<typeof DirectionKindSchema>;
+export type LandmarkCatalog = z.infer<typeof LandmarkCatalogSchema>;
+export type Landmark = z.infer<typeof LandmarkSchema>;
+export type Direction = z.infer<typeof DirectionSchema>;
+export type DirectionCheck = z.infer<typeof DirectionCheckSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type SafetyLimit = z.infer<typeof SafetyLimitSchema>;
 export type Robustness = z.infer<typeof RobustnessSchema>;

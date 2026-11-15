@@ -26,6 +26,8 @@ import {
   SitesSchema,
   TerrainIndexSchema,
   type TerrainIndex,
+  ViewshedSchema,
+  type Viewshed,
   type Health,
   type SiteDetail,
   type Sites,
@@ -138,14 +140,46 @@ export async function fetchPoint(
 }
 
 /**
- * Índice de las capas de relieve del sitio (pipeline/precompute.py). null =
- * el pipeline todavía no corrió para este sitio: las capas quedan esperando.
- * `no-cache` porque nginx manda `expires 1h` en /tiles/ y, después de volver a
- * correr el pipeline, el navegador seguiría con el índice viejo.
+ * Índice de las capas del sitio que ya generó el pipeline. Junta dos archivos
+ * con el mismo formato: terrain.json (relieve, pipeline/precompute.py) y
+ * shelter.json (refugios, pipeline/shelter.py). null = no corrió ninguno: las
+ * capas quedan esperando.
+ *
+ * Si uno de los dos falla (500, JSON roto o no pasa el schema), las capas del
+ * otro siguen andando y el problema va a `warnings`: un índice roto no apaga
+ * las capas del otro. Solo si fallan los dos (o falla uno y el otro no existe)
+ * no hay nada que dibujar y se tira el error.
  */
 export async function fetchTerrain(siteId: string): Promise<TerrainIndex | null> {
   if (usingFixtures) return null;
-  const path = `/tiles/${siteId}/terrain.json`;
+  const asError = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  const [relief, shelter] = await Promise.all(
+    ["terrain.json", "shelter.json"].map((file) => fetchLayerIndex(siteId, file).catch(asError)),
+  );
+  const errors = [relief, shelter].filter((r): r is string => typeof r === "string");
+  const indexes = [relief, shelter].filter((r): r is TerrainIndex => r !== null && typeof r !== "string");
+  const [base] = indexes;
+  if (!base) {
+    if (errors.length) throw new Error(errors.join(" · "));
+    return null;
+  }
+  return {
+    ...base,
+    // MapView rearma las fuentes cuando cambia: tiene que cambiar si corre cualquiera de los dos.
+    generated_at: indexes.map((i) => i.generated_at).join(" + "),
+    // Los ids no se repiten entre los dos archivos (shelter.py usa los suyos).
+    layers: indexes.reduce<TerrainIndex["layers"]>((all, i) => ({ ...all, ...i.layers }), {}),
+    warnings: [...indexes.flatMap((i) => i.warnings), ...errors],
+  };
+}
+
+/**
+ * Un índice del pipeline. `no-cache` porque nginx manda `expires 1h` en
+ * /tiles/ y, después de volver a correr el pipeline, el navegador seguiría con
+ * el índice viejo.
+ */
+async function fetchLayerIndex(siteId: string, file: string): Promise<TerrainIndex | null> {
+  const path = `/tiles/${siteId}/${file}`;
   const res = await fetch(path, { headers: { accept: "application/json" }, cache: "no-cache" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${path} respondió ${res.status}`);
@@ -261,6 +295,29 @@ export async function fetchRoverPhotos(
   if (!res.ok) throw new Error(`fotos: el server respondió ${res.status}${await errorDetail(res)}`);
   const parsed = RoverPhotosSchema.safeParse(await res.json());
   if (!parsed.success) throw new Error(`fotos: no cumple el contrato: ${parsed.error.message}`);
+  return parsed.data;
+}
+
+/**
+ * Zona con contacto por radio con el hábitat (api/viewshed.py). null = no hay
+ * backend o el server todavía no tiene el endpoint: la capa no se dibuja y el
+ * panel lo dice. Nunca una zona de ejemplo.
+ */
+export async function fetchViewshed(
+  siteId: string,
+  p: { readonly lat: number; readonly lon: number },
+  signal?: AbortSignal,
+): Promise<Viewshed | null> {
+  if (usingFixtures) return null;
+  const qs = new URLSearchParams({ lat: String(p.lat), lon: String(p.lon) });
+  const res = await fetch(`/api/sites/${siteId}/viewshed?${qs.toString()}`, {
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  });
+  if (res.status === 404 || res.status === 405 || res.status === 501) return null;
+  if (!res.ok) throw new Error(`contacto: el server respondió ${res.status}${await errorDetail(res)}`);
+  const parsed = ViewshedSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error(`contacto: no cumple el contrato: ${parsed.error.message}`);
   return parsed.data;
 }
 

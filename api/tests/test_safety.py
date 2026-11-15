@@ -112,6 +112,30 @@ class TestContacto:
         assert not r.broken and not r.complete
         assert r.used == pytest.approx(6.0, abs=0.01)
 
+    def test_el_no_go_dice_donde_esta_la_racha_y_que_hacer(self):
+        # Caso de Jezero: 5 min con vista, 20 min tapado (ida y vuelta detrás de una loma), 5 min con vista.
+        t = track(leg(240), leg(960, visible=False), leg(240), station_visible=[False, False, True])
+        a = assess(t, cond())
+        r = by_id(a.base)["contact"]
+        assert r.broken and r.used == pytest.approx(20.0, abs=0.01)
+        assert "20 min seguidos" in r.note and "el máximo es 10" in r.note
+        assert "del minuto 5 al 25" in r.note
+        assert "entre el km 0,2 y el 1,2" in r.note
+        assert "Contacto con el hábitat" in r.note
+        # El resumen del NO-GO va corto (se lee con el casco puesto); el detalle queda en el límite.
+        assert summary(a) == ("No va: 20 min seguidos sin vista al hábitat (máximo 10), del minuto 5 al 25. "
+                              "Mirá la capa «Contacto con el hábitat».")
+
+    def test_sin_romper_igual_dice_donde_esta_la_racha(self):
+        t = track(leg(240), leg(144, visible=False), station_visible=[False, True])
+        r = by_id(evaluate(t, cond()))["contact"]
+        assert not r.broken
+        assert r.note == ("La racha más larga sin vista al hábitat es de 3 min, del minuto 5 al 8, "
+                          "entre el km 0,2 y el 0,4 del recorrido.")
+
+    def test_con_vista_todo_el_camino_no_hay_nota(self):
+        assert by_id(evaluate(track(leg(240)), cond()))["contact"].note is None
+
     def test_sin_dtm_no_se_evalua(self):
         ev = evaluate(track(leg(240), contact_evaluated=False), cond())
         assert not by_id(ev)["contact"].evaluated

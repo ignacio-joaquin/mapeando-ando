@@ -10,8 +10,9 @@ Modelo de costo (docs/seguridad.md, decisión en docs/context.md §5):
     r_sombra         = banda de shadow_hourly.tif más cercana a la hora de llegada a
                        la celda: en sombra 1; al sol o sin dato 0
     r_contacto       = sin línea de vista al hábitat 1 (sin dato también); con vista 0
-    rugosidad, suelo suelto y radiación por terreno tienen peso pero todavía no tienen
-    capa: quedan inactivos y la respuesta lo dice
+    rugosidad y suelo suelto ya tienen capa (roughness.tif, loose_soil.tif) pero el A*
+    todavía no las lee, y la radiación por terreno va al presupuesto de dosis: los tres
+    quedan inactivos y la respuesta dice por qué
 
 El "1 +" es el tiempo puro: como cada paso cuesta al menos Δt, la distancia octile /
 velocidad nunca sobreestima lo que falta; la heurística es admisible y consistente, y
@@ -41,7 +42,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import safety
+from . import directions, safety
 from .consumables import SOURCE as SUIT_SOURCE
 from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg, pandolf_watts,
                           segment_consumption)
@@ -75,8 +76,10 @@ COST_FACTORS: tuple[tuple[str, str, str | None], ...] = (
     ("slope", "Pendiente", None),
     ("shadow", "Sombra / frío", None),
     ("contact", "Sin contacto con el hábitat", None),
-    ("roughness", "Rugosidad", "Falta la capa de rugosidad en el pipeline."),
-    ("loose_soil", "Suelo suelto (THEMIS)", "Falta la inercia térmica de THEMIS procesada."),
+    ("roughness", "Rugosidad", "La capa existe (roughness.tif) pero el A* todavía no la lee."),
+    ("loose_soil", "Suelo suelto (THEMIS)",
+     "La capa existe (loose_soil.tif, THEMIS de noche) pero el A* todavía no la lee: hoy solo "
+     "refuerza el peligro de terreno del mapa."),
     ("radiation", "Radiación por terreno",
      "La dosis por celda (survival-dose) varía menos que la incertidumbre de RAD: entra en el "
      "presupuesto de dosis de la travesía, no en el costo del A*."),
@@ -402,6 +405,56 @@ class LegPlan:
     slopes: list[float | None] = field(default_factory=list)    # por paso, al final del paso
     visible: list[bool | None] = field(default_factory=list)    # por paso, al final del paso
     cost_s: dict[str, float] = field(default_factory=dict)      # aporte de cada factor (s)
+    # Solo en tramos bloqueados: la línea recta A→B medida sobre el terreno (ver
+    # _measure_line). Es para el perfil de elevación, no un camino: no entra en los
+    # consumibles, la duración ni el costo, que siguen saliendo de `steps`.
+    probe: "LineProbe | None" = None
+
+
+@dataclass
+class LineProbe:
+    """La línea recta A→B de un tramo sin camino, medida a la resolución de su grilla."""
+    steps: list[Step]
+    elev: list[float | None]
+    slopes: list[float | None]   # por paso: la misma pendiente que juzga el veredicto (grid.peak)
+
+
+def _measure_line(a, b, grid: Grid, dtm_ds) -> LineProbe | None:
+    """Mide la línea recta A→B: elevación del DTM y pendiente máxima de la celda en cada punto.
+
+    Cuando el A* no encuentra camino, el tramo queda en línea recta y antes no se medía
+    nada: el perfil quedaba vacío justo cuando más sirve, porque no mostraba dónde está la
+    pared. Medir la recta con la misma pendiente del veredicto (grid.peak) la pinta en rojo
+    en el lugar exacto, con la misma regla de colores que una ruta normal.
+
+    Un punto cada celda de la grilla del tramo, que es la escala a la que decide el
+    veredicto. Sin DTM no hay elevación y no se mide nada.
+    """
+    if dtm_ds is None:
+        return None
+    pts = densify(a[0], a[1], b[0], b[1], max(min(grid.dx_m, grid.dy_m), 1.0))
+    xs, ys = _to_xy(grid.crs, pts)
+
+    peak = grid.peak
+    nr, nc = peak.shape
+    slopes: list[float | None] = []
+    for x, y in zip(xs[1:], ys[1:]):
+        r, c = grid.cell_of(x, y)
+        v = peak[r, c] if 0 <= r < nr and 0 <= c < nc else np.nan
+        slopes.append(float(v) if np.isfinite(v) else None)
+
+    elev: list[float | None] = [None] * len(pts)
+    dx_, dy_ = (xs, ys) if dtm_ds.crs == grid.crs else _to_xy(dtm_ds.crs, pts)
+    nod = dtm_ds.nodata
+    for i, v in enumerate(dtm_ds.sample(zip(dx_, dy_), indexes=1)):
+        z = float(v[0])
+        if math.isfinite(z) and not (nod is not None and math.isclose(z, nod, rel_tol=1e-6)):
+            elev[i] = z
+
+    steps = [Step(haversine_m(*pts[j], *pts[j + 1]),
+                  (elev[j + 1] - elev[j]) if elev[j] is not None and elev[j + 1] is not None else 0.0)
+             for j in range(len(pts) - 1)]
+    return LineProbe(steps, elev, slopes)
 
 
 def _straight_leg(a, b, note: str, contact: ContactField | None = None) -> LegPlan:
@@ -443,6 +496,7 @@ def _plan_leg(a, b, t0: float, slope_ds, dtm_ds, shadow_ds, stack: ShadowStack |
         plan = _straight_leg(a, b, f"No hay paso con pendiente menor a {limits.max_slope_deg:.0f}° "
                                    "dentro de la zona evaluada.", contact)
         plan.cls, plan.resolution = "blocked", res
+        plan.probe = _measure_line(a, b, grid, dtm_ds)
         return plan
     path, times = found
 
@@ -812,6 +866,19 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
                 stack.provenance(), ["Fracción de celdas de la ruta en sombra a la hora estimada de paso"])
         legs.append(leg)
 
+    # ---- indicaciones por landmarks (api/directions.py). Opcionales: si el cálculo falla, la
+    # ruta sale igual, sin `directions`, y el frontend dice que faltan.
+    try:
+        dir_legs = [directions.LegInput(plan.latlon, departures[i], plan.duration_s)
+                    for i, plan in enumerate(legs_plan)]
+        per_leg = directions.route_directions(data_dir, site_id, dtm_path, dir_legs, stack=stack,
+                                              contact=contact, habitat=pts[0])
+    except Exception:  # noqa: BLE001 — degradar, no romper
+        per_leg = None
+    if per_leg is not None:
+        for leg, dirs in zip(legs, per_leg):
+            leg["directions"] = dirs
+
     # ---- estaciones
     stops = []
     for i, w in enumerate(waypoints):
@@ -877,7 +944,9 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         light_status = "missing"
         light_source = "missing"
     else:
-        partial_shadow = any(plan.planned and plan.shadow_fraction is None for plan in legs_plan)
+        # Con pila, el atardecer siempre se evalúa; la sombra de la ruta, solo en los tramos
+        # que la midieron. Un tramo en línea recta (sin A*) o sin dato deja la luz a medias.
+        partial_shadow = any(plan.shadow_fraction is None for plan in legs_plan)
         light_status = "partial" if partial_shadow else "complete"
         light_source = "reused" if stack.reuse is not None else "exact"
     out = {
@@ -897,7 +966,20 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
             "contact_evaluated": contact is not None,
         },
     }
-    if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
-        out["_profile_inputs"] = ([plan.steps for plan in legs_plan], [legs_plan[0].elev[0]]
-                                  + [plan.elev[-1] for plan in legs_plan])
+    # Perfil de elevación. Por tramo: el camino del A*, o, si no hubo camino, la línea
+    # recta medida (probe). Las pendientes por paso son las del veredicto (máxima de la
+    # celda), así el perfil muestra en rojo lo que bloquea en vez de contradecirlo.
+    def profile_source(plan: LegPlan):
+        if plan.planned:
+            return plan.steps, plan.elev, plan.slopes
+        if plan.probe is not None:
+            return plan.probe.steps, plan.probe.elev, plan.probe.slopes
+        return None
+
+    sources = [profile_source(plan) for plan in legs_plan]
+    if all(s is not None and all(z is not None for z in s[1]) for s in sources):
+        out["_profile_inputs"] = ([s[0] for s in sources], [sources[0][1][0]] + [s[1][-1] for s in sources],
+                                  [s[2] for s in sources])
+        # Qué tramos del perfil son una línea recta y no un camino: el mapa lo tiene que decir.
+        out["_profile_straight_legs"] = [i for i, plan in enumerate(legs_plan) if not plan.planned]
     return out

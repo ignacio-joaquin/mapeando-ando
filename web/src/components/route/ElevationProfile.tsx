@@ -16,7 +16,9 @@ interface Props {
   readonly height?: number;
 }
 
-const PAD = { top: 10, right: 8, bottom: 20, left: 44 };
+// `top` deja lugar arriba para la unidad del eje Y: con menos, la "m" se pisa
+// con la etiqueta de la elevación máxima.
+const PAD = { top: 18, right: 8, bottom: 20, left: 44 };
 
 export function ElevationProfile({ profile, height = 140 }: Props) {
   if (!profile || profile.distance_m.length < 2) {
@@ -56,6 +58,16 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
   const y = (z: number) =>
     PAD.top + (1 - (z - zMin) / (zMax - zMin)) * (h - PAD.top - PAD.bottom);
 
+  // Tramos sin camino: el planificador no encontró paso y el backend mandó la línea
+  // recta A→B medida sobre el DTM. Se dibuja punteada y se avisa: no es una ruta, es
+  // dónde está lo que bloquea. Los colores siguen la misma regla que el resto.
+  const rectas = new Set(profile.straight_legs ?? []);
+  const tramoDe = (i: number) => {
+    let k = 0;
+    while (k + 1 < legs.length && (legs[k + 1] ?? Infinity) < i) k++;
+    return k;
+  };
+
   // Un segmento por muestra, con el color de su clase de pendiente.
   const segmentos = [];
   for (let i = 1; i < dist.length; i++) {
@@ -71,6 +83,7 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
       x2: x(d1),
       y2: y(z1),
       color: slopeClass(Math.abs(slope[i] ?? 0)).color,
+      recta: rectas.has(tramoDe(i)),
     });
   }
 
@@ -95,6 +108,14 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
           ))}
         </ul>
       </div>
+
+      {rectas.size > 0 ? (
+        <p className="mb-1 text-[11px] text-warn">
+          Sin camino en {[...rectas].map((k) => `el tramo ${k}→${k + 1}`).join(", ")}: se muestra
+          la línea recta medida sobre el terreno (punteada). No es una ruta: marca dónde está lo
+          que bloquea.
+        </p>
+      ) : null}
 
       <svg
         viewBox={`0 0 ${w} ${h}`}
@@ -152,7 +173,8 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
             y2={s.y2}
             stroke={s.color}
             strokeWidth={2.5}
-            strokeLinecap="round"
+            strokeLinecap={s.recta ? "butt" : "round"}
+            strokeDasharray={s.recta ? "6 4" : undefined}
           />
         ))}
 
@@ -170,7 +192,7 @@ export function ElevationProfile({ profile, height = 140 }: Props) {
         </text>
         <text
           x={PAD.left - 6}
-          y={PAD.top - 2}
+          y={PAD.top - 9}
           textAnchor="end"
           className="fill-current text-muted"
           style={{ fontSize: 9 }}

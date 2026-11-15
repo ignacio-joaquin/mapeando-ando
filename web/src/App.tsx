@@ -196,7 +196,16 @@ export function App() {
               <>
                 <MapView center={site.center} bbox={site.bbox} siteId={site.id} />
                 <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-bg/80 px-2 py-1">
-                  <ScaleBar lat={view?.lat ?? site.center.lat} zoom={view?.zoom ?? 12} />
+                  {/* Con la cámara inclinada la escala cambia de punta a punta de la
+                      pantalla: una barra fija mentiría. Las distancias de la ruta
+                      siguen saliendo del planificador. */}
+                  {(view?.pitch ?? 0) > 0.5 ? (
+                    <span className="text-[10px] text-muted">
+                      sin barra de escala en 3D: la escala cambia con la distancia
+                    </span>
+                  ) : (
+                    <ScaleBar lat={view?.lat ?? site.center.lat} zoom={view?.zoom ?? 12} />
+                  )}
                 </div>
                 <div className="pointer-events-none absolute top-3 left-3 max-w-xs rounded border border-line bg-bg/85 px-2 py-1 text-[11px] text-muted">
                   {site.name} · {site.rover} · {site.files_ok}/{site.files_total} archivos
