@@ -521,6 +521,23 @@ def test_crism_without_reasons_or_outside_bbox(tmp_path):
     assert places.crism_places(folder, {**BBOX, "lat_min": 18.6}) == []
 
 
+def test_crism_same_param_numbered_by_strength(tmp_path):
+    pytest.importorskip("rasterio")
+    pytest.importorskip("scipy")
+    folder = tmp_path / "crism"
+    weak, strong = scene(), scene()
+    weak[28:33, 38:43] = 150
+    strong[28:33, 38:43] = 200
+    write_browse(folder, "frt000047a3", {"D2300": weak}, lon0=77.30)    # a ~6 km: no se deduplican
+    write_browse(folder, "frt00005c5e", {"D2300": strong}, lon0=77.40)
+    got = places.crism_places(folder, BBOX)
+    assert [(p["id"], p["name"]) for p in got] == [
+        ("crism-frt00005c5e-d2300", "Señal de Fe/Mg-filosilicatos 1 (D2300)"),
+        ("crism-frt000047a3-d2300", "Señal de Fe/Mg-filosilicatos 2 (D2300)"),
+    ]
+    assert all("El número solo las ordena por intensidad" in p["assumptions"] for p in got)
+
+
 def test_crism_without_browse_is_missing(tmp_path):
     (tmp_path / "crism").mkdir()
     with pytest.raises(FileNotFoundError):

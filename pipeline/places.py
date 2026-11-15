@@ -62,6 +62,7 @@ import struct
 import sys
 import time
 import zipfile
+from collections import Counter
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -773,12 +774,13 @@ def crism_places(crism_dir, bbox):
     etiqueta .lbl, cómo volver al valor real. Un lugar por observación y parámetro, solo si
     supera el umbral; si dos observaciones marcan casi el mismo punto, queda la más fuerte.
     """
-    import rasterio
-
     crism_dir = Path(crism_dir)
     labels = sorted((m.group(1), p) for p in crism_dir.glob("*.lbl") if (m := CRISM_BROWSE.match(p.name)))
     if not labels:
         raise FileNotFoundError("Faltan los browse CRISM (fetch_science.sh)")
+    # Después del chequeo: sin browse la fuente queda 'missing' aunque no haya rasterio.
+    import rasterio
+
     reasons = _crism_reasons(crism_dir)
     found, seen = [], set()
     for obs, lbl in labels:
@@ -812,17 +814,22 @@ def crism_places(crism_dir, bbox):
             continue
         kept.append(f)
 
+    inside = [f for f in kept if in_bbox(f["lat"], f["lon"], bbox)]
+    # Varias señales del mismo parámetro llevan número (de la más fuerte a la más débil, porque
+    # `kept` ya viene ordenado), así no quedan nombres repetidos en el buscador.
+    total = Counter(f["param"] for f in inside)
+    seq = Counter()
     out = []
-    for f in kept:
-        if not in_bbox(f["lat"], f["lon"], bbox):
-            continue
+    for f in inside:
         param, obs = f["param"], f["obs"]
         label, meaning, threshold = CRISM_PARAMS[param]
+        seq[param] += 1
+        number = f" {seq[param]}" if total[param] > 1 else ""
         value = f"{param} {'≥' if f['saturated'] else '='} {f['value']:.3f}".replace(".", ",")
         reason = reasons.get(obs)
         out.append({
             "id": f"crism-{obs}-{param.lower()}",
-            "name": f"Señal de {label} ({param})",
+            "name": f"Señal de {label}{number} ({param})",
             "kind": "orbital",
             "detail": f"{value}, lo más fuerte de {obs.upper()}" + (f" · objetivo de MRO: {reason}" if reason else ""),
             "lat": round(f["lat"], COORD_DECIMALS), "lon": round(f["lon"], COORD_DECIMALS),
@@ -835,7 +842,7 @@ def crism_places(crism_dir, bbox):
                 f"Indicio desde órbita de {meaning}: no es una identificación mineral, hay que confirmarla con los espectros",
                 f"Umbral nuestro, conservador (no lo publica la fuente): {param} ≥ {threshold}".replace(".", ","),
                 "Es el punto más fuerte de la observación: alrededor puede haber más terreno con la misma señal",
-            ],
+            ] + (["El número solo las ordena por intensidad"] if number else []),
         })
     return out
 
