@@ -1,4 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { EDU_TARGET } from "../edu/lessons";
+import { useLessonShows } from "../edu/useLessonShows";
 import { LAYERS, type LayerGroup } from "../map/layers";
 import { pipelineError, readyTiles, terrainLayer } from "../map/terrain";
 import { useStore } from "../state/store";
@@ -58,6 +60,11 @@ export function LayersButton() {
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => setOpen(false));
   const on = useLayersOn();
+  // Sin la columna de la derecha, una lección que señala las capas abre el desplegable.
+  const lessonShows = useLessonShows([EDU_TARGET.LAYERS]);
+  useEffect(() => {
+    if (lessonShows) setOpen(true);
+  }, [lessonShows]);
 
   return (
     <div ref={ref} className="pointer-events-auto relative lg:hidden">

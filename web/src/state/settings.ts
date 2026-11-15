@@ -5,16 +5,20 @@
  * recargo no las pierde; si el almacenamiento no anda, viven en memoria.
  */
 import { create } from "zustand";
-import type { RouteParams, RouteSettings, SettingsGroup } from "../api/schemas";
+import { RouteParamsSchema, type RouteParams, type RouteSettings, type SettingsGroup } from "../api/schemas";
 
 const KEY = "mapeando.route-params.v1";
 
+/**
+ * Lo guardado, si tiene la forma de los ajustes. Si no (otra versión, editado a
+ * mano, un valor que no es número), se arranca de cero: mandarlo terminaría en 422.
+ */
 function load(): RouteParams {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return {};
-    const v: unknown = JSON.parse(raw);
-    return v && typeof v === "object" ? (v as RouteParams) : {};
+    const parsed = RouteParamsSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : {};
   } catch {
     return {};
   }

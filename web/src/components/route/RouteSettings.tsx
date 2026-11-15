@@ -86,25 +86,27 @@ function SettingRow({
 }) {
   const changed = value !== undefined;
   const shown = value ?? field.default;
-  // Lo que se tipea vive acá hasta que es un número válido dentro del rango.
+  // Lo que se tipea vive acá y se guarda recién al salir del campo o con Enter:
+  // si se guardara en cada tecla, tipear "0,25" mandaría primero una ruta con 0.
   const [draft, setDraft] = useState<string | null>(null);
   const unit = field.unit === "fracción" ? null : field.unit;
   const min = field.min ?? undefined;
   const max = field.max ?? undefined;
 
-  const commit = (raw: string) => {
+  /** El número tipeado si es válido y está en rango; si no, null. */
+  const parse = (raw: string): number | null => {
     const v = Number(raw.replace(",", "."));
-    if (raw.trim() === "" || Number.isNaN(v)) return;
-    if ((min !== undefined && v < min) || (max !== undefined && v > max)) return;
-    useSettings.getState().set(group, field.id, v === field.default ? null : v);
+    if (raw.trim() === "" || !Number.isFinite(v)) return null;
+    if ((min !== undefined && v < min) || (max !== undefined && v > max)) return null;
+    return v;
+  };
+  // Un valor inválido no se guarda: al salir del campo vuelve al que estaba.
+  const commit = () => {
+    const v = draft === null ? null : parse(draft);
+    if (v !== null) useSettings.getState().set(group, field.id, v === field.default ? null : v);
     setDraft(null);
   };
-  const invalid =
-    draft !== null &&
-    (() => {
-      const v = Number(draft.replace(",", "."));
-      return draft.trim() === "" || Number.isNaN(v) || (min !== undefined && v < min) || (max !== undefined && v > max);
-    })();
+  const invalid = draft !== null && parse(draft) === null;
 
   return (
     <li className={`flex flex-col gap-1.5 p-2.5 ${changed ? "bg-rust/5" : ""}`}>
@@ -127,11 +129,12 @@ function SettingRow({
             max={max}
             step={field.step ?? "any"}
             value={draft ?? String(shown)}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              commit(e.target.value);
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") setDraft(null);
             }}
-            onBlur={() => setDraft(null)}
             aria-invalid={invalid}
             aria-describedby={`set-${group}-${field.id}-help`}
             className={`min-h-8 w-24 rounded-md border bg-bg px-2 text-right font-mono text-xs text-fg ${

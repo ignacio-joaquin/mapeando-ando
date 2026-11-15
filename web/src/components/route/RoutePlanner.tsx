@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { planRoute } from "../../api/client";
 import { EXAMPLE_PARAMS } from "../../api/routeFixture";
 import type { MeasuredValue, RouteLeg, RouteStop } from "../../api/schemas";
@@ -76,6 +76,9 @@ export function RoutePlanner() {
     );
   }, [siteId, departAt, waypoints, roundTrip, kit, extraKg]);
 
+  // Puntos de la última ruta que llegó: decide si la navegación vuelve al paso 1.
+  const navGeometry = useRef<string | null>(null);
+
   // Recalcular ante cualquier cambio, con un respiro para no pedir por tecla.
   useEffect(() => {
     if (waypoints.length < 2) {
@@ -87,6 +90,10 @@ export function RoutePlanner() {
     // La respuesta queda marcada con la huella de este pedido: si los puntos
     // cambian mientras tanto, la UI la trata como vieja y no la muestra.
     const key = planKey(siteId, departAt, waypoints, roundTrip, cargo, params);
+    // Los puntos por los que pasa la travesía. Si cambian, los pasos de la
+    // navegación son otros y se arranca del primero; si solo cambia la hora, la
+    // carga o un ajuste, se queda en el paso en el que estaba.
+    const geometry = JSON.stringify([siteId, roundTrip, waypoints.map((w) => [w.lat, w.lon])]);
     // Ya, no después del respiro: un error del pedido anterior no aplica a este.
     setStatus({ kind: "loading" });
     const t = setTimeout(() => {
@@ -110,7 +117,9 @@ export function RoutePlanner() {
           // La primera ruta de una travesía abre la navegación: es lo que se usa afuera.
           const first = usePlan.getState().result === null;
           setResult(r, key);
-          useUi.getState().setNavStep(0);
+          // NavigationView recorta el paso si la ruta nueva tiene menos.
+          if (first || geometry !== navGeometry.current) useUi.getState().setNavStep(0);
+          navGeometry.current = geometry;
           if (first && useUi.getState().tab === "route") useUi.getState().setTab("navigate");
           setStatus({ kind: "idle" });
         })

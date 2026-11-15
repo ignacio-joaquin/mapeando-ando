@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Profile } from "../../api/schemas";
+import { EDU_TARGET } from "../../edu/lessons";
+import { useLessonShows } from "../../edu/useLessonShows";
 import { formatDistance } from "../../mars/geo";
 import { SLOPE_CLASSES, slopeClass } from "../../map/layers";
 
@@ -24,6 +26,11 @@ interface Props {
  */
 export function ElevationProfile({ profile }: { readonly profile: Profile | undefined }) {
   const [open, setOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
+  // Una lección que señala el perfil lo abre; después se puede volver a plegar.
+  const lessonShows = useLessonShows([EDU_TARGET.PROFILE]);
+  useEffect(() => {
+    if (lessonShows) setOpen(true);
+  }, [lessonShows]);
   const missing = (profile?.distance_m.length ?? 0) < 2;
   return (
     <section className="border-t border-line bg-panel">

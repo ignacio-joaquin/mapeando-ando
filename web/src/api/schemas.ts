@@ -163,6 +163,12 @@ export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 export type RouteParams = Partial<Record<SettingsGroup, Readonly<Record<string, number>>>>;
 
 /**
+ * Lo mismo, para validar lo que vuelve de localStorage (state/settings.ts): lo
+ * guardó otra versión de la app o se tocó a mano, así que no se confía.
+ */
+export const RouteParamsSchema = z.partialRecord(z.enum(SETTINGS_GROUPS), z.record(z.string(), z.number()));
+
+/**
  * GET /api/route/params: qué se puede ajustar, con default, rango y unidad.
  * Los números salen del server (api/main.py); el frontend no copia ninguno.
  */

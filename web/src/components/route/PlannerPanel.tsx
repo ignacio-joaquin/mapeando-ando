@@ -1,6 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { EDU_TARGET } from "../../edu/lessons";
+import { useLessonShows } from "../../edu/useLessonShows";
 import { useFreshRoute, usePlan } from "../../state/plan";
 import { RoutePlanner } from "./RoutePlanner";
+
+/** Piezas de una lección que viven dentro del planificador. */
+const PLANNER_TARGETS = [
+  EDU_TARGET.VERDICT,
+  EDU_TARGET.BREAKDOWN,
+  EDU_TARGET.DEPART,
+  EDU_TARGET.POINTS,
+  EDU_TARGET.SEARCH,
+  EDU_TARGET.SHARE,
+  EDU_TARGET.CARGO,
+] as const;
 
 /**
  * El planificador. En md+ es la columna de la izquierda; en pantalla chica una
@@ -9,6 +22,12 @@ import { RoutePlanner } from "./RoutePlanner";
  */
 export function PlannerPanel() {
   const [open, setOpen] = useState(false);
+  // En pantalla chica, una lección que señala algo del planificador sube la
+  // hoja; el alumno la puede volver a bajar para ver el mapa.
+  const lessonShows = useLessonShows(PLANNER_TARGETS);
+  useEffect(() => {
+    if (lessonShows) setOpen(true);
+  }, [lessonShows]);
   return (
     <aside
       aria-label="Planificador de travesía"
