@@ -121,8 +121,11 @@ export const LegClassSchema = z.enum(["ok", "caution", "limit", "blocked", "unkn
  * Indicaciones por landmarks de un tramo (`legs[].directions[]`), PROPUESTA
  * del ticket de navegación por landmarks. Documentado en docs/context.md §4.
  *
- * - `toward` / `keep_left` / `keep_right` / `turn` nombran un landmark que se
- *   ve desde el tramo: `landmark` es obligatorio.
+ * - Una indicación por trecho (el tramo se parte donde el rumbo gira más de
+ *   30°), en orden. Las calcula api/directions.py.
+ * - `toward` / `keep_left` / `keep_right` / `away` / `turn` nombran un landmark
+ *   que se ve desde el trecho: `landmark` es obligatorio. `turn` = el trecho
+ *   empieza con un giro.
  * - `fallback_sun` / `fallback_bearing` = no hay nada visible: `landmark` va
  *   en null. Nunca se inventa un landmark para no caer en el respaldo.
  */
@@ -130,6 +133,7 @@ export const DirectionKindSchema = z.enum([
   "toward",
   "keep_left",
   "keep_right",
+  "away",
   "turn",
   "fallback_sun",
   "fallback_bearing",
@@ -144,6 +148,8 @@ export const LandmarkSchema = z.object({
   source: LandmarkCatalogSchema,
   lat: z.number(),
   lon: z.number(),
+  /** El punto que se mira, si no es el centro (ej. el borde de un cráter visto desde adentro). */
+  target: LatLonSchema.optional(),
 });
 
 const FALLBACK_KINDS: readonly string[] = ["fallback_sun", "fallback_bearing"];

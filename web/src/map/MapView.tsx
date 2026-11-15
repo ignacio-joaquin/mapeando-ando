@@ -15,7 +15,8 @@ import {
 // ve y en el build el worker no se emite (404 → nginx devuelve index.html y el mapa no
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
-import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from "geojson";
+import type { Feature, FeatureCollection, LineString, MultiPolygon, Point, Polygon } from "geojson";
+import { midpoint, routeSteps, type RouteStep } from "../domain/steps";
 import { geojsonUrl, LAYERS, RELIEF_DEM_ID, RELIEF_DEM_SOURCE, tileUrl } from "./layers";
 import { readyTiles, terrainLayer, usesGeojson } from "./terrain";
 import { TERRAIN_TRUE_SCALE } from "../mars/constants";
@@ -626,6 +627,88 @@ export function MapView({ center, bbox, siteId }: Props) {
     whenReady(map, apply);
   }, [result]);
 
+  // 5b. Indicaciones (ver DirectionsList): los landmarks de la ruta con su nombre
+  //     (id de contrato: landmarks-points) y, para el paso resaltado, su trecho y
+  //     la línea de vista desde la mitad del trecho hasta lo que se mira.
+  const activeStep = usePlan((s) => s.activeStep);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const steps = routeSteps(result?.route);
+    const step = activeStep ? steps[activeStep.index] : undefined;
+    const apply = () => {
+      const marks = landmarksToGeoJSON(steps, step);
+      const lines = stepToGeoJSON(step);
+      const ms = map.getSource(LANDMARKS_SOURCE);
+      const ls = map.getSource(STEP_SOURCE);
+      if (ms instanceof GeoJSONSource && ls instanceof GeoJSONSource) {
+        ms.setData(marks);
+        ls.setData(lines);
+      } else {
+        map.addSource(STEP_SOURCE, { type: "geojson", data: lines });
+        map.addSource(LANDMARKS_SOURCE, { type: "geojson", data: marks });
+        // El trecho, como un halo debajo de la línea de color de la ruta.
+        map.addLayer(
+          {
+            id: "route-step-highlight",
+            type: "line",
+            source: STEP_SOURCE,
+            filter: ["==", ["get", "part"], "stretch"],
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: { "line-color": "#ece6de", "line-width": 14, "line-opacity": 0.45 },
+          },
+          map.getLayer("route-line") ? "route-line" : undefined,
+        );
+        map.addLayer({
+          id: "route-sight-line",
+          type: "line",
+          source: STEP_SOURCE,
+          filter: ["==", ["get", "part"], "sight"],
+          paint: { "line-color": "#ece6de", "line-width": 1.5, "line-dasharray": [2, 2] },
+        });
+        map.addLayer({
+          id: "landmarks-points",
+          type: "circle",
+          source: LANDMARKS_SOURCE,
+          paint: {
+            "circle-radius": ["case", ["get", "active"], 9, 6],
+            "circle-color": "#0b0a09",
+            "circle-stroke-color": ["case", ["get", "active"], "#e07a4a", "#ece6de"],
+            "circle-stroke-width": ["case", ["get", "active"], 3, 2],
+          },
+        });
+        map.addLayer({
+          id: "landmarks-labels",
+          type: "symbol",
+          source: LANDMARKS_SOURCE,
+          layout: {
+            "text-field": ["get", "name"],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": ["case", ["get", "active"], 13, 11],
+            "text-anchor": "left",
+            "text-offset": [0.9, 0],
+            "text-optional": true,
+          },
+          paint: { "text-color": "#ece6de", "text-halo-color": "#0b0a09", "text-halo-width": 1.5 },
+        });
+      }
+      // Con un clic en el paso, el mapa encuadra el trecho y lo que se mira.
+      if (step && activeStep?.pinned) {
+        const pts = step.aim ? [...step.path, step.aim] : [...step.path];
+        const lons = pts.map((p) => p[0]);
+        const lats = pts.map((p) => p[1]);
+        map.fitBounds(
+          [
+            [Math.min(...lons), Math.min(...lats)],
+            [Math.max(...lons), Math.max(...lats)],
+          ],
+          { padding: 70, maxZoom: 16, duration: 500 },
+        );
+      }
+    };
+    whenReady(map, apply);
+  }, [result, activeStep]);
+
   // 6. Pines de lugares (places.json), como en Google Maps. Los mismos lugares
   //    que el buscador; se filtran por tipo desde el panel de capas. Al
   //    superponerse queda el de mayor rango (IAU > muestras > objetivos > …).
@@ -774,6 +857,54 @@ export function MapView({ center, bbox, siteId }: Props) {
         : null}
     </div>
   );
+}
+
+const LANDMARKS_SOURCE = "route-landmarks";
+const STEP_SOURCE = "route-step";
+
+/** Un punto por landmark de la ruta (sin repetir), en el lugar que se mira. */
+function landmarksToGeoJSON(steps: readonly RouteStep[], active: RouteStep | undefined): FeatureCollection<Point> {
+  const seen = new Map<string, Feature<Point>>();
+  for (const st of steps) {
+    const lm = st.direction.landmark;
+    if (!lm || !st.aim) continue;
+    const key = `${lm.id}|${st.aim[0]}|${st.aim[1]}`;
+    const isActive = active?.index === st.index;
+    const prev = seen.get(key);
+    if (prev) {
+      if (isActive) prev.properties = { ...prev.properties, active: true };
+      continue;
+    }
+    // El borde de un cráter se nombra como tal: el punto no es el centro.
+    const name = lm.target ? `${lm.name} (borde)` : lm.name;
+    seen.set(key, {
+      type: "Feature",
+      properties: { name, active: isActive },
+      geometry: { type: "Point", coordinates: [st.aim[0], st.aim[1]] },
+    });
+  }
+  return { type: "FeatureCollection", features: [...seen.values()] };
+}
+
+/** El trecho resaltado y, si nombra un landmark, la línea de vista hacia él. */
+function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineString> {
+  if (!step) return { type: "FeatureCollection", features: [] };
+  const features: Feature<LineString>[] = [
+    {
+      type: "Feature",
+      properties: { part: "stretch" },
+      geometry: { type: "LineString", coordinates: step.path.map(([x, y]) => [x, y]) },
+    },
+  ];
+  if (step.aim) {
+    const [mx, my] = midpoint(step.path);
+    features.push({
+      type: "Feature",
+      properties: { part: "sight" },
+      geometry: { type: "LineString", coordinates: [[mx, my], [step.aim[0], step.aim[1]]] },
+    });
+  }
+  return { type: "FeatureCollection", features };
 }
 
 function legsToGeoJSON(legs: readonly RouteLeg[]): FeatureCollection<LineString> {

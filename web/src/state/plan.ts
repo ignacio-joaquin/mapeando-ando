@@ -47,6 +47,11 @@ interface PlanState {
   readonly status: Status;
   /** Estación abierta en el panel (índice en waypoints). */
   readonly openStop: number | null;
+  /**
+   * Indicación resaltada en el mapa (índice en routeSteps). `pinned` = elegida
+   * con un clic: el mapa la encuadra y queda hasta otro clic.
+   */
+  readonly activeStep: { readonly index: number; readonly pinned: boolean } | null;
   /** Aviso para el usuario (ej. un punto rechazado por falta de terreno). */
   readonly notice: string | null;
   /** Clic en el mapa: 1ro = hábitat, 2do = destino, después paradas antes del destino. */
@@ -69,6 +74,7 @@ interface PlanState {
   setResult: (r: PlannedRoute | null, key?: string | null) => void;
   setStatus: (s: Status) => void;
   setOpenStop: (i: number | null) => void;
+  setActiveStep: (step: { index: number; pinned: boolean } | null) => void;
   setNotice: (notice: string | null) => void;
   /** Al cambiar de sitio: borra la travesía si era de otro. */
   switchSite: (siteId: string) => void;
@@ -116,6 +122,7 @@ export const usePlan = create<PlanState>((set) => ({
   resultKey: null,
   status: { kind: "idle" },
   openStop: null,
+  activeStep: null,
   notice: null,
 
   addPoint: (p, placeId = null) =>
@@ -175,14 +182,17 @@ export const usePlan = create<PlanState>((set) => ({
       resultKey: null,
       status: { kind: "idle" },
       openStop: null,
+      activeStep: null,
       notice: null,
     }),
   setDepartAt: (departAt) => set({ departAt }),
   setRoundTrip: (roundTrip) => set({ roundTrip }),
   setClickMode: (clickMode) => set({ clickMode }),
-  setResult: (result, key = null) => set({ result, resultKey: result ? key : null }),
+  // Una ruta nueva trae otras indicaciones: la resaltada ya no corresponde.
+  setResult: (result, key = null) => set({ result, resultKey: result ? key : null, activeStep: null }),
   setStatus: (status) => set({ status }),
   setOpenStop: (openStop) => set({ openStop }),
+  setActiveStep: (activeStep) => set({ activeStep }),
   setNotice: (notice) => set({ notice }),
   dropOutside: (inside) =>
     set((s) => {
