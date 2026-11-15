@@ -42,7 +42,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import safety
+from . import directions, safety
 from .consumables import SOURCE as SUIT_SOURCE
 from .consumables import (Step, SuitParams, battery_wh, dwell_consumption, o2_kg, pandolf_watts,
                           segment_consumption)
@@ -814,6 +814,16 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
                 None if plan.shadow_fraction is None else round(100 * plan.shadow_fraction, 1), "%",
                 stack.provenance(), ["Fracción de celdas de la ruta en sombra a la hora estimada de paso"])
         legs.append(leg)
+
+    # ---- indicaciones por landmarks (api/directions.py). Opcionales: si el cálculo falla, la
+    # ruta sale igual, sin `directions`, y el frontend dice que faltan.
+    try:
+        per_leg = directions.route_directions(data_dir, site_id, dtm_path, [plan.latlon for plan in legs_plan])
+    except Exception:  # noqa: BLE001 — degradar, no romper
+        per_leg = None
+    if per_leg is not None:
+        for leg, dirs in zip(legs, per_leg):
+            leg["directions"] = dirs
 
     # ---- estaciones
     stops = []

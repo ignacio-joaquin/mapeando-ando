@@ -15,7 +15,7 @@ import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { SafetyBreakdown } from "./SafetyBreakdown";
 import { VerdictCard } from "./VerdictCard";
-import { LegDirections } from "./LegDirections";
+import { DirectionsList } from "./DirectionsList";
 import { StationPhoto } from "./StationPhoto";
 import {
   earthShort,
@@ -223,6 +223,8 @@ export function RoutePlanner() {
             {...(route.data_quality ? { dataQuality: route.data_quality } : {})}
           />
           {result?.example ? <ExampleNotice /> : null}
+          {/* Las indicaciones van arriba: es lo que se usa afuera, con el casco puesto. */}
+          <DirectionsList route={route} example={result?.example ?? false} />
           <SafetyBreakdown verdict={route.verdict} cost={route.cost} />
           <div className="flex gap-2">
             <button
@@ -677,7 +679,6 @@ function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference
           Pendiente máx.
           <Measure data={leg.max_slope} format={(v) => v.toFixed(0)} />
         </span>
-        <LegDirections directions={leg.directions} />
       </div>
     </div>
   );
