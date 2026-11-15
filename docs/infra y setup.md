@@ -69,7 +69,7 @@ Todo lo crudo está en `/data/raw/` en el server y en `raw/` del bucket S3, con 
 | Cobertura real 1 m | 303 km² reales, sin relleno. | 862 km² reales, 688 km² de relleno (rugosidad 0) y 303 km² sin datos. |
 | Ortoimagen | HiRISE 25 cm (7.4 GB) | HiRISE color LRGB |
 
-El mapa de cobertura (`/data/output/coverage/`) muestra dónde hay terreno 1 m real. Las rutas de la demo tienen que ir por ahí.
+El mapa de cobertura (`/data/output/<sitio>/coverage.geojson`, que escribe `precompute.py`; capa `coverage` de `terrain.json`) muestra dónde hay terreno 1 m real, y el planificador lo dibuja como contorno. Las rutas de la demo tienen que ir por ahí.
 
 ### Los ocho tipos de datos del brief
 
