@@ -49,6 +49,28 @@ export const PROVENANCE_LABEL: Record<Provenance, string> = {
   ASSUMED: "supuesto del equipo, sin fuente citable",
 };
 
+/**
+ * "¿Cómo lo sabemos?": cada tipo de dato en lenguaje llano, para cualquier
+ * edad. Lo muestra el tooltip del badge.
+ */
+export const HOW_WE_KNOW: Record<Provenance, string> = {
+  OBSERVED:
+    "Lo midió un instrumento, desde la órbita o en la superficie de Marte. Es lo más parecido a un dato directo, con el error propio del instrumento.",
+  DERIVED:
+    "Sale de una cuenta fija hecha sobre algo medido: por ejemplo, la pendiente se calcula con las alturas del relieve. Si lo medido está bien, esto también.",
+  MODELED:
+    "Sale de un modelo: una fórmula con supuestos, listados abajo. Si un supuesto no se cumple, el número cambia.",
+  ASSUMED:
+    "Lo eligió el equipo, sin una fuente que lo respalde todavía. Tomalo como una regla de juego, no como un dato.",
+};
+
+/** Una línea sobre los instrumentos que más aparecen (por `instrument`). */
+export const INSTRUMENT_NOTE: Readonly<Record<string, string>> = {
+  HiRISE: "HiRISE es la cámara del Mars Reconnaissance Orbiter: fotografía Marte desde la órbita con detalle de menos de un metro.",
+  RAD: "RAD es el detector de radiación del rover Curiosity, que la mide en la superficie del cráter Gale.",
+  Mars24: "Mars24 es el reloj marciano de la NASA (Goddard Institute for Space Studies).",
+};
+
 /** Texto corto del badge: "MRO HiRISE · DERIVED". */
 export function sourceLabel(s: SourceInfo): string {
   const who = [s.mission, s.instrument].filter(Boolean).join(" ");

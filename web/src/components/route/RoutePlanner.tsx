@@ -143,7 +143,7 @@ export function RoutePlanner() {
         <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
           Planificar travesía
         </h2>
-        <div className="flex gap-1" role="group" aria-label="Qué hace un clic en el mapa">
+        <div data-edu="tools" className="flex gap-1" role="group" aria-label="Qué hace un clic en el mapa">
           <ModeButton active={clickMode === "add"} onClick={() => setClickMode("add")}>
             + puntos
           </ModeButton>
@@ -153,7 +153,9 @@ export function RoutePlanner() {
         </div>
       </header>
 
-      <DestinationSearch />
+      <div data-edu="search">
+        <DestinationSearch />
+      </div>
       {coverage !== null ? (
         <p className="flex items-center gap-1.5 text-[11px] text-muted">
           <span aria-hidden className="inline-block h-0 w-5 border-t-2 border-[#f2e8d5]" />
@@ -166,7 +168,7 @@ export function RoutePlanner() {
       <HabitatContact />
 
       {/* Hora de salida */}
-      <section className="rounded border border-line p-2">
+      <section data-edu="depart" className="rounded border border-line p-2">
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-muted">Hora de salida (hora de tu computadora)</span>
           <span className="flex gap-1">
@@ -229,7 +231,7 @@ export function RoutePlanner() {
           {/* Las indicaciones van arriba: es lo que se usa afuera, con el casco puesto. */}
           <DirectionsList route={route} example={result?.example ?? false} />
           <SafetyBreakdown verdict={route.verdict} cost={route.cost} />
-          <div className="flex gap-2">
+          <div data-edu="share" className="flex gap-2">
             <button
               type="button"
               onClick={() => window.print()}
@@ -256,7 +258,7 @@ export function RoutePlanner() {
 
       {/* Puntos, en orden, con lo calculado */}
       {waypoints.length > 0 ? (
-        <section className="flex flex-col">
+        <section data-edu="points" className="flex flex-col">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold tracking-wide text-muted uppercase">
               Recorrido · {waypoints.length} {waypoints.length === 1 ? "punto" : "puntos"}
