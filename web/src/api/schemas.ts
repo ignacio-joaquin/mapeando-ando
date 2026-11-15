@@ -97,8 +97,9 @@ export const MeasuredValueSchema = z.object({
  * qué entra y qué sale. Documentado en docs/context.md §4.
  *
  * Request (POST, JSON):
- *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }] }
+ *   { site, depart_utc, waypoints: [{ lat, lon, task, dwell_min }], cargo_kg? }
  *   waypoints[0] = salida, el último = llegada, el resto = estaciones en orden.
+ *   cargo_kg = equipo encima además del traje (kg, 0 si falta); entra a Pandolf.
  */
 export interface RouteRequest {
   readonly site: string;
@@ -109,6 +110,7 @@ export interface RouteRequest {
     readonly task: string | null;
     readonly dwell_min: number;
   }[];
+  readonly cargo_kg?: number;
 }
 
 /**

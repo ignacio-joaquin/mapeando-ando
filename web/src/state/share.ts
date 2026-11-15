@@ -5,8 +5,10 @@
  *
  * Cada punto es `lat,lon,minutos[,id de lugar]`, en orden: hábitat, paradas,
  * destino. `ret=0` = solo ida; sin `ret`, la travesía vuelve al hábitat. El texto de las tareas no viaja (alarga el enlace y no cambia el
- * cálculo). Este módulo no importa los stores: store.ts lo usa al arrancar.
+ * cálculo). La carga sí: `kit=drill,camera` (ids de domain/equipment.ts) y
+ * `kg=5` (carga libre). Este módulo no importa los stores: store.ts lo usa al arrancar.
  */
+import { isEquipmentId, MAX_EXTRA_KG } from "../domain/equipment";
 import type { LatLon } from "../mars/geo";
 
 export interface SharedPoint extends LatLon {
@@ -18,6 +20,14 @@ export interface SharedPlan {
   readonly departAt: Date | null;
   readonly roundTrip: boolean;
   readonly points: readonly SharedPoint[];
+  /** Equipo elegido (ids de EQUIPMENT) y carga libre en kg. */
+  readonly kit: readonly string[];
+  readonly extraKg: number;
+}
+
+export interface SharedCargo {
+  readonly kit: readonly string[];
+  readonly extraKg: number;
 }
 
 /** Tope de puntos que se aceptan de un enlace: más que esto no es una EVA. */
@@ -42,9 +52,12 @@ export function encodePlan(
   departAt: Date,
   points: readonly SharedPoint[],
   roundTrip: boolean,
+  cargo: SharedCargo = { kit: [], extraKg: 0 },
 ): string {
   const q = new URLSearchParams({ site: siteId, depart: departAt.toISOString() });
   if (!roundTrip) q.set("ret", "0");
+  if (cargo.kit.length > 0) q.set("kit", cargo.kit.join(","));
+  if (cargo.extraKg > 0) q.set("kg", String(cargo.extraKg));
   if (points.length > 0) {
     q.set(
       "pts",
@@ -77,10 +90,14 @@ export function decodePlan(qs: string): SharedPlan {
       placeId: placeId && PLACE_ID.test(placeId) ? placeId : null,
     });
   }
+  const kit = [...new Set((q.get("kit") ?? "").split(",").filter(isEquipmentId))];
+  const kg = Number(q.get("kg") ?? 0);
   return {
     departAt: d && !Number.isNaN(d.getTime()) ? d : null,
     roundTrip: q.get("ret") !== "0",
     points,
+    kit,
+    extraKg: Number.isFinite(kg) ? Math.min(Math.max(0, Math.round(kg * 10) / 10), MAX_EXTRA_KG) : 0,
   };
 }
 

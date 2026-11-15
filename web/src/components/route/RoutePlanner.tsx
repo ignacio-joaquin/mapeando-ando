@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { planRoute } from "../../api/client";
 import { EXAMPLE_PARAMS } from "../../api/routeFixture";
 import type { MeasuredValue, RouteLeg, RouteStop } from "../../api/schemas";
+import { cargoKg } from "../../domain/equipment";
 import { MARS24_LTST } from "../../domain/provenance";
 import { LEG_CLASS_COLOR, LEG_CLASS_LABEL, stopLabel, waypointLabel } from "../../map/route";
 import { formatLatLon } from "../../mars/geo";
@@ -17,6 +18,7 @@ import { SafetyBreakdown } from "./SafetyBreakdown";
 import { VerdictCard } from "./VerdictCard";
 import { DirectionsList } from "./DirectionsList";
 import { StationPhoto } from "./StationPhoto";
+import { CargoPicker } from "./CargoPicker";
 import {
   earthShort,
   formatBearing,
@@ -43,6 +45,9 @@ export function RoutePlanner() {
   const waypoints = usePlan((s) => s.waypoints);
   const departAt = usePlan((s) => s.departAt);
   const roundTrip = usePlan((s) => s.roundTrip);
+  const kit = usePlan((s) => s.kit);
+  const extraKg = usePlan((s) => s.extraKg);
+  const cargo = cargoKg(kit, extraKg);
   const clickMode = usePlan((s) => s.clickMode);
   const result = useFreshRoute();
   const status = usePlan((s) => s.status);
@@ -61,9 +66,9 @@ export function RoutePlanner() {
     writePlanToUrl(
       waypoints.length === 0
         ? `?site=${encodeURIComponent(siteId)}`
-        : encodePlan(siteId, departAt, waypoints, roundTrip),
+        : encodePlan(siteId, departAt, waypoints, roundTrip, { kit, extraKg }),
     );
-  }, [siteId, departAt, waypoints, roundTrip]);
+  }, [siteId, departAt, waypoints, roundTrip, kit, extraKg]);
 
   // Recalcular ante cualquier cambio, con un respiro para no pedir por tecla.
   useEffect(() => {
@@ -75,7 +80,7 @@ export function RoutePlanner() {
     const ctl = new AbortController();
     // La respuesta queda marcada con la huella de este pedido: si los puntos
     // cambian mientras tanto, la UI la trata como vieja y no la muestra.
-    const key = planKey(siteId, departAt, waypoints, roundTrip);
+    const key = planKey(siteId, departAt, waypoints, roundTrip, cargo);
     // Ya, no después del respiro: un error del pedido anterior no aplica a este.
     setStatus({ kind: "loading" });
     const t = setTimeout(() => {
@@ -89,6 +94,7 @@ export function RoutePlanner() {
             task: w.task.trim() || null,
             dwell_min: w.dwellMin,
           })),
+          cargo_kg: cargo,
         },
         ctl.signal,
       )
@@ -107,7 +113,7 @@ export function RoutePlanner() {
       clearTimeout(t);
       ctl.abort();
     };
-  }, [waypoints, departAt, roundTrip, siteId, setResult, setStatus]);
+  }, [waypoints, departAt, roundTrip, cargo, siteId, setResult, setStatus]);
 
   const route = result?.route ?? null;
   const origin = waypoints[0];
@@ -210,6 +216,8 @@ export function RoutePlanner() {
           </span>
         </label>
       </section>
+
+      <CargoPicker />
 
       {/* Veredicto */}
       {status.kind === "error" ? (
@@ -394,8 +402,8 @@ function ExampleNotice() {
       <strong className="text-warn">Veredicto de ejemplo.</strong> El server todavía no tiene{" "}
       <code>/api/route</code>: esto lo calcula el frontend en línea recta, sin terreno, con
       parámetros supuestos ({p.walkSpeedKmh} km/h, {p.o2Hours} h de O2 y de batería, reserva de{" "}
-      {p.reserveMin} min, luz de {p.daylightLtst.from} a {p.daylightLtst.to} h LTST). No usar para
-      decidir.
+      {p.reserveMin} min, luz de {p.daylightLtst.from} a {p.daylightLtst.to} h LTST). No usa la
+      carga del equipo: eso lo calcula el server con Pandolf. No usar para decidir.
     </p>
   );
 }
