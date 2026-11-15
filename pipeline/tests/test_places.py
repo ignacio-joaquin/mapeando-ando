@@ -52,7 +52,8 @@ def test_nothing_downloaded_reports_each_source(data_dir):
     index = places.build(SITE, COMMON)
     assert index["places"] == []
     assert {k: v["status"] for k, v in index["sources"].items()} == \
-        {"iau": "missing", "robbins": "missing", "rover": "missing"}
+        {"iau": "missing", "robbins": "missing", "rover": "missing",
+         "landmarks": "missing", "depressions": "missing", "crism": "missing"}
 
 
 def test_main_without_sources_writes_nothing(data_dir):
@@ -148,7 +149,8 @@ SITE_FULL = {**SITE, "files": SITE["files"] + [
 
 
 def test_optional_sources_only_when_declared(data_dir):
-    assert set(places.build(SITE, COMMON)["sources"]) == {"iau", "robbins", "rover"}
+    assert set(places.build(SITE, COMMON)["sources"]) == {"iau", "robbins", "rover",
+                                                         "landmarks", "depressions", "crism"}
     assert places.build(SITE_FULL, COMMON)["sources"]["heli"]["status"] == "missing"
 
 
@@ -330,3 +332,220 @@ def test_suggested_targets_best_placed_and_most_measured(data_dir):
     assert got["Jake Matijevic"]["suggested"] and got["Cerca"]["suggested"]
     assert not got["LD Paniri"]["suggested"]                # observado de lejos: no es un destino claro
     assert not any(k.startswith("_") for p in got.values() for k in p)
+
+
+# --- Cerros, hondonadas y observaciones CRISM ---------------------------------------------
+
+def _hill_grid(n=200, cell=10.0):
+    import numpy as np
+    yy, xx = np.mgrid[0:n, 0:n] * cell
+    z = np.zeros((n, n))
+    z += 60 * np.exp(-((xx - 600) ** 2 + (yy - 600) ** 2) / (2 * 120.0 ** 2))   # cerro de 60 m
+    z += 10 * np.exp(-((xx - 1500) ** 2 + (yy - 1500) ** 2) / (2 * 120.0 ** 2))  # loma de 10 m
+    z -= 20 * np.exp(-((xx - 1400) ** 2 + (yy - 500) ** 2) / (2 * 40.0 ** 2))    # hondonada de 20 m
+    return z
+
+
+def test_find_peaks_keeps_high_hill_only():
+    pytest.importorskip("scipy")
+    z = _hill_grid()
+    peaks = places.find_peaks(z, 10.0)
+    assert len(peaks) == 1
+    r, c, relief = peaks[0]
+    assert (r, c) == (60, 60) and relief > 50
+
+
+def test_find_peaks_on_negated_grid_finds_pit():
+    pytest.importorskip("scipy")
+    z = _hill_grid()
+    pits = places.find_peaks(-z, 10.0, radius_m=150, min_relief_m=8)
+    assert [(r, c) for r, c, _ in pits] == [(50, 140)]
+
+
+def test_find_peaks_ignores_circles_touching_nodata():
+    pytest.importorskip("scipy")
+    import numpy as np
+    z = _hill_grid()
+    z[55:65, 40:50] = np.nan   # hueco dentro del círculo del cerro: no se sabe si sigue subiendo
+    assert places.find_peaks(z, 10.0) == []
+
+
+MARS_R = 3396190.0
+EQC = f"+proj=eqc +lat_ts=0 +lon_0=0 +R={MARS_R:.0f} +units=m +no_defs"
+
+
+def write_dtm(path, z, lon0=77.3, lat0=18.6, cell=10.0):
+    """GeoTIFF chico como el dtm.tif de precompute.py: equirectangular de Marte, esquina NO en lon0/lat0."""
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import from_origin
+    import numpy as np
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    x0, y0 = math.radians(lon0) * MARS_R, math.radians(lat0) * MARS_R
+    with rasterio.open(path, "w", driver="GTiff", width=z.shape[1], height=z.shape[0], count=1,
+                       dtype="float32", crs=EQC, transform=from_origin(x0, y0, cell, cell),
+                       nodata=-3.4e38) as ds:
+        ds.write(np.where(np.isfinite(z), z, -3.4e38).astype("float32"), 1)
+
+
+def lonlat_at(x_m, y_m, lon0=77.3, lat0=18.6):
+    """lon/lat de un punto a x_m al este y y_m al sur de la esquina de write_dtm."""
+    return lon0 + math.degrees(x_m / MARS_R), lat0 - math.degrees(y_m / MARS_R)
+
+
+def test_dtm_places_stable_ids_and_one_read(data_dir, monkeypatch):
+    pytest.importorskip("scipy")
+    write_dtm(data_dir / "output" / "jezero" / "dtm.tif", _hill_grid())
+    reads = []
+    real = places.read_dtm_coarse
+    monkeypatch.setattr(places, "read_dtm_coarse", lambda *a, **k: reads.append(1) or real(*a, **k))
+
+    index = places.build(SITE, COMMON)
+    assert len(reads) == 1                       # cerros y hondonadas comparten la lectura
+    got = {p["kind"]: p for p in index["places"]}
+    hill, pit = got["landmark"], got["depression"]
+    assert hill["id"] == f"landmark-{hill['lat']:.4f}-{hill['lon']:.4f}"
+    assert pit["id"] == f"depression-{pit['lat']:.4f}-{pit['lon']:.4f}"
+    assert hill["name"] == "Cerro sin nombre 1" and hill["resolution"] == "DTM de 1 m leído a 30 m"
+    assert hill["suggested"] and not pit["suggested"]
+    lon, lat = lonlat_at(600, 600)
+    assert hill["lon"] == pytest.approx(lon, abs=3e-4) and hill["lat"] == pytest.approx(lat, abs=3e-4)
+    lon, lat = lonlat_at(1405, 505)
+    assert pit["lon"] == pytest.approx(lon, abs=3e-4) and pit["lat"] == pytest.approx(lat, abs=3e-4)
+    assert index["sources"]["landmarks"]["status"] == "ok"
+
+
+def test_landmarks_numbered_after_bbox_filter(data_dir):
+    pytest.importorskip("scipy")
+    import numpy as np
+    yy, xx = np.mgrid[0:200, 0:200] * 10.0
+    z = 60 * np.exp(-((xx - 600) ** 2 + (yy - 600) ** 2) / (2 * 120.0 ** 2))     # cerro de 60 m, adentro
+    z += 90 * np.exp(-((xx - 1400) ** 2 + (yy - 1400) ** 2) / (2 * 120.0 ** 2))  # el más alto, afuera
+    write_dtm(data_dir / "output" / "jezero" / "dtm.tif", z)
+    lon_cut, _ = lonlat_at(1000, 0)
+    site = {**SITE, "bbox": {**BBOX, "lon_max": lon_cut}}
+    hills = [p for p in places.build(site, COMMON)["places"] if p["kind"] == "landmark"]
+    assert [p["name"] for p in hills] == ["Cerro sin nombre 1"]   # sin hueco por el que quedó afuera
+
+
+def test_two_highest_landmarks_suggested():
+    hills = [{"kind": "landmark", "id": f"landmark-{r}", "_relief": r} for r in (40, 90, 35, 60)]
+    places.mark_suggested(hills)
+    assert {p["id"] for p in hills if p["suggested"]} == {"landmark-90", "landmark-60"}
+    assert not any(k.startswith("_") for p in hills for k in p)
+
+
+# CRISM: browse MTRDR como los de PDS (ENVI .img/.hdr + etiqueta PDS3 .lbl).
+CRISM_CRS = ('PROJCS["MRO Mars Equirectangular [IAU 2000] [15.00N; 0.00E]",GEOGCS["GCS_Mars_2000",'
+             'DATUM["D_Mars_2000",SPHEROID["Mars_2000_sphere",3394839.813316312,0.0]],'
+             'PRIMEM["Reference_Meridian",0.0],UNIT["Degree",0.0174532925199433]],'
+             'PROJECTION["Equidistant_Cylindrical"],PARAMETER["False_Easting",0.0],'
+             'PARAMETER["False_Northing",0.0],PARAMETER["Central_Meridian",0.0],'
+             'PARAMETER["Standard_Parallel_1",15.0],UNIT["Meter",1.0]]')
+CRISM_R = 3394839.813316312
+PHY = {"D2300": (0.0, 1.3358e-4), "D2200": (2.5e-3, 6.8627e-05), "BD1900R2": (0.0, 6.5738e-04)}
+
+
+def write_browse(folder, obs, bands, lon0=77.4, lat0=18.5, px=18.0):
+    """bands: {parámetro: dn (60 × 60 uint8)}. Esquina NO de la escena en lon0/lat0."""
+    import numpy as np
+
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = folder / f"{obs}_07_brphyj_mtr3"
+    names = list(bands)
+    h, w = bands[names[0]].shape
+    np.stack([bands[n] for n in names]).astype("uint8").tofile(stem.with_suffix(".img"))
+    x0 = math.radians(lon0) * CRISM_R * math.cos(math.radians(15))
+    y0 = math.radians(lat0) * CRISM_R
+    stem.with_suffix(".hdr").write_text(
+        f"ENVI\nsamples = {w}\nlines = {h}\nbands = {len(names)}\nheader offset = 0\n"
+        "file type = ENVI Standard\ndata type = 1\ninterleave = bsq\nbyte order = 0\n"
+        f"map info = {{Equirectangular, 1.0000, 1.0000, {x0}, {y0}, {px}, {px}, units=Meters}}\n"
+        f"coordinate system string = {{{CRISM_CRS}}}\ndata ignore value = 255\n"
+        f"band names = {{\n {', '.join(names)}}}\n")
+    fmt = lambda vals: "( " + ", ".join(f"{v:.4E}" for v in vals) + ")"
+    stem.with_suffix(".lbl").write_text(
+        "PDS_VERSION_ID = PDS3\nOBJECT = IMAGE\n"
+        f'  BAND_NAME            = ( {", ".join(chr(34) + n + chr(34) for n in names)})\n'
+        f"  OFFSET               = {fmt(PHY[n][0] for n in names)}\n"
+        f"  SCALING_FACTOR       = {fmt(PHY[n][1] for n in names)}\n"
+        "END_OBJECT = IMAGE\n  LINE_PROJECTION_OFFSET       = 30832.0416667 <PIXEL>\n")
+
+
+def scene(background=10):
+    import numpy as np
+    dn = np.full((60, 60), background, dtype="uint8")
+    dn[:3, :] = dn[-3:, :] = dn[:, :3] = dn[:, -3:] = 255   # fuera de la escena
+    return dn
+
+
+def test_crism_hotspot_threshold_edges_and_dedup(tmp_path):
+    pytest.importorskip("rasterio")
+    pytest.importorskip("scipy")
+    folder = tmp_path / "crism"
+    d2300, d2200, bd1900 = scene(), scene(), scene()
+    d2300[28:33, 38:43] = 200          # 0,027 ≥ 0,01: se marca
+    d2200[4:9, 30:35] = 254            # fuerte pero pegado al borde de la escena: no
+    bd1900[20, 20] = 254               # un píxel suelto: la mediana lo borra
+    bd1900[38:43, 18:23] = 254         # saturado: el valor real puede ser mayor
+    write_browse(folder, "frt00005c5e", {"D2300": d2300, "D2200": d2200, "BD1900R2": bd1900})
+    weaker = scene()
+    weaker[28:33, 38:43] = 150         # otra observación, mismo lugar, más débil: se descarta
+    write_browse(folder, "frt000047a3", {"D2300": weaker, "D2200": scene(), "BD1900R2": scene()})
+    (folder / "notes_br_weird.lbl").write_text("no es un browse")
+    (folder / "index.json").write_text(json.dumps([
+        {"pdsid": "frt00005c5e_07_if166j_mtr3", "comment": "COORD Target - 2986 Depositional Fan"}]))
+
+    got = {p["id"]: p for p in places.crism_places(folder, BBOX)}
+    assert set(got) == {"crism-frt00005c5e-d2300", "crism-frt00005c5e-bd1900r2"}
+    phy = got["crism-frt00005c5e-d2300"]
+    assert phy["kind"] == "orbital" and phy["provenance"] == "DERIVED" and phy["instrument"] == "CRISM"
+    assert phy["detail"] == "D2300 = 0,027, lo más fuerte de FRT00005C5E · objetivo de MRO: Depositional Fan"
+    assert phy["resolution"] == "18 m/px, mediana de 5 × 5 px"
+    lon = 77.4 + math.degrees(40.5 * 18 / (CRISM_R * math.cos(math.radians(15))))
+    lat = 18.5 - math.degrees(30.5 * 18 / CRISM_R)
+    assert phy["lon"] == pytest.approx(lon, abs=1e-5) and phy["lat"] == pytest.approx(lat, abs=1e-5)
+    assert got["crism-frt00005c5e-bd1900r2"]["detail"].startswith("BD1900R2 ≥ 0,167")
+    assert any("no es una identificación mineral" in a for a in phy["assumptions"])
+
+
+def test_crism_without_reasons_or_outside_bbox(tmp_path):
+    pytest.importorskip("rasterio")
+    pytest.importorskip("scipy")
+    folder = tmp_path / "crism"
+    dn = scene()
+    dn[28:33, 38:43] = 200
+    write_browse(folder, "hrl000040ff", {"D2300": dn})
+    (p,) = places.crism_places(folder, BBOX)
+    assert p["detail"] == "D2300 = 0,027, lo más fuerte de HRL000040FF"
+    assert places.crism_places(folder, {**BBOX, "lat_min": 18.6}) == []
+
+
+def test_crism_same_param_numbered_by_strength(tmp_path):
+    pytest.importorskip("rasterio")
+    pytest.importorskip("scipy")
+    folder = tmp_path / "crism"
+    weak, strong = scene(), scene()
+    weak[28:33, 38:43] = 150
+    strong[28:33, 38:43] = 200
+    write_browse(folder, "frt000047a3", {"D2300": weak}, lon0=77.30)    # a ~6 km: no se deduplican
+    write_browse(folder, "frt00005c5e", {"D2300": strong}, lon0=77.40)
+    got = places.crism_places(folder, BBOX)
+    assert [(p["id"], p["name"]) for p in got] == [
+        ("crism-frt00005c5e-d2300", "Señal de Fe/Mg-filosilicatos 1 (D2300)"),
+        ("crism-frt000047a3-d2300", "Señal de Fe/Mg-filosilicatos 2 (D2300)"),
+    ]
+    assert all("El número solo las ordena por intensidad" in p["assumptions"] for p in got)
+
+
+def test_crism_without_browse_is_missing(tmp_path):
+    (tmp_path / "crism").mkdir()
+    with pytest.raises(FileNotFoundError):
+        places.crism_places(tmp_path / "crism", BBOX)
+
+
+def test_missing_dtm_reports_landmarks_missing(data_dir):
+    index = places.build(SITE, COMMON)
+    assert index["sources"]["landmarks"]["status"] == "missing"
+    assert index["sources"]["depressions"]["status"] == "missing"
+    assert index["sources"]["crism"]["status"] == "missing"

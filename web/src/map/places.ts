@@ -29,9 +29,14 @@ export const PLACE_KIND_STYLE: Record<PlaceKind, PlaceKindStyle> = {
   sample: { color: "#e08cc0", glyph: "◆", rank: 1, defaultVisible: true },
   target: { color: "#6cb8e0", glyph: "◎", rank: 2, defaultVisible: true },
   heli: { color: "#5fbf86", glyph: "H", rank: 3, defaultVisible: true },
-  // El recorrido del rover y los cráteres sin nombre son muchos puntos: apagados de entrada.
-  rover: { color: "#e07a4a", glyph: "R", rank: 4, defaultVisible: false },
-  crater: { color: "#a39a8f", glyph: "○", rank: 5, defaultVisible: false },
+  // Cerros sin nombre sacados del DTM: cubren todo el sitio, no solo el camino del rover.
+  landmark: { color: "#c9a27a", glyph: "▲", rank: 4, defaultVisible: true },
+  // Puntos sin nombre y numerosos: apagados de entrada. Las señales de CRISM son indicios desde
+  // órbita; las hondonadas, posibles cráteres; el recorrido del rover y los cráteres de Robbins, miles.
+  orbital: { color: "#b48ce0", glyph: "◈", rank: 5, defaultVisible: false },
+  rover: { color: "#e07a4a", glyph: "R", rank: 6, defaultVisible: false },
+  depression: { color: "#8fa3b8", glyph: "▼", rank: 7, defaultVisible: false },
+  crater: { color: "#a39a8f", glyph: "○", rank: 8, defaultVisible: false },
 };
 
 export const PLACE_KINDS = Object.keys(PLACE_KIND_STYLE) as PlaceKind[];
