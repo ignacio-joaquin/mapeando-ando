@@ -57,6 +57,23 @@ class TestSinDatos:
         assert leg["max_slope"]["value"] is None
         assert "terreno no se evaluó" in body["verdict"]["summary"]
         assert "no se evaluó la luz" in body["verdict"]["summary"]
+        assert body["data_quality"] == {
+            "terrain_evaluated": False,
+            "terrain_source": "missing",
+            "light_evaluated": False,
+            "light_source": "missing",
+        }
+        assert body["path_model"] == {
+            "algorithm": "A*",
+            "cost_function": "Δt · (1 + w_slope·r_slope + w_shadow·r_shadow + w_contact·r_contact)",
+            "variables": {
+                "step_duration_s": "distancia real / velocidad",
+                "slope_term": "pendiente media de la celda / máximo permitido",
+                "shadow_term": "1 en sombra, 0 en sol o sin dato",
+                "contact_term": "1 sin línea de vista, 0 con línea de vista",
+                "weights": {"slope": 2.0, "shadow": 1.0, "contact": 1.0},
+            },
+        }
         assert "profile" not in body
 
     def test_fecha_invalida_responde_422(self, client, site):

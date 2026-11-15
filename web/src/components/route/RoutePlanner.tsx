@@ -196,7 +196,10 @@ export function RoutePlanner() {
         </p>
       ) : route ? (
         <>
-          <VerdictCard verdict={route.verdict} />
+          <VerdictCard
+            verdict={route.verdict}
+            {...(route.data_quality ? { dataQuality: route.data_quality } : {})}
+          />
           {result?.example ? <ExampleNotice /> : null}
           <SafetyBreakdown verdict={route.verdict} cost={route.cost} />
           <div className="flex gap-2">

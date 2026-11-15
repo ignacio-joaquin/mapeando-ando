@@ -865,8 +865,36 @@ def plan_route(site_id: str, depart_utc: str, waypoints: list[dict], data_dir: P
         "limits": [_limit_out(r, used_src, limit_src) for r in base.limits],
         "robustness": _robustness_out(assessment),
     }
-    out = {"site": site_id, "depart_utc": depart_utc, "legs": legs, "stops": stops, "verdict": verdict,
-           "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None)}
+    light_source = "missing"
+    if stack is not None:
+        light_source = "reused" if stack.reuse is not None else "exact"
+    terrain_source = "processed" if slope_path is not None else "missing"
+    path_model = {
+        "algorithm": "A*",
+        "cost_function": "Δt · (1 + w_slope·r_slope + w_shadow·r_shadow + w_contact·r_contact)",
+        "variables": {
+            "step_duration_s": "distancia real / velocidad",
+            "slope_term": "pendiente media de la celda / máximo permitido",
+            "shadow_term": "1 en sombra, 0 en sol o sin dato",
+            "contact_term": "1 sin línea de vista, 0 con línea de vista",
+            "weights": {"slope": float(weights.slope), "shadow": float(weights.shadow), "contact": float(weights.contact)},
+        },
+    }
+    out = {
+        "site": site_id,
+        "depart_utc": depart_utc,
+        "legs": legs,
+        "stops": stops,
+        "verdict": verdict,
+        "cost": _cost_out(legs_plan, weights, contact is not None, stack is not None),
+        "data_quality": {
+            "terrain_evaluated": slope_path is not None,
+            "terrain_source": terrain_source,
+            "light_evaluated": stack is not None,
+            "light_source": light_source,
+        },
+        "path_model": path_model,
+    }
     if all(plan.planned and all(z is not None for z in plan.elev) for plan in legs_plan):
         out["_profile_inputs"] = ([plan.steps for plan in legs_plan], [legs_plan[0].elev[0]]
                                   + [plan.elev[-1] for plan in legs_plan])

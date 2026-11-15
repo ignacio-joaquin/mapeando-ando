@@ -236,6 +236,29 @@ export const ProfileSchema = z.object({
   leg_starts: z.array(z.number()),
 });
 
+export const DataQualitySchema = z.object({
+  terrain_evaluated: z.boolean(),
+  terrain_source: z.enum(["processed", "missing"]),
+  light_evaluated: z.boolean(),
+  light_source: z.enum(["exact", "reused", "missing"]),
+});
+
+export const PathModelSchema = z.object({
+  algorithm: z.literal("A*"),
+  cost_function: z.string(),
+  variables: z.object({
+    step_duration_s: z.string(),
+    slope_term: z.string(),
+    shadow_term: z.string(),
+    contact_term: z.string(),
+    weights: z.object({
+      slope: z.number(),
+      shadow: z.number(),
+      contact: z.number(),
+    }),
+  }),
+});
+
 export const RouteResponseSchema = z.object({
   site: z.string(),
   depart_utc: z.string(),
@@ -244,6 +267,8 @@ export const RouteResponseSchema = z.object({
   verdict: VerdictSchema,
   cost: RouteCostSchema.optional(),
   profile: ProfileSchema.optional(),
+  data_quality: DataQualitySchema.optional(),
+  path_model: PathModelSchema.optional(),
 });
 
 /** Un elemento u óxido medido por el rover, ej. "SiO₂" en % en peso. */
@@ -491,6 +516,8 @@ export type LimitingFactor = z.infer<typeof LimitingFactorSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type SafetyLimit = z.infer<typeof SafetyLimitSchema>;
 export type Robustness = z.infer<typeof RobustnessSchema>;
+export type DataQuality = z.infer<typeof DataQualitySchema>;
+export type PathModel = z.infer<typeof PathModelSchema>;
 export type RouteCost = z.infer<typeof RouteCostSchema>;
 export type RouteResponse = z.infer<typeof RouteResponseSchema>;
 export type Profile = z.infer<typeof ProfileSchema>;
