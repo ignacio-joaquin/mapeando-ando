@@ -194,15 +194,16 @@ export const LAYERS: readonly LayerSpec[] = [
     unit: "clase",
     source: {
       provenance: "DERIVED",
-      mission: "MRO + Mars Odyssey",
-      instrument: "HiRISE DTM + THEMIS",
+      // Sin THEMIS la corrida usa solo el DTM: terrain.json trae misión e instrumento reales.
+      mission: "MRO",
+      instrument: "HiRISE DTM",
       resolution: "1 m/px (suelo suelto: 100 m/px)",
       source: "Calculado por el pipeline desde el DTM HiRISE (USGS) y el IR nocturno de THEMIS",
       assumptions: [
         "Manda la peor entre la clase de pendiente y la de rugosidad σ (desvío estándar del relieve en 5 m, sin la tendencia)",
         "σ ≈ la mitad de la altura de los escalones: σ 0,40 m ≈ bloques de ~1 m",
         "Un DTM de 1 m no ve rocas sueltas de menos de ~3–5 m",
-        "Suelo suelto: lo 20 % más frío de noche del sitio según THEMIS; solo sube 'bajo' a 'medio', nunca bloquea, y se ve en cuadros de 100 m",
+        "Si el badge nombra THEMIS, suelo suelto: lo ~20 % más frío de noche del sitio según THEMIS; solo sube 'bajo' a 'medio', nunca bloquea, y se ve en cuadros de 100 m",
         "Si al sitio le falta THEMIS, la capa sale solo con la geometría (lo dice terrain.json)",
         "Solo geometría del terreno: no incluye gravedad, traje ni carga",
       ],
@@ -263,6 +264,39 @@ export const LAYERS: readonly LayerSpec[] = [
     tiles: "/tiles/{site}/dose/{z}/{x}/{y}.png",
     kind: "raster",
     defaultVisible: false,
+  },
+  {
+    id: "survival-water",
+    label: "Hielo somero (SWIM, 0–1 m)",
+    group: "supervivencia",
+    unit: "consistencia de hielo (−1 a +1)",
+    source: {
+      provenance: "MODELED",
+      mission: "Odyssey + MGS + MRO",
+      instrument: "SWIM 2.0",
+      resolution: "~3 km/px",
+      source:
+        "Composite de consistencia de hielo 0–1 m de SWIM 2.0 (Putzig, Morgan et al. 2020, PSI), recortado al sitio sin remuestrear",
+      assumptions: [
+        "Índice, no medición: +1 = los datos son consistentes con hielo, 0 = sin indicio, −1 = los datos van en contra",
+        "Combina neutrones, térmico, geomorfología y radar con los pesos del equipo de SWIM",
+        "El hidrógeno de minerales hidratados también sube el índice: un positivo débil no confirma hielo",
+        "Píxel de ~3 km: no ubica nada más chico que eso. 1–5 m y > 5 m se descartaron (docs/context.md §5)",
+      ],
+    },
+    // = RAMPAS["agua"] en pipeline/tiles.py. Divergente con el 0 casi blanco.
+    legend: [
+      { color: "#8c5a32", label: "−1 a −0,5: en contra del hielo" },
+      { color: "#d6b28c", label: "−0,5 a −0,1: algo en contra" },
+      { color: "#eeece6", label: "−0,1 a 0,1: sin indicio" },
+      { color: "#96c4e6", label: "0,1 a 0,5: indicio débil" },
+      { color: "#286ebe", label: "0,5 a 1: consistente con hielo" },
+    ],
+    tiles: "/tiles/{site}/water/{z}/{x}/{y}.png",
+    kind: "raster",
+    defaultVisible: false,
+    // Píxel de ~3 km: se dibuja en cuadrados, sin suavizar.
+    categorical: true,
   },
   {
     id: "survival-shadows",

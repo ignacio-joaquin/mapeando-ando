@@ -16,13 +16,13 @@ que ninguno tenga que saber del otro.
   python pipeline/tiles.py --vector /data/output/jezero/contours.gpkg \
                            --out /data/output/jezero/contours.geojson
 
-precompute.py lo llama para la pendiente, el sombreado, el térmico de THEMIS, el peligro y la
-dosis (raster_a_tiles) y anota el zoom y los límites en terrain.json; a mano sirve para
+precompute.py lo llama para la pendiente, el sombreado, el térmico de THEMIS, el peligro, la
+dosis y el agua de SWIM (raster_a_tiles) y anota el zoom y los límites en terrain.json; a mano sirve para
 cualquier otro raster.
 
 El nombre de la carpeta de salida es CONTRATO: tiene que ser el último segmento
 de la plantilla `tiles` de web/src/map/layers.ts (`hillshade/`, `slope/`,
-`thermal/`, `hazard/`, `dose/`, `ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
+`thermal/`, `hazard/`, `dose/`, `water/`, `ortho/`, `contours.geojson`). Si no coincide, el frontend no la encuentra y la
 capa queda deshabilitada.
 
 Necesita gdal-bin (gdalwarp, gdaldem, gdal2tiles.py, gdal_edit.py, ogr2ogr),
@@ -70,9 +70,22 @@ RAMPAS["dosis"] = [
     (20.0, 1000.0, "96 76 150"),    # ≥ 20 (base 26,7)   #604c96
 ]
 
+# Consistencia de hielo somero de SWIM 2.0 (ice_consistency.tif, de -1 a +1), divergente con el
+# 0 casi blanco: un indicio débil (+0,1) no se ve como "acá hay hielo". = leyenda de
+# survival-water en web/src/map/layers.ts.
+RAMPAS["agua"] = [
+    (-1.0, -0.5, "140 90 50"),      # en contra del hielo    #8c5a32
+    (-0.5, -0.1, "214 178 140"),    # algo en contra         #d6b28c
+    (-0.1, 0.1, "238 236 230"),     # sin indicio            #eeece6
+    (0.1, 0.5, "150 196 230"),      # indicio débil          #96c4e6
+    (0.5, 1.001, "40 110 190"),     # consistente con hielo  #286ebe
+]
+
 # Rampas de un raster POR CLASES: al reproyectar se usa el vecino más cercano, porque un
 # bilineal entre la clase 0 y la 3 inventa un 1,5 que no existe.
-RAMPAS_POR_CLASES = {"peligro"}
+# El agua no es por clases, pero su píxel es de ~3 km: se dibuja en cuadrados y no se suaviza,
+# para no inventar detalle que SWIM no tiene.
+RAMPAS_POR_CLASES = {"peligro", "agua"}
 
 # Un GeoJSON más pesado que esto no abre con poca banda.
 MAX_GEOJSON_MB = 20

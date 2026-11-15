@@ -192,5 +192,24 @@ Paso de `precompute.py`. Escribe `dose_rate.tif` (dosis equivalente, µSv/h, gri
 
 `dosis = H0 × sky_view / sky_view(Bradbury Landing)`, con H0 = 0,64 ± 0,12 mSv/día medida por RAD en Gale. La dosis cambia con el lugar menos que la incertidumbre de RAD: **se muestra como presupuesto de dosis de la travesía** (el planificador promedia la dosis por celda sobre la ruta) y el raster queda como capa secundaria con escala fija. Modelo, decisión y limitaciones: [`docs/radiation.md`](docs/radiation.md).
 
+## Capa de agua (`pipeline/swim.py`) · SWIM 2.0 · MODELED
+
+Responde "¿hay hielo a mano?". Paso de `precompute.py`. Lee el composite de consistencia de hielo de **0–1 m** de SWIM 2.0 (Subsurface Water Ice Mapping, PSI) que deja `pipeline/fetch_extras.py` en `raw/common/swim2/SWIM2_c0_1.tif`, lo recorta al DTM **sin remuestrear** y lo escribe como `ice_consistency.tif` (float32, ~3 km/px, −100 sin dato), con tiles en `water/`. Suelto: `python pipeline/swim.py --dir /data/prueba/jezero`.
+
+**Qué es el dato.** Un índice de −1 a +1 que combina neutrones (Mars Odyssey), térmico (MGS TES, THEMIS), geomorfología (MRO) y radar (SHARAD): +1 = los datos son consistentes con hielo, 0 = sin indicio, −1 = van en contra. No dice cuánto hielo hay: es MODELED. La leyenda es divergente con el 0 casi blanco, para que un indicio débil no parezca "acá hay hielo".
+
+**Qué da en nuestros sitios** (bbox de `sites/*.json`, 2026-11-15):
+
+| Profundidad | Jezero (64 píxeles) | Gale (240 píxeles) | Decisión |
+|---|---|---|---|
+| 0–1 m | −0,37 a −0,19 (0 % > 0) | −0,01 a +0,17, media 0,07 (83 % > 0) | **capa** `survival-water` |
+| 1–5 m | −0,5 a +0,5, media −0,03 | −0,5 a +0,5, media −0,06 | descartada: salta entre ±0,5 y se cancela |
+| > 5 m | 0 en todo | 0 en todo | descartada: sin información |
+
+### Limitaciones
+- Píxel de ~3 km: en el recorte de prueba (2 km) la capa es un solo cuadrado. Tiles hasta z10 (`FIXED_MAX_ZOOM`) para que el borde de cada cuadrado no quede corrido.
+- El índice sube también con el hidrógeno de minerales hidratados: el +0,17 de Gale es un indicio débil, no hielo confirmado.
+- El portal de SWIM (swim.psi.edu) estuvo caído el 2026-11-15 (error 523 de Cloudflare): se usó la copia ya bajada en el server.
+
 ---
 Prototipo educativo, no software de vuelo.

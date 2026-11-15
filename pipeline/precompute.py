@@ -12,7 +12,8 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   hazard.tif        peligro de terreno por clases: pendiente + rugosidad, reforzado con el suelo
                     suelto de THEMIS si está (pipeline/terrain_layers.py)
   dose_rate.tif     dosis equivalente por celda, µSv/h, y skyview.tif (pipeline/radiation.py)
-  slope/, hillshade/, thermal/, hazard/, dose/  tiles XYZ PNG para el mapa (pipeline/tiles.py),
+  ice_consistency.tif  consistencia de hielo somero (0-1 m) de SWIM 2.0, ~3 km (pipeline/swim.py)
+  slope/, hillshade/, thermal/, hazard/, dose/, water/  tiles XYZ PNG para el mapa (pipeline/tiles.py),
                     con los colores de la leyenda de web/src/map/layers.ts
   coverage.geojson  dónde hay DTM de 1 m de verdad (huella de los píxeles válidos), en lon/lat.
                     El planificador rechaza un destino que cae afuera.
@@ -56,6 +57,7 @@ from rasterio.windows import Window
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import radiation  # noqa: E402
+import swim  # noqa: E402
 import terrain_layers  # noqa: E402
 import terrain_shadows as ts  # noqa: E402
 import thermal  # noqa: E402
@@ -86,7 +88,12 @@ MAX_COL_VARIATION = 0.005  # si el píxel cambia más que esto a lo ancho del DT
 # La carpeta es CONTRATO: el último segmento de la plantilla `tiles` de web/src/map/layers.ts.
 TILED_LAYERS = {"relief-slope": ("slope", "pendiente"), "relief-hillshade": ("hillshade", None),
                 "survival-thermal": ("thermal", None),
-                "survival-hazard": ("hazard", "peligro"), "survival-dose": ("dose", "dosis")}
+                "survival-hazard": ("hazard", "peligro"), "survival-dose": ("dose", "dosis"),
+                "survival-water": ("water", "agua")}
+# Zoom máximo fijo para capas de píxel muy grande. gdal2tiles deduce el zoom del píxel: con los
+# ~3 km de SWIM se queda en z5, donde un píxel del tile mide ~5 km y el borde de cada cuadrado
+# cae corrido hasta medio píxel al agrandar. En z10 el error baja a ~80 m y son pocos tiles.
+FIXED_MAX_ZOOM = {"survival-water": 10}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
 
@@ -631,27 +638,55 @@ def main(argv=None):
         "resolution": dose_resolution, "status": "error", "error": "no se calculó",
     }
 
+    # 9. Agua: consistencia de hielo somero (0-1 m) de SWIM 2.0 (pipeline/swim.py), recortada al
+    #    DTM sin remuestrear. Es un índice que combina varios orbitadores: MODELED. Si falta el
+    #    composite, la capa queda sin hacer y la corrida sigue.
+    def water_step():
+        summary = swim.compute(dtm, work, data_dir=DATA_DIR)
+        to_cog(work / "ice_consistency.tif", work / "ice_consistency_cog.tif")
+        publish(work / "ice_consistency_cog.tif", out / "ice_consistency.tif")
+        layers["survival-water"]["summary"] = summary
+        index["warnings"].extend(summary["warnings"])
+
+    layers["survival-water"] = {
+        "file": "ice_consistency.tif", "unit": "consistencia de hielo (-1 a +1)", "provenance": "MODELED",
+        "mission": "Odyssey + MGS + MRO", "instrument": "SWIM 2.0", "resolution": "~3 km/px",
+        "nodata": swim.SWIM_NODATA, "params": {"depth_m": "0-1", "file": swim.SWIM_FILE},
+        "source": "Composite de consistencia de hielo 0-1 m de SWIM 2.0 (Putzig, Morgan et al. 2020, "
+                  "PSI), recortado al DTM sin remuestrear",
+        "assumptions": [
+            "Índice, no medición: +1 = los datos son consistentes con hielo, 0 = sin indicio, "
+            "-1 = los datos van en contra.",
+            "Combina neutrones, térmico, geomorfología y radar con los pesos del equipo de SWIM.",
+            "El hidrógeno de minerales hidratados también sube el índice: un valor positivo débil "
+            "no confirma hielo.",
+            "Píxel de ~3 km: no ubica nada más chico que eso.",
+        ],
+    }
+
     # Un paso que falla no frena a los demás: el terrain.json dice qué quedó y qué no.
     failed = False
     for layer_id, fn in (("relief-slope", slope_step), ("relief-hillshade", hillshade_step),
                          ("relief-contours", contours_step), ("coverage", coverage_step),
                          ("survival-thermal", thermal_step),
-                         ("survival-hazard", hazard_step), ("survival-dose", dose_step)):
+                         ("survival-hazard", hazard_step), ("survival-dose", dose_step),
+                         ("survival-water", water_step)):
         try:
             fn()
             layers[layer_id]["status"] = "ok"
-        except thermal.MissingInput as e:
-            # THEMIS es un dato opcional: si no se bajó, la capa queda sin hacer y lo dice,
-            # pero la corrida no falla (el peligro sigue, solo con la geometría).
+        except (thermal.MissingInput, swim.MissingInput) as e:
+            # THEMIS y SWIM son datos opcionales: si no se bajaron, la capa queda sin hacer y lo
+            # dice, pero la corrida no falla (el peligro sigue, solo con la geometría).
             log(f"Sin {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
-            index["warnings"].append(f"Sin capa térmica: {e}")
+            what = "capa térmica" if layer_id == "survival-thermal" else "capa de agua"
+            index["warnings"].append(f"Sin {what}: {e}")
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló {layer_id}: {e}")
             layers[layer_id].update(status="error", error=str(e)[:400])
 
-    # 9. Tiles PNG para el mapa, desde los COG que quedaron bien.
+    # 10. Tiles PNG para el mapa, desde los COG que quedaron bien.
     missing_tools = tiles.faltan_herramientas()
     for layer_id, (folder, color) in TILED_LAYERS.items():
         layer = layers[layer_id]
@@ -663,13 +698,14 @@ def main(argv=None):
             continue
         try:
             layer["tiles"] = {"status": "ok", **tiles.raster_a_tiles(
-                out / layer["file"], out / folder, color=color, max_zoom=args.max_zoom)}
+                out / layer["file"], out / folder, color=color,
+                max_zoom=args.max_zoom or FIXED_MAX_ZOOM.get(layer_id))}
         except Exception as e:  # seguir con la próxima capa
             failed = True
             log(f"Falló el teselado de {layer_id}: {e}")
             layer["tiles"] = {"status": "error", "error": str(e)[:400]}
 
-    # 10. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
+    # 11. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
     #    real. Va aparte y hay que pedirla con --ortho: en Jezero son 7,4 GB a
     #    25 cm/px y teselarla compite por disco y CPU con la descarga.

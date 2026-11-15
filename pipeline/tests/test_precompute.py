@@ -50,6 +50,21 @@ def write_themis(data_dir, site="jezero", cold_cols=11, n=30, cold=40, warm=200,
     return path
 
 
+def write_swim(data_dir, values=None, nodata=-100.0):
+    """Composite sintético de SWIM 2.0 (float32, 3 km/px, -100 = sin dato) en raw/common/swim2/.
+    Empieza 3 km al oeste y al norte del DTM de write_dtm: el píxel [1, 1] cubre su esquina."""
+    v = np.array(values if values is not None else [[-0.3, -0.3, -0.3], [-0.3, 0.2, 0.4], [-0.3, 0.2, 0.4]],
+                 dtype="float32")
+    path = data_dir / "raw" / "common" / "swim2" / "SWIM2_c0_1.tif"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(path, "w", driver="GTiff", width=v.shape[1], height=v.shape[0], count=1,
+                       dtype="float32", crs=EQC_LATTS0, nodata=nodata,
+                       transform=from_origin(R * math.radians(LON0) - 3000, R * math.radians(LAT0) + 3000,
+                                             3000, 3000)) as ds:
+        ds.write(v, 1)
+    return path
+
+
 def row_lat_deg(rows, px=1.0):
     return LAT0 - np.degrees((rows + 0.5) * px / R)
 
@@ -221,6 +236,7 @@ def crater(n=300, px=1.0):
 def test_full_run(data_dir):
     write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
     write_themis(data_dir)
+    write_swim(data_dir)
     write_manifest(data_dir, "ok")
     assert precompute.main(["--site", "jezero"]) == 0
 
@@ -228,15 +244,27 @@ def test_full_run(data_dir):
     # sin carpetas de trabajo sueltas: nginx sirve todo lo que quede acá
     assert sorted(p.name for p in out.iterdir()) == \
         ["contours.geojson", "coverage.geojson", "dose", "dose_rate.tif", "dtm.tif", "hazard",
-         "hazard.tif", "hillshade", "hillshade.tif", "loose_soil.tif", "roughness.tif", "skyview.tif",
-         "slope", "slope.tif", "terrain.json", "terrain_factor.tif", "themis_night.tif", "thermal"]
+         "hazard.tif", "hillshade", "hillshade.tif", "ice_consistency.tif", "loose_soil.tif", "roughness.tif",
+         "skyview.tif", "slope", "slope.tif", "terrain.json", "terrain_factor.tif", "themis_night.tif",
+         "thermal", "water"]
 
     index = json.loads((out / "terrain.json").read_text())
     assert {k: v["status"] for k, v in index["layers"].items()} == {
         "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
         "survival-thermal": "ok", "terrain-loose-soil": "ok",
         "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok",
-        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok"}
+        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "survival-water": "ok"}
+
+    # Agua: SWIM 0-1 m, MODELED, el valor original en COG y tiles hasta z10 con la leyenda.
+    water = index["layers"]["survival-water"]
+    assert (water["mission"], water["instrument"], water["provenance"]) == ("Odyssey + MGS + MRO", "SWIM 2.0", "MODELED")
+    assert water["summary"]["consistency"]["max"] == pytest.approx(0.2)
+    assert water["tiles"]["status"] == "ok" and water["tiles"]["maxzoom"] == 10
+    water_rgba = {(*map(int, c.split()), 255) for _, _, c in precompute.tiles.RAMPAS["agua"]} | {(0, 0, 0, 0)}
+    assert tile_colors(out / "water") <= water_rgba
+    with rasterio.open(out / "ice_consistency.tif") as ds:
+        assert ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"
+        assert ds.res == (3000.0, 3000.0) and ds.read(1).tolist() == [[pytest.approx(0.2)]]
 
     # Capa térmica: badge "Mars Odyssey THEMIS · OBSERVED", el dato sin tocar y en COG.
     thermal = index["layers"]["survival-thermal"]
