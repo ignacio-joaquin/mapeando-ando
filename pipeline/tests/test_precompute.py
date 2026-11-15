@@ -255,7 +255,8 @@ def test_full_run(data_dir):
         "dtm": "ok", "relief-slope": "ok", "relief-hillshade": "ok", "relief-contours": "ok",
         "survival-thermal": "ok", "terrain-loose-soil": "ok",
         "survival-hazard": "ok", "terrain-roughness": "ok", "terrain-factor": "ok",
-        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "survival-water": "ok", "relief-dem": "ok"}
+        "survival-dose": "ok", "survival-skyview": "ok", "coverage": "ok", "survival-water": "ok", "relief-dem": "ok",
+        "relief-far": "error"}
 
     # Agua: SWIM 0-1 m, MODELED, el valor original en COG y tiles hasta z10 con la leyenda.
     water = index["layers"]["survival-water"]
@@ -299,6 +300,8 @@ def test_full_run(data_dir):
     assert dem["tiles"]["status"] == "ok" and dem["tiles"]["template"] == "dem/{z}/{x}/{y}.png"
     assert dem["tiles"]["maxzoom"] == tiles.DEM_MAX_ZOOM
     assert any((out / "dem" / str(tiles.DEM_MAX_ZOOM)).rglob("*.png"))
+    # Sin el recorte de 200 m no hay horizonte lejano, pero eso no hace fallar la corrida.
+    assert "dem200_crop" in index["layers"]["relief-far"]["error"]
 
     for name in ("dtm.tif", "slope.tif", "hillshade.tif", "hazard.tif", "roughness.tif", "terrain_factor.tif"):
         with rasterio.open(out / name) as ds:
@@ -679,3 +682,44 @@ class TestCoverage:
         monkeypatch.setattr(precompute, "STRIP_PX", 120 * 10 * 2)  # dos filas de celdas por franja
         strips, _, _ = precompute.coverage_mask(dtm, cell=10)
         assert (whole == strips).all() and whole[1, 1] == 0  # el hueco del cráter, en [10:20, 10:20]
+
+
+def write_dem200(data_dir, n=60, px=200.0):
+    """Recorte del DEM global: meseta lisa alrededor del DTM, en la misma proyección (eqc)."""
+    yy, xx = np.mgrid[0:n, 0:n]
+    z = -2400 + 5.0 * xx                  # sube hacia el este: 300 m en 12 km
+    x0 = R * math.radians(LON0) - n * px / 2
+    y0 = R * math.radians(LAT0) + n * px / 2
+    path = data_dir / "raw" / "jezero" / "dem200_crop.tif"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(path, "w", driver="GTiff", width=n, height=n, count=1, dtype="float32",
+                       crs=EQC_LATTS0, nodata=NODATA, transform=from_origin(x0, y0, px, px)) as ds:
+        ds.write(z.astype(np.float32), 1)
+    return path
+
+
+@needs_gdal
+def test_relieve_lejano_desde_el_dem200(data_dir):
+    write_dtm(data_dir / "raw" / "jezero" / "dtm.tif", crater())
+    write_dem200(data_dir)
+    write_themis(data_dir)
+    write_swim(data_dir)
+    write_manifest(data_dir, "ok")
+    assert precompute.main(["--site", "jezero"]) == 0
+
+    out = data_dir / "output" / "jezero"
+    far = json.loads((out / "terrain.json").read_text())["layers"]["relief-far"]
+    assert far["status"] == "ok" and far["provenance"] == "DERIVED"
+    assert far["mission"] == "MGS MOLA + MEX HRSC" and "200 m" in far["resolution"]
+    assert far["datum_m"] == pytest.approx(-2400, abs=1) and far["encoding"] == tiles.DEM_ENCODING
+    t = far["tiles"]
+    assert t["status"] == "ok" and t["template"] == "far/{z}/{x}/{y}.png"
+    assert t["maxzoom"] == precompute.FAR_MAX_ZOOM
+    pngs = list((out / "far" / str(precompute.FAR_MAX_ZOOM)).rglob("*.png"))
+    assert pngs
+    # La altura decodificada sube hacia el este, como el DEM: el teselado no la da vuelta.
+    with rasterio.open(pngs[0]) as ds:
+        h = tiles.decodificar_relieve(ds.read())
+    fila = h[h.shape[0] // 2]
+    con_dato = fila[fila > 0]
+    assert con_dato.size > 10 and con_dato[-1] > con_dato[0]

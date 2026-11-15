@@ -17,6 +17,8 @@ A partir del DTM del sitio genera, en <out>/<sitio>/:
   ice_consistency.tif  consistencia de hielo somero (0-1 m) de SWIM 2.0, ~3 km (pipeline/swim.py)
   slope/, hillshade/, thermal/, hazard/, dose/, water/  tiles XYZ PNG para el mapa (pipeline/tiles.py),
                     con los colores de la leyenda de web/src/map/layers.ts
+  dem/, far/        tiles raster-dem (altura en RGB): el DTM para el 3D del mapa y el recorte del
+                    DEM global de 200 m para el horizonte en primera persona (solo para dibujar)
   coverage.geojson  dónde hay DTM de 1 m de verdad (huella de los píxeles válidos), en lon/lat.
                     El planificador rechaza un destino que cae afuera.
   terrain.json      procedencia, parámetros, estado de cada capa y zoom/límites de los tiles.
@@ -109,6 +111,10 @@ FIXED_MAX_ZOOM = {"survival-water": 10}
 # La ortoimagen no sale del DTM: se tesela del producto de USGS y se pide con --ortho.
 ORTHO_LAYER = "base-ortho"
 DEM_LAYER = "relief-dem"     # relieve 3D del mapa (tiles raster-dem, ver tiles.dem_a_tiles)
+# Relieve lejano para el horizonte en primera persona (web/src/horizon/): el DEM global de
+# 200 m recortado al sitio, en los mismos tiles raster-dem. No es una capa del mapa.
+FAR_LAYER = "relief-far"
+FAR_MAX_ZOOM = 9             # ~160 m por píxel en el ecuador: el primer zoom más fino que 200 m
 
 GTIFF_OPTS = ["-co", "TILED=YES", "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER"]
 COG_OPTS = ["-of", "COG", "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=YES", "-co", "BIGTIFF=IF_SAFER"]
@@ -868,6 +874,36 @@ def main(argv=None):
             failed = True
             log(f"Falló el teselado de {DEM_LAYER}: {e}")
             layers[DEM_LAYER].update(status="error", error=str(e)[:400])
+
+    # 9c. Relieve lejano: el recorte del DEM global de 200 m (download.py, dem200_crop), en
+    #     tiles raster-dem. Lo usa el horizonte en primera persona para dibujar lo que queda
+    #     fuera del DTM (el borde del cráter, a decenas de km). Sin el recorte, sigue sin él.
+    if not args.no_tiles:
+        far_px_m = math.radians(tiles.grados_por_pixel(FAR_MAX_ZOOM)) * ts.MARS_RADIUS_M
+        layers[FAR_LAYER] = {
+            "file": "far", "unit": "m", "provenance": "DERIVED", "mission": "MGS MOLA + MEX HRSC",
+            "resolution": f"200 m por píxel (DEM global), teselado a ~{far_px_m:.0f} m",
+            "assumptions": [
+                "Solo para dibujar el horizonte lejano: ninguna medida sale de estos tiles.",
+                "Alturas sobre el punto más bajo del recorte (datum_m), igual que relief-dem.",
+                f"Huecos de hasta ~{far_px_m * tiles.DEM_FILL_PX / 1000:.0f} km rellenados por interpolación.",
+            ],
+        }
+        try:
+            dem200 = radiation.find_dem200(site["id"], DATA_DIR)
+            if dem200 is None:
+                raise DataNotReady("Falta dem200_crop.tif: correr antes pipeline/download.py")
+            info = tiles.dem_a_tiles(Path(dem200), out / "far", max_zoom=FAR_MAX_ZOOM)
+            layers[FAR_LAYER].update(status="ok", datum_m=info.pop("datum_m"),
+                                     encoding=info.pop("encoding"), tiles={"status": "ok", **info})
+        except DataNotReady as e:
+            # Falta el dato, no es un error del cómputo: el horizonte se dibuja solo con el DTM.
+            log(f"Sin {FAR_LAYER}: {e}")
+            layers[FAR_LAYER].update(status="error", error=str(e)[:400])
+        except Exception as e:
+            failed = True
+            log(f"Falló el teselado de {FAR_LAYER}: {e}")
+            layers[FAR_LAYER].update(status="error", error=str(e)[:400])
 
     # 10. Ortoimagen: el basemap. Se tesela directo del producto de USGS, recortada
     #    al bbox del sitio; no se pasa a COG ni se deriva nada de ella, es imagen
