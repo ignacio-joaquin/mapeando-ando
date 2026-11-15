@@ -79,6 +79,7 @@ Basado en un informe sobre juegos educativos: las mejoras vienen del apoyo paso 
 
 ### Pendiente de decidir (toca contratos o el modelo)
 
-- **Deslizadores de carga y de reserva de O₂, y el escenario "mochila pesada".** `POST /api/route` no recibe parámetros del traje. Sumarlos cambia el contrato de API y web.
+- **Lección de carga ("mochila pesada").** Desde MAP-50, `POST /api/route` recibe `cargo_kg` y el planificador tiene el selector "Carga del equipo" (`data-edu="cargo"`). Hoy **todas las lecciones corren sin carga**: al entrar, `usePlanSandbox` guarda el equipo del usuario, lo pone en cero y se lo devuelve al salir; `applyPreset` también lo pone en cero, porque el `expect` de cada escenario se midió con `cargo_kg: 0`; y el selector queda oculto. La clave de los intentos incluye la carga, para que comparar dos horas no mezcle su efecto. Una lección de carga tendría que mostrar `cargo` en `ui`, elegir un escenario y medir su `expect` con la carga puesta.
+- **Deslizador de reserva de O₂.** `POST /api/route` no recibe otros parámetros del traje. Sumarlos cambia el contrato de API y web.
 - **Reglas de las simulaciones análogas** (MDRS, BASALT): nunca salir solo, no salir cerca del amanecer ni del atardecer, volver con reserva y replanear ante una tormenta a mitad de camino. La reserva y el atardecer ya son límites. Las otras cambiarían el veredicto (`api/safety.py`) y necesitan una fuente citable antes de entrar.
 - **"Mediodía vs. atardecer".** Espera a que el server tenga pilas de sombras.

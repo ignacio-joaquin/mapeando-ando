@@ -57,7 +57,7 @@ La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangul
 
 ## Consumibles del traje (`/api/route`) · MODELED
 
-`POST /api/route/consumables` recibe una ruta ya armada y devuelve, por tramo, el gasto metabólico, el O2 y la batería, con los valores acumulados desde la salida. No hace pathfinding: eso lo hace `POST /api/route` (planificador 4D), que usa estas mismas funciones de consumo sobre la ruta que encuentra. Todo lo que devuelve lleva el badge **MODELED**.
+`POST /api/route/consumables` recibe una ruta ya armada y devuelve, por tramo, el gasto metabólico, el O2 y la batería, con los valores acumulados desde la salida. No hace pathfinding: eso lo hace `POST /api/route` (planificador 4D), que usa estas mismas funciones de consumo sobre la ruta que encuentra y recibe el mismo `cargo_kg` (0–500 kg, 0 si falta) que arma el selector "Carga del equipo" del planificador. Todo lo que devuelve lleva el badge **MODELED**.
 
 ```jsonc
 // Pedido
@@ -67,7 +67,7 @@ La pendiente no sale de `gdaldem slope`: los DTM de USGS están en equirectangul
                                               // un punto intermedio puede traer "dwell_min" (0–600):
                                               // minutos de trabajo parado en esa estación
   "speed_m_s": 0.8,                           // default 0.8 (~2.9 km/h)
-  "cargo_kg": 0,                              // carga extra transportada (feature de carga del equipo, M2)
+  "cargo_kg": 0,                              // carga extra transportada (kg); /api/route la recibe igual (MAP-50)
   "sample_step_m": 10,                        // paso de muestreo del DTM
   "suit": {"suit_kg": 127}                    // opcional: pisa cualquier supuesto de la tabla de abajo
 }
