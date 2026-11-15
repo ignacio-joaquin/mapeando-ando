@@ -246,6 +246,19 @@ export const RouteResponseSchema = z.object({
   profile: ProfileSchema.optional(),
 });
 
+/** Un elemento u óxido medido por el rover, ej. "SiO₂" en % en peso. */
+export const RoverElementSchema = MeasuredValueSchema.extend({
+  element: z.string(),
+  note: z.string().optional(),
+});
+
+/** Composición elemental medida cerca del waypoint de una foto (ficha de estación). */
+export const RoverCompositionSchema = z.object({
+  summary: z.string().optional(),
+  elements: z.array(RoverElementSchema),
+  note: z.string().optional(),
+});
+
 /**
  * GET /api/sites/{site}/photos?lat=&lon= — PROPUESTA de contrato (MAP-33).
  * Fotos reales del rover más cercanas a un punto. El cruce (punto → waypoint
@@ -269,6 +282,8 @@ export const RoverPhotoSchema = z.object({
   lon: z.number(),
   /** Distancia entre el punto pedido y el waypoint de la foto. */
   distance: MeasuredValueSchema,
+  /** Composición elemental medida cerca de ese waypoint, si la API la reporta. */
+  composition: RoverCompositionSchema.optional(),
 });
 
 export const RoverPhotosSchema = z.object({
@@ -336,6 +351,66 @@ export const TerrainIndexSchema = z.object({
 });
 
 /**
+ * GET /tiles/{site}/places.json: índice de lugares que escribe pipeline/places.py.
+ * Alimenta el buscador de destinos y los lugares sugeridos del planificador.
+ * Sin este archivo (404) el buscador dice que espera al pipeline.
+ * Documentado en docs/context.md §4.
+ */
+export const PlaceKindSchema = z.enum(["iau", "sample", "target", "heli", "rover", "crater"]);
+
+export const PlaceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: PlaceKindSchema,
+  /** Una línea para la lista: tipo de rasgo, diámetro, sol del rover. */
+  detail: z.string(),
+  lat: z.number(),
+  lon: z.number(),
+  suggested: z.boolean(),
+  provenance: ProvenanceSchema,
+  mission: z.string().nullable(),
+  instrument: z.string().nullable(),
+  resolution: z.string().optional(),
+  source: z.string().optional(),
+  assumptions: z.array(z.string()).readonly().optional(),
+  link: z.string().nullable().optional(),
+});
+
+export const PlaceSourceSchema = z.object({
+  status: z.enum(["ok", "missing", "error"]),
+  desc: z.string(),
+  count: z.number().int().optional(),
+  error: z.string().optional(),
+  /** Una fuente ok pero incompleta lo dice acá (ej. "falta PIXL", "N observaciones sin posición"). */
+  note: z.string().optional(),
+});
+
+export const PlacesIndexSchema = z.object({
+  site: z.string(),
+  generated_at: z.string(),
+  sources: z.record(z.string(), PlaceSourceSchema),
+  places: z.array(PlaceSchema),
+});
+
+/**
+ * GET /tiles/{site}/coverage.geojson: dónde hay DTM de 1 m de verdad
+ * (pipeline/precompute.py, capa `coverage` de terrain.json). Polígonos en
+ * lon/lat de Marte; el planificador rechaza destinos que caen afuera.
+ */
+const RingSchema = z.array(z.tuple([z.number(), z.number()]).rest(z.number())).min(4);
+export const CoverageSchema = z.object({
+  type: z.literal("FeatureCollection"),
+  features: z.array(
+    z.object({
+      geometry: z.discriminatedUnion("type", [
+        z.object({ type: z.literal("Polygon"), coordinates: z.array(RingSchema).min(1) }),
+        z.object({ type: z.literal("MultiPolygon"), coordinates: z.array(z.array(RingSchema).min(1)) }),
+      ]),
+    }),
+  ),
+});
+
+/**
  * Sol y sombra por hora para el deslizador de tiempo. Los escribe
  * pipeline/shadow_tiles.py y nginx los sirve en /tiles/<sitio>/illumination/.
  * Las plantillas son relativas a /tiles/<sitio>/, como en terrain.json.
@@ -398,6 +473,10 @@ export const SolTilesSchema = z.object({
 });
 
 export type Sites = z.infer<typeof SitesSchema>;
+export type Place = z.infer<typeof PlaceSchema>;
+export type PlaceKind = z.infer<typeof PlaceKindSchema>;
+export type PlacesIndex = z.infer<typeof PlacesIndexSchema>;
+export type Coverage = z.infer<typeof CoverageSchema>;
 export type TileSet = z.infer<typeof TileSetSchema>;
 export type TerrainLayer = z.infer<typeof TerrainLayerSchema>;
 export type TerrainIndex = z.infer<typeof TerrainIndexSchema>;
@@ -415,6 +494,8 @@ export type Robustness = z.infer<typeof RobustnessSchema>;
 export type RouteCost = z.infer<typeof RouteCostSchema>;
 export type RouteResponse = z.infer<typeof RouteResponseSchema>;
 export type Profile = z.infer<typeof ProfileSchema>;
+export type RoverElement = z.infer<typeof RoverElementSchema>;
+export type RoverComposition = z.infer<typeof RoverCompositionSchema>;
 export type RoverPhoto = z.infer<typeof RoverPhotoSchema>;
 export type RoverPhotos = z.infer<typeof RoverPhotosSchema>;
 export type IlluminationCatalog = z.infer<typeof IlluminationCatalogSchema>;

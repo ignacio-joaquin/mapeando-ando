@@ -13,7 +13,7 @@ import {
 // ve y en el build el worker no se emite (404 → nginx devuelve index.html y el mapa no
 // arranca). Con ?url Vite lo copia a assets/ y le pasamos la URL real.
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
-import type { Feature, FeatureCollection, LineString, Polygon } from "geojson";
+import type { Feature, FeatureCollection, LineString, MultiPolygon, Polygon } from "geojson";
 import { geojsonUrl, LAYERS, tileUrl } from "./layers";
 import { readyTiles } from "./terrain";
 import { SHADOWS_LAYER_ID, SHADOWS_NIGHT_LAYER_ID, bandLayerId, frameAt, okBands } from "./sun";
@@ -22,6 +22,7 @@ import { useStore } from "../state/store";
 import type { Bbox, RouteLeg } from "../api/schemas";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { LEG_CLASS_COLOR, waypointLabel } from "./route";
+import { checkCoverage } from "./coverage";
 
 /**
  * El mapa. La instancia de MapLibre es imperativa y mutable: vive en un ref,
@@ -128,8 +129,14 @@ export function MapView({ center, bbox, siteId }: Props) {
       const p = { lat: e.lngLat.lat, lon: e.lngLat.lng };
       // El modo se lee al momento del clic: el handler se registra una sola vez.
       const plan = usePlan.getState();
-      if (plan.clickMode === "add") plan.addPoint(p);
-      else setPicked(p);
+      if (plan.clickMode !== "add") {
+        setPicked(p);
+        return;
+      }
+      // Sin terreno de 1 m real no hay ruta que valga: se rechaza y se dice por qué.
+      const check = checkCoverage(useStore.getState().coverage, p);
+      if (check.kind === "outside") plan.setNotice(check.message);
+      else plan.addPoint(p);
     });
     mapRef.current = map;
     return () => {
@@ -181,6 +188,43 @@ export function MapView({ center, bbox, siteId }: Props) {
     };
     whenReady(map, apply);
   }, [bbox]);
+
+  // 2b. Contorno del terreno de 1 m (coverage.geojson). Sin esto, el usuario se
+  //     entera de que un punto no sirve recién cuando el clic se rechaza. Línea
+  //     continua clara, distinta del recuadro punteado del sitio; la leyenda
+  //     está en el planificador (no se comunica solo por color).
+  const coverage = useStore((s) => s.coverage);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const data: FeatureCollection<Polygon | MultiPolygon> = {
+        type: "FeatureCollection",
+        features: (coverage?.features ?? []).map((f) => ({
+          type: "Feature",
+          properties: {},
+          geometry: f.geometry as Polygon | MultiPolygon,
+        })),
+      };
+      const src = map.getSource("coverage");
+      if (src instanceof GeoJSONSource) {
+        src.setData(data);
+        return;
+      }
+      map.addSource("coverage", { type: "geojson", data });
+      map.addLayer(
+        {
+          id: "coverage-outline",
+          type: "line",
+          source: "coverage",
+          paint: { "line-color": "#f2e8d5", "line-width": 1.5, "line-opacity": 0.85 },
+        },
+        // Debajo de la ruta, si ya está dibujada.
+        map.getLayer("route-casing") ? "route-casing" : undefined,
+      );
+    };
+    whenReady(map, apply);
+  }, [coverage]);
 
   // 3. Sincronizar store -> capas. Se agregan solo las disponibles.
   //    Cada fuente recuerda de qué sitio y de qué corrida del pipeline salió:
@@ -405,7 +449,17 @@ export function MapView({ center, bbox, siteId }: Props) {
           .addTo(map);
         m.on("dragend", () => {
           const ll = m?.getLngLat();
-          if (ll) usePlan.getState().movePoint(w.id, { lat: ll.lat, lon: ll.lng });
+          if (!ll) return;
+          const p = { lat: ll.lat, lon: ll.lng };
+          const plan = usePlan.getState();
+          if (checkCoverage(useStore.getState().coverage, p).kind === "outside") {
+            // Vuelve a donde estaba: soltarlo afuera no mueve el punto.
+            const prev = plan.waypoints.find((x) => x.id === w.id);
+            if (prev) m?.setLngLat([prev.lon, prev.lat]);
+            plan.setNotice("No se movió: ahí no hay terreno de 1 m real (DTM HiRISE).");
+            return;
+          }
+          plan.movePoint(w.id, p);
         });
         el.addEventListener("click", (ev) => {
           // Abrir la estación sin agregar un punto nuevo debajo.
