@@ -14,7 +14,7 @@ Ese archivo es la fuente única de contexto del proyecto: core value, arquitectu
 ## Reglas de sesión
 
 1. **Ramas.** Commiteá y pusheá a **`Dana`**. Nunca a `main`: cada push a `main` se auto-despliega al server en menos de un minuto. `main` se actualiza solo por PR aprobado.
-2. **Secretos.** El repo es público. Nunca escribas en el repo claves, tokens, la IP del server ni el nombre del bucket, ni siquiera en un ejemplo o un comentario.
+2. **Secretos.** El repo es público. Nunca escribas en el repo claves, tokens ni el nombre del bucket, ni siquiera en un ejemplo o un comentario. La IP del server va solo en el link de demo del README (no hay dominio); en cualquier otro lado, `<IP>`.
 3. **Datos de la NASA.** Antes de escribir cualquier cosa que haga pedidos HTTP a servidores de la NASA/USGS/PDS, leé la skill `mapeando-geodata`. El `Crawl-delay` no es opcional.
 4. **No inventes datos.** Si falta un valor científico, decí que falta. Jamás rellenes con una estimación presentada como medición.
 5. **Contratos.** `files[].key` de `sites/*.json`, los ids de capa del mapa y las rutas `/api/*` los consume más de una pieza: si cambiás uno, actualizá todas las puntas en el mismo PR.

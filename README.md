@@ -2,7 +2,9 @@
 
 Mapa de supervivencia para una caminata (EVA) en la superficie de Marte, armado con datos reales de la NASA. Lo hizo el equipo **Mapeando Ando** para el NASA Space Apps Challenge 2026, challenge *Interplanetary Survival Guide: Martian Map*.
 
-**Demo y proyecto en Space Apps:** link pendiente, se completa al publicar el proyecto.
+**Demo:** <http://3.22.102.116/> (sin HTTPS: todavía no tenemos dominio)
+
+**Proyecto en Space Apps:** link pendiente, se completa al publicar el proyecto.
 
 > **Prototipo educativo, no software de vuelo.** Los números sirven para entender qué limita una EVA, no para planear una de verdad. La app también lo dice en pantalla.
 

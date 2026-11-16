@@ -59,7 +59,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 ## 3. Reglas que no se negocian
 
 1. **Ser educado con los servidores de la NASA.** Respetar `Crawl-delay` (PDS: 10 s), un pedido a la vez por host, `User-Agent` identificable, backoff ante 429/503, descarga dirigida. Un pipeline agresivo nos bloquea la IP y termina el proyecto.
-2. **Cero secretos en el repo.** Ni claves, ni tokens, ni la IP del server, ni el nombre del bucket. Van en `/etc/mapeando.env` o en el rol IAM.
+2. **Cero secretos en el repo.** Ni claves, ni tokens, ni el nombre del bucket. Van en `/etc/mapeando.env` o en el rol IAM. La IP del server es la única excepción (2026-11-15): como no hay dominio, es la dirección pública de la demo y va **solo** en el link de demo del README. En el resto del repo (ejemplos, configs, docs, comentarios) se sigue escribiendo `<IP>`.
 3. **Nunca escribir dentro del repo en runtime.** El auto-deploy hace `git reset --hard`. Todo dato va bajo `/data`.
 4. **`main` es producción.** Cada push a `main` se despliega solo en menos de un minuto.
 5. **Citar procedencia siempre.** Toda salida declara misión, instrumento y resolución.
