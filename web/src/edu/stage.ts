@@ -9,6 +9,7 @@ import { useEdu, type Attempt } from "../state/edu";
 import { useFreshRoute, usePlan } from "../state/plan";
 import { useStore } from "../state/store";
 import { useSun } from "../state/sun";
+import { tNow } from "../i18n/lang";
 import type { Waypoint } from "../state/plan";
 import type { Lesson, LessonContext, LessonNeed, LessonStep, Preset, StepSetup } from "./lessons";
 
@@ -207,11 +208,11 @@ export function usePlanSandbox(keepRoute: boolean) {
  */
 export function applyPreset(preset: Preset): string | null {
   const { places, activeSiteId } = useStore.getState();
-  if (activeSiteId !== preset.site) return `Este escenario es del sitio "${preset.site}".`;
+  if (activeSiteId !== preset.site) return tNow(`Este escenario es del sitio "${preset.site}".`, `This scenario belongs to the "${preset.site}" site.`);
   const find = (id: string) => places?.places.find((p) => p.id === id);
   const habitat = find(preset.habitat);
   const destination = find(preset.destination);
-  if (!habitat || !destination) return "Los lugares de este escenario ya no están en el sitio.";
+  if (!habitat || !destination) return tNow("Los lugares de este escenario ya no están en el sitio.", "This scenario's places are no longer at the site.");
   const plan = usePlan.getState();
   plan.clear();
   plan.setRoundTrip(true);

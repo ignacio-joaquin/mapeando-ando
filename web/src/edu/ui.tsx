@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useT } from "../i18n/lang";
 
 /** Piezas chicas para el texto de las lecciones. */
 
@@ -41,9 +42,13 @@ export function List({ items }: { readonly items: readonly ReactNode[] }) {
 
 /** Sin ruta real todavía: la lección no tiene qué leer. */
 export function NeedRoute() {
+  const t = useT();
   return (
     <p className="text-muted">
-      Cuando tengas una ruta calculada por el planificador, acá aparecen sus números.
+      {t(
+        "Cuando tengas una ruta calculada por el planificador, acá aparecen sus números.",
+        "Once the planner has computed a route, its numbers show up here.",
+      )}
     </p>
   );
 }

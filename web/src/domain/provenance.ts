@@ -1,4 +1,5 @@
 import { MARS_RADIUS_M } from "../mars/constants";
+import { tNow, trNow } from "../i18n/lang";
 
 /**
  * Formato común de un número visible: valor + unidad + de dónde sale.
@@ -73,8 +74,8 @@ export const INSTRUMENT_NOTE: Readonly<Record<string, string>> = {
 
 /** Texto corto del badge: "MRO HiRISE · DERIVED". */
 export function sourceLabel(s: SourceInfo): string {
-  const who = [s.mission, s.instrument].filter(Boolean).join(" ");
-  return `${who || "cálculo local"} · ${s.provenance}`;
+  const who = [s.mission, s.instrument].filter(Boolean).map((x) => trNow(x)).join(" ");
+  return `${who || tNow("cálculo local", "local calculation")} · ${s.provenance}`;
 }
 
 const km = (m: number) => (m / 1000).toFixed(m % 1000 === 0 ? 0 : 2);

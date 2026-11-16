@@ -10,6 +10,7 @@
 import type { CatalogSol, IlluminationCatalog, ShadowBand, SolTiles } from "../api/schemas";
 import { MARS_RADIUS_M } from "../mars/constants";
 import { declinationDeg, dlsDeg, localMidnightBefore, marsTime } from "../mars/mars24";
+import { localeNow, tNow } from "../i18n/lang";
 
 export const SHADOWS_LAYER_ID = "survival-shadows";
 /** Velo sobre el sitio cuando el Sol está bajo el horizonte (capa de MapLibre). */
@@ -84,9 +85,9 @@ export function pickSol(catalog: IlluminationCatalog | null, t: Date, lonEast: n
   return best;
 }
 
-/** Número con coma decimal. */
+/** Número con el separador decimal del idioma elegido. */
 export function formatDeg(x: number, digits = 1, signed = false): string {
-  return x.toLocaleString("es-AR", {
+  return x.toLocaleString(localeNow(), {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
     signDisplay: signed ? "always" : "auto",
@@ -96,12 +97,24 @@ export function formatDeg(x: number, digits = 1, signed = false): string {
 /** Supuestos de una pila reutilizada: los mismos que declara la API (api/illumination.py). */
 export function reuseAssumptions(r: SolReuse): string[] {
   return [
-    `Sombras del sol ${r.sourceTag} (Ls ${formatDeg(r.sourceLs)}°) usadas para la fecha pedida ` +
-      `(Ls ${formatDeg(r.targetLs)}°, ΔLs ${formatDeg(r.dls, 1, true)}°, tope ±${SOL_REUSE_MAX_DLS_DEG}°): ` +
-      "misma estación y misma hora solar local, de cualquier año marciano",
-    `A la misma hora solar local solo cambia la declinación del Sol: ${formatDeg(r.ddecl, 2)}° de ` +
-      "diferencia (Mars24). Las sombras con el Sol bajo son las que más se apartan",
-    "Amanecer y atardecer: los de ese sol, a la misma hora solar local",
+    tNow(
+      `Sombras del sol ${r.sourceTag} (Ls ${formatDeg(r.sourceLs)}°) usadas para la fecha pedida ` +
+        `(Ls ${formatDeg(r.targetLs)}°, ΔLs ${formatDeg(r.dls, 1, true)}°, tope ±${SOL_REUSE_MAX_DLS_DEG}°): ` +
+        "misma estación y misma hora solar local, de cualquier año marciano",
+      `Shadows from sol ${r.sourceTag} (Ls ${formatDeg(r.sourceLs)}°) used for the requested date ` +
+        `(Ls ${formatDeg(r.targetLs)}°, ΔLs ${formatDeg(r.dls, 1, true)}°, limit ±${SOL_REUSE_MAX_DLS_DEG}°): ` +
+        "same season and same local solar time, from any Mars year",
+    ),
+    tNow(
+      `A la misma hora solar local solo cambia la declinación del Sol: ${formatDeg(r.ddecl, 2)}° de ` +
+        "diferencia (Mars24). Las sombras con el Sol bajo son las que más se apartan",
+      `At the same local solar time only the Sun's declination changes: ${formatDeg(r.ddecl, 2)}° of ` +
+        "difference (Mars24). Shadows with a low Sun are the ones that differ most",
+    ),
+    tNow(
+      "Amanecer y atardecer: los de ese sol, a la misma hora solar local",
+      "Sunrise and sunset: those of that sol, at the same local solar time",
+    ),
   ];
 }
 

@@ -4,6 +4,7 @@
  * eso van como hex acá, en un solo lugar.
  */
 import type { LegClass } from "../api/schemas";
+import { tNow } from "../i18n/lang";
 
 export const LEG_CLASS_COLOR: Record<LegClass, string> = {
   ok: "#5fbf86",
@@ -29,9 +30,10 @@ export function waypointLabel(
   index: number,
   total: number,
 ): { readonly kind: WaypointKind; readonly short: string; readonly long: string } {
-  if (index === 0) return { kind: "origin", short: "A", long: "Hábitat (salida)" };
-  if (index === total - 1) return { kind: "destination", short: "B", long: "Destino" };
-  return { kind: "station", short: String(index), long: `Parada ${index}` };
+  // tNow: quien llama ya depende del idioma (useT), así que se vuelve a renderizar al cambiarlo.
+  if (index === 0) return { kind: "origin", short: "A", long: tNow("Hábitat (salida)", "Habitat (departure)") };
+  if (index === total - 1) return { kind: "destination", short: "B", long: tNow("Destino", "Destination") };
+  return { kind: "station", short: String(index), long: tNow(`Parada ${index}`, `Stop ${index}`) };
 }
 
 /**
@@ -44,7 +46,7 @@ export function stopLabel(
   roundTrip: boolean,
 ): { readonly kind: WaypointKind; readonly short: string; readonly long: string } {
   if (roundTrip && stops > 2 && index === stops - 1) {
-    return { kind: "return", short: "A", long: "Hábitat (vuelta)" };
+    return { kind: "return", short: "A", long: tNow("Hábitat (vuelta)", "Habitat (return)") };
   }
   return waypointLabel(index, roundTrip ? stops - 1 : stops);
 }

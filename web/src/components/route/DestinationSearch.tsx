@@ -4,6 +4,7 @@ import { KIND_LABEL, searchPlaces } from "../../domain/places";
 import { checkCoverage } from "../../map/coverage";
 import { usePlan } from "../../state/plan";
 import { useStore } from "../../state/store";
+import { useT, useTr } from "../../i18n/lang";
 
 /**
  * Elegir a dónde ir, como en Google Maps: buscar por nombre (IAU, cráter de
@@ -19,6 +20,8 @@ export function DestinationSearch() {
   const placesError = useStore((s) => s.placesError);
   const coverage = useStore((s) => s.coverage);
   const count = usePlan((s) => s.waypoints.length);
+  const t = useT();
+  const tr = useTr();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [open, setOpen] = useState(false);
@@ -68,10 +71,10 @@ export function DestinationSearch() {
   };
 
   return (
-    <section className="flex flex-col gap-2" aria-label="Elegir destino">
+    <section className="flex flex-col gap-2" aria-label={t("Elegir destino", "Choose destination")}>
       <label className="flex flex-col gap-1 text-xs">
         <span className="text-[11px] font-semibold tracking-wider text-muted uppercase">
-          {canStop ? "Cambiar destino o sumar parada" : "Destino"}
+          {canStop ? t("Cambiar destino o sumar parada", "Change destination or add a stop") : t("Destino", "Destination")}
         </span>
         <div className="relative">
           <input
@@ -93,10 +96,10 @@ export function DestinationSearch() {
             onKeyDown={onKey}
             placeholder={
               !hasOrigin
-                ? "Primero marcá el hábitat en el mapa"
+                ? t("Primero marcá el hábitat en el mapa", "First mark the habitat on the map")
                 : all.length === 0
-                  ? "Buscador sin lugares todavía"
-                  : "Buscar: Belva, cráter 13-…, sol 120"
+                  ? t("Buscador sin lugares todavía", "Search has no places yet")
+                  : t("Buscar: Belva, cráter 13-…, sol 120", "Search: Belva, crater 13-…, sol 120")
             }
             className="min-h-10 w-full rounded-md border border-line bg-bg px-3 text-sm text-fg placeholder:text-muted/70 focus:border-rust focus:outline-none disabled:opacity-60"
           />
@@ -107,7 +110,9 @@ export function DestinationSearch() {
               className="absolute top-full right-0 left-0 z-20 mt-1 max-h-72 overflow-y-auto rounded-md border border-line bg-panel shadow-2xl"
             >
               {results.length === 0 ? (
-                <li className="px-2 py-2 text-xs text-muted">Sin resultados para “{query}”.</li>
+                <li className="px-2 py-2 text-xs text-muted">
+                  {t("Sin resultados para", "No results for")} “{query}”.
+                </li>
               ) : (
                 results.map((p, i) => {
                   const out = outside(p);
@@ -131,11 +136,11 @@ export function DestinationSearch() {
                       <span className="min-w-0">
                         <span className="block font-semibold text-fg">{p.name}</span>
                         <span className="block text-muted">
-                          {KIND_LABEL[p.kind]} · {p.detail}
+                          {tr(KIND_LABEL[p.kind])} · {tr(p.detail)}
                         </span>
                         {out ? (
                           <span className="block font-semibold text-alert">
-                            ✕ sin terreno de 1 m: no se puede elegir
+                            {t("✕ sin terreno de 1 m: no se puede elegir", "✕ no 1 m terrain: it cannot be chosen")}
                           </span>
                         ) : null}
                       </span>
@@ -162,12 +167,14 @@ export function DestinationSearch() {
       </label>
 
       {canStop && query ? (
-        <p className="text-[11px] text-muted">Enter cambia el destino; Mayús+Enter lo suma como parada.</p>
+        <p className="text-[11px] text-muted">
+          {t("Enter cambia el destino; Mayús+Enter lo suma como parada.", "Enter changes the destination; Shift+Enter adds it as a stop.")}
+        </p>
       ) : null}
 
       {suggested.length > 0 ? (
         <div className="flex flex-col gap-1">
-          <span className="text-[11px] text-muted">Sugeridos</span>
+          <span className="text-[11px] text-muted">{t("Sugeridos", "Suggested")}</span>
           <div className="flex flex-wrap gap-1.5">
             {chips.map((p) => {
               const out = outside(p);
@@ -177,7 +184,7 @@ export function DestinationSearch() {
                   type="button"
                   disabled={!hasOrigin || out}
                   onClick={() => pick(p, "destination")}
-                  title={out ? "Sin terreno de 1 m real" : `${p.detail} · ${p.source ?? ""}`}
+                  title={out ? t("Sin terreno de 1 m real", "No real 1 m terrain") : `${tr(p.detail)} · ${tr(p.source ?? "")}`}
                   className="min-h-8 rounded-full border border-line px-3 text-xs text-fg hover:border-rust disabled:opacity-50"
                 >
                   {p.name}
@@ -191,7 +198,7 @@ export function DestinationSearch() {
                 onClick={() => setAllChips(!allChips)}
                 className="min-h-8 rounded-full px-2 text-xs text-rust hover:underline"
               >
-                {allChips ? "menos" : `+${suggested.length - CHIPS} más`}
+                {allChips ? t("menos", "less") : t(`+${suggested.length - CHIPS} más`, `+${suggested.length - CHIPS} more`)}
               </button>
             ) : null}
           </div>
@@ -201,8 +208,11 @@ export function DestinationSearch() {
       {places === null ? (
         <p className="text-[11px] text-muted">
           {placesError
-            ? `No se pudo leer el índice de lugares: ${placesError}`
-            : "El buscador espera al pipeline (places.json). Mientras, elegí el destino con un clic en el mapa."}
+            ? `${t("No se pudo leer el índice de lugares", "Could not read the places index")}: ${tr(placesError)}`
+            : t(
+                "El buscador espera al pipeline (places.json). Mientras, elegí el destino con un clic en el mapa.",
+                "Search is waiting for the pipeline (places.json). Meanwhile, choose the destination with a click on the map.",
+              )}
         </p>
       ) : (
         <SourcesNote sources={places.sources} />
@@ -219,23 +229,25 @@ function SourcesNote({
 }) {
   const missing = Object.values(sources).filter((s) => s.status !== "ok");
   const incomplete = Object.values(sources).filter((s) => s.status === "ok" && s.note);
+  const t = useT();
+  const tr = useTr();
   return (
     <details className="text-[11px] text-muted">
       <summary className="cursor-pointer">
-        De dónde salen los lugares
-        {missing.length > 0 ? ` · faltan ${missing.length} fuentes` : ""}
-        {incomplete.length > 0 ? ` · ${incomplete.length} incompletas` : ""}
+        {t("De dónde salen los lugares", "Where the places come from")}
+        {missing.length > 0 ? t(` · faltan ${missing.length} fuentes`, ` · ${missing.length} sources missing`) : ""}
+        {incomplete.length > 0 ? t(` · ${incomplete.length} incompletas`, ` · ${incomplete.length} incomplete`) : ""}
       </summary>
       <ul className="mt-1 flex flex-col gap-0.5">
         {Object.entries(sources).map(([k, s]) => (
           <li key={k}>
-            {s.status === "ok" ? (s.note ? "⚠" : "✓") : "✕"} {s.desc}
+            {s.status === "ok" ? (s.note ? "⚠" : "✓") : "✕"} {tr(s.desc)}
             {s.status === "ok"
               ? ` (${s.count ?? 0})`
               : s.status === "error"
-                ? `: falló al armar el índice${s.error ? ` (${s.error})` : ""}`
-                : ": todavía no está"}
-            {s.note ? <span className="block pl-3 text-warn">{s.note}</span> : null}
+                ? `${t(": falló al armar el índice", ": failed while building the index")}${s.error ? ` (${s.error})` : ""}`
+                : t(": todavía no está", ": not there yet")}
+            {s.note ? <span className="block pl-3 text-warn">{tr(s.note)}</span> : null}
           </li>
         ))}
       </ul>

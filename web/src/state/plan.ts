@@ -22,6 +22,7 @@ import type { PlannedRoute } from "../api/client";
 import { cargoKg, clampExtraKg } from "../domain/equipment";
 import { useStore } from "./store";
 import { planFromUrl } from "./share";
+import { tNow } from "../i18n/lang";
 
 export interface Waypoint extends LatLon {
   readonly id: string;
@@ -232,18 +233,23 @@ export const usePlan = create<PlanState>((set) => ({
         };
       }
       const last = wps.length - 1;
-      const names = out.map((i) => (i === last ? "el destino" : `la parada ${i}`));
+      // Aviso armado con datos de esta travesía: se escribe ya en el idioma elegido.
+      const names = out.map((i) => (i === last ? tNow("el destino", "the destination") : tNow(`la parada ${i}`, `stop ${i}`)));
       const kept = wps.filter((_, i) => !out.includes(i));
       const lostDestination = out.includes(last);
       const after = !lostDestination
         ? ""
         : kept.length >= 2
-          ? " Ahora el destino es la última parada que quedaba."
-          : " Elegí otro destino.";
+          ? tNow(" Ahora el destino es la última parada que quedaba.", " The destination is now the last remaining stop.")
+          : tNow(" Elegí otro destino.", " Choose another destination.");
+      const list = names.join(", ").replace(/, ([^,]*)$/, tNow(" y $1", " and $1"));
       return {
         waypoints: kept,
         openStop: null,
-        notice: `Saqué ${names.join(", ").replace(/, ([^,]*)$/, " y $1")} de la travesía: ahí no hay terreno de 1 m real (DTM HiRISE).${after}`,
+        notice: tNow(
+          `Saqué ${list} de la travesía: ahí no hay terreno de 1 m real (DTM HiRISE).${after}`,
+          `I removed ${list} from the traverse: there is no real 1 m terrain there (HiRISE DTM).${after}`,
+        ),
       };
     }),
   switchSite: (siteId) =>

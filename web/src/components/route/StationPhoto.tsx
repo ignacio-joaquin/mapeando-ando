@@ -5,6 +5,7 @@ import type { SourceInfo } from "../../domain/provenance";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { formatDistanceM } from "./format";
+import { tNow, useT, useTr } from "../../i18n/lang";
 
 /**
  * "Lo que vas a ver al llegar": la foto real del rover más cercana a la
@@ -47,8 +48,13 @@ function photoSource(p: RoverPhoto): SourceInfo {
     provenance: "OBSERVED",
     mission: p.mission,
     instrument: p.camera,
-    source: `Imagen cruda de ${p.rover}, sol ${p.sol} (mars.nasa.gov)`,
-    assumptions: ["Tomada desde donde estaba el rover, no desde el punto exacto de la estación"],
+    source: tNow(`Imagen cruda de ${p.rover}, sol ${p.sol} (mars.nasa.gov)`, `Raw image from ${p.rover}, sol ${p.sol} (mars.nasa.gov)`),
+    assumptions: [
+      tNow(
+        "Tomada desde donde estaba el rover, no desde el punto exacto de la estación",
+        "Taken from where the rover was, not from the exact point of the stop",
+      ),
+    ],
   };
 }
 
@@ -73,6 +79,8 @@ export function StationPhoto({ siteId, lat, lon, title, at }: Props) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [shown, setShown] = useState(0);
   const [horizon, setHorizon] = useState(false);
+  const t = useT();
+  const tr = useTr();
   const photo = state.kind === "ok" ? (state.data.photos[shown] ?? state.data.photos[0] ?? null) : null;
 
   useEffect(() => {
@@ -98,17 +106,19 @@ export function StationPhoto({ siteId, lat, lon, title, at }: Props) {
   return (
     <section className="mt-2 border-t border-line pt-2">
       <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted uppercase">
-        Lo que vas a ver al llegar
+        {t("Lo que vas a ver al llegar", "What you will see when you arrive")}
       </h4>
 
       {state.kind === "loading" ? (
-        <p className="text-xs text-muted">Buscando la foto del rover más cercana…</p>
+        <p className="text-xs text-muted">{t("Buscando la foto del rover más cercana…", "Looking for the nearest rover photo…")}</p>
       ) : state.kind === "error" ? (
-        <p className="text-xs text-alert">No se pudieron traer las fotos. {state.message}</p>
+        <p className="text-xs text-alert">
+          {t("No se pudieron traer las fotos.", "Could not fetch the photos.")} {tr(state.message)}
+        </p>
       ) : state.data.photos.length === 0 ? (
         <p className="rounded border border-warn/60 bg-warn/10 p-2 text-[11px] text-fg">
-          <strong className="text-warn">Sin foto.</strong>{" "}
-          {state.data.note ?? "No hay fotos del rover cerca de este punto."}
+          <strong className="text-warn">{t("Sin foto.", "No photo.")}</strong>{" "}
+          {state.data.note ? tr(state.data.note) : t("No hay fotos del rover cerca de este punto.", "There are no rover photos near this point.")}
         </p>
       ) : (
         <Photos photos={state.data.photos} shown={shown} onShow={setShown} />
@@ -119,10 +129,11 @@ export function StationPhoto({ siteId, lat, lon, title, at }: Props) {
         onClick={() => setHorizon(true)}
         className="mt-2 w-full rounded border border-rust px-2 py-1.5 text-xs font-semibold text-rust hover:bg-rust/10"
       >
-        ⛰ Ver el horizonte desde acá{photo ? " y comparar con la foto" : ""}
+        {t("⛰ Ver el horizonte desde acá", "⛰ See the horizon from here")}
+        {photo ? t(" y comparar con la foto", " and compare with the photo") : ""}
       </button>
       {horizon ? (
-        <Suspense fallback={<p className="mt-1 text-xs text-muted">Cargando la vista 3D…</p>}>
+        <Suspense fallback={<p className="mt-1 text-xs text-muted">{t("Cargando la vista 3D…", "Loading the 3D view…")}</p>}>
           <HorizonView
             siteId={siteId}
             title={title}
@@ -150,36 +161,46 @@ function StationData({ siteId, state }: { readonly siteId: string; readonly stat
   const measured =
     state.kind === "ok" ? (state.data.photos.find((p) => p.composition) ?? null) : null;
   const subsurface = SUBSURFACE[siteId.toLowerCase()];
+  const t = useT();
+  const tr = useTr();
 
   return (
     <div className="mt-2 flex flex-col gap-2">
-      <h4 className="text-[11px] font-semibold tracking-wide text-muted uppercase">Ficha de la estación</h4>
+      <h4 className="text-[11px] font-semibold tracking-wide text-muted uppercase">{t("Ficha de la estación", "Stop card")}</h4>
 
       <div className="rounded border border-line bg-panel/40 p-2">
         <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted uppercase">
-          Composición elemental medida
+          {t("Composición elemental medida", "Measured elemental composition")}
         </p>
         {state.kind === "loading" ? (
-          <p className="text-[11px] text-muted">Buscando mediciones del rover cerca de esta estación…</p>
+          <p className="text-[11px] text-muted">
+            {t("Buscando mediciones del rover cerca de esta estación…", "Looking for rover measurements near this stop…")}
+          </p>
         ) : measured?.composition ? (
           <Composition photo={measured} composition={measured.composition} />
         ) : (
           <p className="text-[11px] text-fg">
-            <strong className="text-warn">Falta el dato.</strong> El server todavía no reporta
-            composición elemental medida por el rover cerca de esta estación.
+            <strong className="text-warn">{t("Falta el dato.", "Missing data.")}</strong>{" "}
+            {t(
+              "El server todavía no reporta composición elemental medida por el rover cerca de esta estación.",
+              "The server does not report elemental composition measured by the rover near this stop yet.",
+            )}
           </p>
         )}
       </div>
 
       <div className="rounded border border-line bg-panel/40 p-2">
         <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted uppercase">
-          {subsurface?.title ?? "Subsuelo"}
+          {subsurface ? tr(subsurface.title) : t("Subsuelo", "Subsurface")}
         </p>
         <p className="text-[11px] text-fg">
-          <strong className="text-warn">Falta el dato.</strong>{" "}
+          <strong className="text-warn">{t("Falta el dato.", "Missing data.")}</strong>{" "}
           {subsurface
-            ? `Todavía no hay backend para ${subsurface.expected}; no se muestra un perfil estimado.`
-            : "No hay dato de subsuelo previsto para este sitio."}
+            ? t(
+                `Todavía no hay backend para ${subsurface.expected}; no se muestra un perfil estimado.`,
+                `There is no backend yet for ${tr(subsurface.expected)}; no estimated profile is shown.`,
+              )
+            : t("No hay dato de subsuelo previsto para este sitio.", "No subsurface data is planned for this site.")}
         </p>
       </div>
     </div>
@@ -193,10 +214,12 @@ function Composition({
   readonly photo: RoverPhoto;
   readonly composition: RoverComposition;
 }) {
+  const t = useT();
+  const tr = useTr();
   return (
     <>
       {composition.summary ? (
-        <p className="mb-2 text-[11px] leading-snug text-muted">{composition.summary}</p>
+        <p className="mb-2 text-[11px] leading-snug text-muted">{tr(composition.summary)}</p>
       ) : null}
       <div className="grid grid-cols-2 gap-1.5">
         {composition.elements.map((el, idx) => (
@@ -208,16 +231,17 @@ function Composition({
             <div className="mt-1">
               <Measure data={el} badge="none" size="sm" align="left" />
             </div>
-            {el.note ? <div className="mt-1 text-[10px] text-muted">{el.note}</div> : null}
+            {el.note ? <div className="mt-1 text-[10px] text-muted">{tr(el.note)}</div> : null}
           </div>
         ))}
       </div>
       <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
-        Medida en el waypoint del sol <span className="font-mono">{photo.sol}</span>, a
+        {t("Medida en el waypoint del sol", "Measured at the waypoint of sol")} <span className="font-mono">{photo.sol}</span>,{" "}
+        {t("a", "")}
         <Measure data={{ ...photo.distance, unit: null }} format={formatDistanceM} align="left" />
-        de esta estación
+        {t("de esta estación", "from this stop")}
       </p>
-      {composition.note ? <p className="mt-1 text-[10px] text-muted">{composition.note}</p> : null}
+      {composition.note ? <p className="mt-1 text-[10px] text-muted">{tr(composition.note)}</p> : null}
     </>
   );
 }
@@ -232,12 +256,13 @@ function Photos({
   readonly onShow: (i: number) => void;
 }) {
   const p = photos[shown] ?? photos[0];
+  const t = useT();
   if (!p) return null;
   const credit = p.credit.trim() || creditFor(p.camera);
 
   return (
     <figure className="flex flex-col gap-1.5">
-      <a href={p.url_full ?? p.url} target="_blank" rel="noreferrer" title="Abrir la imagen completa">
+      <a href={p.url_full ?? p.url} target="_blank" rel="noreferrer" title={t("Abrir la imagen completa", "Open the full image")}>
         <img
           src={p.url}
           alt={`${p.rover}, ${p.camera}, sol ${p.sol}`}
@@ -254,24 +279,24 @@ function Photos({
           <ProvenanceBadge source={photoSource(p)} align="left" />
         </span>
         <span className="flex flex-wrap items-center gap-1.5 text-muted">
-          Tomada a
+          {t("Tomada a", "Taken")}
           <Measure data={{ ...p.distance, unit: null }} format={formatDistanceM} align="left" />
-          de esta estación
+          {t("de esta estación", "from this stop")}
         </span>
         <span className="text-muted">
-          Crédito: <span className="text-fg">{credit}</span>
+          {t("Crédito", "Credit")}: <span className="text-fg">{credit}</span>
         </span>
       </figcaption>
 
       {photos.length > 1 ? (
-        <div className="flex gap-1.5" role="group" aria-label="Otras fotos cercanas">
+        <div className="flex gap-1.5" role="group" aria-label={t("Otras fotos cercanas", "Other nearby photos")}>
           {photos.slice(0, 4).map((ph, i) => (
             <button
               key={ph.url}
               type="button"
               onClick={() => onShow(i)}
               aria-pressed={i === shown}
-              aria-label={`Foto ${i + 1}: ${ph.camera}, sol ${ph.sol}`}
+              aria-label={`${t("Foto", "Photo")} ${i + 1}: ${ph.camera}, sol ${ph.sol}`}
               className={`overflow-hidden rounded border-2 ${i === shown ? "border-rust" : "border-line"}`}
             >
               <img src={ph.url} alt="" loading="lazy" className="size-12 object-cover" />

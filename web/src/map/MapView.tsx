@@ -39,6 +39,7 @@ import {
 } from "./places";
 import { PlacePopup } from "../components/route/PlacePopup";
 import { CONTACT_COLOR, CONTACT_HATCH_IMAGE, CONTACT_LAYER_ID, useContact } from "../state/contact";
+import { tNow, useLang, useT } from "../i18n/lang";
 
 /** Las tres capas de la zona de contacto: se prenden y apagan juntas. */
 const CONTACT_LAYERS = [CONTACT_LAYER_ID, `${CONTACT_LAYER_ID}-hatch`, `${CONTACT_LAYER_ID}-edge`] as const;
@@ -132,6 +133,10 @@ interface Props {
 export function MapView({ center, bbox, siteId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  // El idioma entra en los efectos que escriben texto en el mapa (títulos de los
+  // marcadores, etiqueta del Sol del paso): MapLibre no se vuelve a dibujar solo.
+  const lang = useLang((s) => s.lang);
+  const t = useT();
   /** Reencuadre pendiente de la lección: si el mapa cambia de tamaño justo después del vuelo. */
   const refitRef = useRef<(() => void) | null>(null);
   /** Sube en cada vuelo: solo el último traba el zoom al terminar (uno cortado, no). */
@@ -633,7 +638,12 @@ export function MapView({ center, bbox, siteId }: Props) {
             // Vuelve a donde estaba: soltarlo afuera no mueve el punto.
             const prev = plan.waypoints.find((x) => x.id === w.id);
             if (prev) m?.setLngLat([prev.lon, prev.lat]);
-            plan.setNotice("No se movió: ahí no hay terreno de 1 m real (DTM HiRISE).");
+            plan.setNotice(
+              tNow(
+                "No se movió: ahí no hay terreno de 1 m real (DTM HiRISE).",
+                "It did not move: there is no real 1 m terrain there (HiRISE DTM).",
+              ),
+            );
             return;
           }
           plan.movePoint(w.id, p);
@@ -663,7 +673,7 @@ export function MapView({ center, bbox, siteId }: Props) {
       );
       el.className = [...fromMapLibre, markerClass(label.kind, openStop === i)].join(" ");
     });
-  }, [waypoints, openStop]);
+  }, [waypoints, openStop, lang]);
 
   // 5. Línea de la ruta (id de contrato: route-line), coloreada por tramo.
   //    Solo la ruta vigente: mientras se recalcula, no queda la línea vieja.
@@ -828,7 +838,7 @@ export function MapView({ center, bbox, siteId }: Props) {
       }
     };
     whenReady(map, apply);
-  }, [result, activeStep]);
+  }, [result, activeStep, lang]);
 
   // 5c. Contacto con el hábitat (id de contrato: habitat-contact). Zona con línea
   //     de vista a la antena de A, de /api/sites/{site}/viewshed. Sin contacto va
@@ -1009,8 +1019,11 @@ export function MapView({ center, bbox, siteId }: Props) {
           onClick={() => setView3d(!view3d)}
           title={
             demReady
-              ? "Relieve a escala real. Arrastrá con el botón derecho (o Ctrl + arrastrar) para girar e inclinar."
-              : "El relieve 3D espera al pipeline (relief-dem en terrain.json)."
+              ? t(
+                  "Relieve a escala real. Arrastrá con el botón derecho (o Ctrl + arrastrar) para girar e inclinar.",
+                  "Relief at true scale. Drag with the right button (or Ctrl + drag) to rotate and tilt.",
+                )
+              : t("El relieve 3D espera al pipeline (relief-dem en terrain.json).", "3D relief is waiting for the pipeline (relief-dem in terrain.json).")
           }
           className="min-h-10 min-w-16 rounded-lg border border-line bg-panel/95 px-3 text-sm font-semibold text-fg shadow-lg backdrop-blur hover:border-muted disabled:cursor-not-allowed disabled:text-muted aria-pressed:border-rust aria-pressed:bg-rust aria-pressed:text-bg"
         >
@@ -1018,11 +1031,12 @@ export function MapView({ center, bbox, siteId }: Props) {
         </button>
         {!demReady ? (
           <span className="hidden rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted sm:inline">
-            3D: esperando el pipeline
+            {t("3D: esperando el pipeline", "3D: waiting for the pipeline")}
           </span>
         ) : view3d ? (
           <span className="flex max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-end gap-1.5 rounded bg-bg/85 px-1.5 py-0.5 text-[10px] text-muted">
-            relieve a escala real · ×{TERRAIN_TRUE_SCALE.toFixed(2)} por el radio
+            {t("relieve a escala real", "relief at true scale")} · ×{TERRAIN_TRUE_SCALE.toFixed(2)}{" "}
+            {t("por el radio", "for the radius")}
             <ProvenanceBadge
               source={{
                 ...RELIEF_DEM_SOURCE,
@@ -1162,7 +1176,7 @@ function stepToGeoJSON(step: RouteStep | undefined): FeatureCollection<LineStrin
       { type: "Feature", properties: { part: "shadow" }, geometry: { type: "LineString", coordinates: [[...mid], [...shadow]] } },
       {
         type: "Feature",
-        properties: { part: "sun-label", label: `☀ Sol ${Math.round(sun.elevation_deg)}°` },
+        properties: { part: "sun-label", label: `☀ ${tNow("Sol", "Sun")} ${Math.round(sun.elevation_deg)}°` },
         geometry: { type: "Point", coordinates: [...toSun] },
       },
     );

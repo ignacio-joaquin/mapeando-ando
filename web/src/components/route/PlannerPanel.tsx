@@ -3,6 +3,7 @@ import { EDU_TARGET } from "../../edu/lessons";
 import { useLessonShows } from "../../edu/useLessonShows";
 import { useFreshRoute, usePlan } from "../../state/plan";
 import { RoutePlanner } from "./RoutePlanner";
+import { useT } from "../../i18n/lang";
 
 /** Piezas de una lección que viven dentro del planificador. */
 const PLANNER_TARGETS = [
@@ -22,6 +23,7 @@ const PLANNER_TARGETS = [
  */
 export function PlannerPanel() {
   const [open, setOpen] = useState(false);
+  const t = useT();
   // En pantalla chica, una lección que señala algo del planificador sube la
   // hoja; el alumno la puede volver a bajar para ver el mapa.
   const lessonShows = useLessonShows(PLANNER_TARGETS);
@@ -30,7 +32,7 @@ export function PlannerPanel() {
   }, [lessonShows]);
   return (
     <aside
-      aria-label="Planificador de travesía"
+      aria-label={t("Planificador de travesía", "Traverse planner")}
       className={`absolute inset-x-0 bottom-0 z-30 flex max-h-[75%] flex-col rounded-t-2xl border-t border-line bg-panel shadow-[0_-8px_24px_rgb(0_0_0/0.45)] md:static md:z-auto md:order-1 md:max-h-none md:w-[380px] md:shrink-0 md:rounded-none md:border-t-0 md:border-r md:shadow-none ${open ? "h-[75%] md:h-auto" : ""}`}
     >
       <button
@@ -64,17 +66,19 @@ function PlannerSummary() {
   const status = usePlan((s) => s.status);
   const plan = useFreshRoute();
   const verdict = plan?.route.verdict;
-  if (count === 0) return <span className="text-sm">Tocá el mapa para marcar el hábitat</span>;
-  if (count === 1) return <span className="text-sm">Elegí el destino</span>;
-  if (status.kind === "error") return <span className="text-sm text-alert">✕ No se pudo calcular la ruta</span>;
-  if (!verdict) return <span className="text-sm text-muted">Calculando la travesía…</span>;
+  const t = useT();
+  if (count === 0) return <span className="text-sm">{t("Tocá el mapa para marcar el hábitat", "Tap the map to mark the habitat")}</span>;
+  if (count === 1) return <span className="text-sm">{t("Elegí el destino", "Choose the destination")}</span>;
+  if (status.kind === "error")
+    return <span className="text-sm text-alert">{t("✕ No se pudo calcular la ruta", "✕ Could not calculate the route")}</span>;
+  if (!verdict) return <span className="text-sm text-muted">{t("Calculando la travesía…", "Calculating the traverse…")}</span>;
   const look = VERDICT_LOOK[verdict.status];
   return (
     <span className="flex min-w-0 items-baseline gap-2">
       <strong className={`shrink-0 text-base font-black ${look.text}`}>{look.word}</strong>
       <span className="truncate text-xs text-muted">
-        {plan?.example ? "ejemplo · " : ""}
-        {count} puntos
+        {plan?.example ? t("ejemplo · ", "sample · ") : ""}
+        {count} {t("puntos", "points")}
       </span>
     </span>
   );
@@ -84,14 +88,15 @@ function PlannerSummary() {
 export function ClickModeToggle() {
   const clickMode = usePlan((s) => s.clickMode);
   const { setClickMode } = usePlan.getState();
+  const t = useT();
   const modes = [
-    ["add", "＋ Puntos", "Un clic suma un punto a la travesía"],
-    ["inspect", "⌖ Inspeccionar", "Un clic fija un punto y muestra qué hay ahí"],
+    ["add", t("＋ Puntos", "＋ Points"), t("Un clic suma un punto a la travesía", "A click adds a point to the traverse")],
+    ["inspect", t("⌖ Inspeccionar", "⌖ Inspect"), t("Un clic fija un punto y muestra qué hay ahí", "A click pins a point and shows what is there")],
   ] as const;
   return (
     <div
       role="group"
-      aria-label="Qué hace un clic en el mapa"
+      aria-label={t("Qué hace un clic en el mapa", "What a click on the map does")}
       data-edu="tools"
       className="pointer-events-auto flex rounded-lg border border-line bg-panel/95 p-0.5 shadow-lg backdrop-blur"
     >

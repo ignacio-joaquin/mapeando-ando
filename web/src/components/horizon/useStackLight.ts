@@ -4,6 +4,7 @@ import type { SolTiles } from "../../api/schemas";
 import type { SourceInfo } from "../../domain/provenance";
 import { SOL_REUSE_MAX_DLS_DEG, frameAt, pickSol, reuseAssumptions, shiftSolTiles } from "../../map/sun";
 import { useSun } from "../../state/sun";
+import { tNow } from "../../i18n/lang";
 
 /**
  * ¿Le da el Sol a este punto? Según la pila de sombras precomputada
@@ -91,30 +92,36 @@ export function useStackLight(siteId: string, lat: number, lon: number, when: Da
   if (!catalog) {
     if (catalogLoad.kind === "loading") return { kind: "pending" };
     if (catalogLoad.kind === "error") {
-      return { kind: "missing", reason: `no se pudo leer el catálogo de sombras: ${catalogLoad.message}` };
+      return { kind: "missing", reason: tNow(`no se pudo leer el catálogo de sombras: ${catalogLoad.message}`, `could not read the shadow catalog: ${catalogLoad.message}`) };
     }
-    return { kind: "missing", reason: "el pipeline todavía no precomputó sombras para este sitio" };
+    return { kind: "missing", reason: tNow("el pipeline todavía no precomputó sombras para este sitio", "the pipeline has not precomputed shadows for this site yet") };
   }
   if (!pick) {
     return {
       kind: "missing",
-      reason: `no hay sombras precomputadas para este sol ni para uno de la misma estación (|ΔLs| ≤ ${SOL_REUSE_MAX_DLS_DEG}°)`,
+      reason: tNow(
+        `no hay sombras precomputadas para este sol ni para uno de la misma estación (|ΔLs| ≤ ${SOL_REUSE_MAX_DLS_DEG}°)`,
+        `there are no precomputed shadows for this sol nor for one from the same season (|ΔLs| ≤ ${SOL_REUSE_MAX_DLS_DEG}°)`,
+      ),
     };
   }
-  if (!tilesPath) return { kind: "missing", reason: `las sombras del sol ${pick.sol.tag} están calculadas pero sin teselar` };
+  if (!tilesPath) return { kind: "missing", reason: tNow(`las sombras del sol ${pick.sol.tag} están calculadas pero sin teselar`, `the shadows of sol ${pick.sol.tag} are computed but not tiled`) };
   if (!loaded) return { kind: "pending" };
-  if ("error" in loaded) return { kind: "missing", reason: `no se pudieron leer las horas del sol: ${loaded.error}` };
+  if ("error" in loaded) return { kind: "missing", reason: tNow(`no se pudieron leer las horas del sol: ${loaded.error}`, `could not read the hours of the sol: ${loaded.error}`) };
   if (frame?.kind === "night") {
-    return { kind: "missing", reason: "para la pila de sombras a esta hora ya es de noche (horizonte plano)" };
+    return { kind: "missing", reason: tNow("para la pila de sombras a esta hora ya es de noche (horizonte plano)", "for the shadow stack it is already night at this time (flat horizon)") };
   }
-  if (!band || frame?.kind !== "band") return { kind: "missing", reason: `el sol ${pick.sol.tag} no tiene horas con máscara` };
+  if (!band || frame?.kind !== "band") return { kind: "missing", reason: tNow(`el sol ${pick.sol.tag} no tiene horas con máscara`, `sol ${pick.sol.tag} has no hours with a mask`) };
   if (!point || point.key !== key) return { kind: "pending" };
   if (point.result.kind === "missing") return point.result;
 
   const data = point.result.data;
   const value = data.values[0]?.[0] ?? null;
   if (value === null) {
-    return { kind: "missing", reason: "la pila de sombras no tiene dato en este punto (sin horizonte completo o fuera del DTM)" };
+    return { kind: "missing", reason: tNow(
+        "la pila de sombras no tiene dato en este punto (sin horizonte completo o fuera del DTM)",
+        "the shadow stack has no data at this point (no complete horizon or outside the DTM)",
+      ) };
   }
   const reuse = pick.reuse;
   const source: SourceInfo = {
@@ -122,11 +129,14 @@ export function useStackLight(siteId: string, lat: number, lon: number, when: Da
     mission: data.mission,
     instrument: data.instrument,
     resolution: data.resolution ?? undefined,
-    source: reuse ? `${data.source ?? "pipeline/illumination.py"}, reutilizado por estación` : data.source,
+    source: reuse ? `${data.source ?? "pipeline/illumination.py"}, ${tNow("reutilizado por estación", "reused by season")}` : data.source,
     assumptions: [
       ...(data.assumptions ?? []),
       ...(reuse ? reuseAssumptions(reuse) : []),
-      `Máscara de las ${band.ltst} LTST, la hora precomputada más cercana: no se interpola entre horas`,
+      tNow(
+        `Máscara de las ${band.ltst} LTST, la hora precomputada más cercana: no se interpola entre horas`,
+        `Mask for ${band.ltst} LTST, the nearest precomputed hour: no interpolation between hours`,
+      ),
     ],
   };
   return { kind: "ok", lit: value, ltst: band.ltst, offsetMin: frame.offsetMin, source };

@@ -6,6 +6,7 @@ import { formatLatLon } from "../../mars/geo";
 import { usePlan } from "../../state/plan";
 import { useStore } from "../../state/store";
 import { ProvenanceBadge } from "../ProvenanceBadge";
+import { useT, useTr } from "../../i18n/lang";
 
 /**
  * Ficha de un pin tocado en el mapa, como el globo de Google Maps: qué es, de
@@ -20,6 +21,8 @@ export function PlacePopup({ place, onClose }: { readonly place: Place; readonly
   const outside = check.kind === "outside";
   const inRoute = waypoints.some((w) => w.placeId === place.id);
   const count = waypoints.length;
+  const t = useT();
+  const tr = useTr();
 
   const act = (as: "origin" | "destination" | "stop") => {
     const plan = usePlan.getState();
@@ -47,11 +50,15 @@ export function PlacePopup({ place, onClose }: { readonly place: Place; readonly
         >
           {style.glyph}
         </span>
-        {KIND_LABEL[place.kind]}
+        {tr(KIND_LABEL[place.kind])}
       </p>
-      {place.detail ? <p className="mt-1.5 text-muted">{place.detail}</p> : null}
+      {place.detail ? <p className="mt-1.5 text-muted">{tr(place.detail)}</p> : null}
       <p className="mt-1 font-mono text-[11px] text-muted">{formatLatLon(place)}</p>
-      {place.source ? <p className="mt-1 text-[11px] text-muted">Fuente: {place.source}</p> : null}
+      {place.source ? (
+        <p className="mt-1 text-[11px] text-muted">
+          {t("Fuente", "Source")}: {tr(place.source)}
+        </p>
+      ) : null}
       {place.link ? (
         <a
           href={place.link}
@@ -59,16 +66,20 @@ export function PlacePopup({ place, onClose }: { readonly place: Place; readonly
           rel="noreferrer"
           className="mt-1 inline-block text-[11px] text-rust hover:underline"
         >
-          Ficha oficial del nomenclátor
+          {t("Ficha oficial del nomenclátor", "Official gazetteer entry")}
         </a>
       ) : null}
 
       {outside ? (
-        <p className="mt-2 font-semibold text-alert">✕ Sin terreno de 1 m real acá: no se puede ir.</p>
+        <p className="mt-2 font-semibold text-alert">
+          {t("✕ Sin terreno de 1 m real acá: no se puede ir.", "✕ No real 1 m terrain here: you cannot go.")}
+        </p>
       ) : check.kind === "unverified" ? (
-        <p className="mt-2 text-warn">⚠ No se pudo verificar el terreno de 1 m (falta la huella del DTM).</p>
+        <p className="mt-2 text-warn">
+          {t("⚠ No se pudo verificar el terreno de 1 m (falta la huella del DTM).", "⚠ Could not verify the 1 m terrain (the DTM footprint is missing).")}
+        </p>
       ) : null}
-      {inRoute ? <p className="mt-2 text-ok">✓ Ya está en la travesía</p> : null}
+      {inRoute ? <p className="mt-2 text-ok">{t("✓ Ya está en la travesía", "✓ Already in the traverse")}</p> : null}
 
       <div className="mt-2 flex flex-wrap gap-1.5">
         {count === 0 ? (
@@ -78,7 +89,7 @@ export function PlacePopup({ place, onClose }: { readonly place: Place; readonly
             onClick={() => act("origin")}
             className={`${btn} border-ok bg-ok/20 hover:bg-ok/30`}
           >
-            Poner el hábitat acá
+            {t("Poner el hábitat acá", "Put the habitat here")}
           </button>
         ) : (
           <button
@@ -87,7 +98,7 @@ export function PlacePopup({ place, onClose }: { readonly place: Place; readonly
             onClick={() => act("destination")}
             className={`${btn} border-rust bg-rust/20 hover:bg-rust/30`}
           >
-            {count === 1 ? "Ir acá" : "Cambiar destino"}
+            {count === 1 ? t("Ir acá", "Go here") : t("Cambiar destino", "Change destination")}
           </button>
         )}
         {count >= 2 ? (
@@ -97,7 +108,7 @@ export function PlacePopup({ place, onClose }: { readonly place: Place; readonly
             onClick={() => act("stop")}
             className={`${btn} border-line hover:border-rust`}
           >
-            + parada
+            {t("+ parada", "+ stop")}
           </button>
         ) : null}
       </div>

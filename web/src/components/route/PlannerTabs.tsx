@@ -3,6 +3,7 @@ import type { PlannerTab } from "../../state/ui";
 import { FACTOR_LABEL } from "./VerdictCard";
 import { useRouteParams } from "../../state/plan";
 import { countOverrides, useSettings } from "../../state/settings";
+import { useT, useTr } from "../../i18n/lang";
 
 const TABS: readonly { readonly id: PlannerTab; readonly label: string; readonly icon: string; readonly needsRoute: boolean }[] = [
   { id: "navigate", label: "Navegar", icon: "🧭", needsRoute: true },
@@ -26,10 +27,12 @@ export function PlannerTabs({
   readonly onPick: (t: PlannerTab) => void;
 }) {
   const changed = useSettings((s) => countOverrides(s.overrides));
+  const tr = useTr();
+  const tt = useT();
   return (
     <div
       role="tablist"
-      aria-label="Secciones del planificador"
+      aria-label={tt("Secciones del planificador", "Planner sections")}
       className="sticky top-0 z-10 -mx-3 grid grid-cols-4 gap-1 border-b border-line bg-panel px-3 pt-1 pb-2"
     >
       {TABS.map((t) => {
@@ -44,7 +47,7 @@ export function PlannerTabs({
             aria-selected={active}
             disabled={disabled}
             onClick={() => onPick(t.id)}
-            title={disabled ? "Primero armá una ruta con hábitat y destino" : undefined}
+            title={disabled ? tt("Primero armá una ruta con hábitat y destino", "First build a route with a habitat and a destination") : undefined}
             className={`relative flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
               active
                 ? nav
@@ -58,7 +61,7 @@ export function PlannerTabs({
             <span aria-hidden className="text-base leading-none">
               {t.icon}
             </span>
-            {t.label}
+            {tr(t.label)}
             {t.id === "settings" && changed > 0 ? (
               <span className="absolute top-0.5 right-1 rounded-full bg-rust px-1 text-[9px] leading-tight font-bold text-bg">
                 {changed}
@@ -96,6 +99,8 @@ export function VerdictStrip({
   const v = route.verdict;
   const look = LOOK[v.status];
   const custom = useRouteParams() !== undefined;
+  const t = useT();
+  const tr = useTr();
   return (
     <button
       type="button"
@@ -109,11 +114,14 @@ export function VerdictStrip({
       </span>
       <span className="min-w-0 flex-1 text-[11px] leading-tight">
         {v.limiting_factor ? (
-          <span className="block truncate text-fg">Limita: {FACTOR_LABEL[v.limiting_factor]}</span>
+          <span className="block truncate text-fg">
+            {t("Limita", "Limited by")}: {tr(FACTOR_LABEL[v.limiting_factor])}
+          </span>
         ) : null}
         <span className="block truncate text-muted">
-          {example ? "ejemplo · no usar para decidir · " : ""}
-          {custom ? "⚙ con tus ajustes · " : ""}ver por qué ›
+          {example ? t("ejemplo · no usar para decidir · ", "sample · do not use to decide · ") : ""}
+          {custom ? t("⚙ con tus ajustes · ", "⚙ with your settings · ") : ""}
+          {t("ver por qué ›", "see why ›")}
         </span>
       </span>
     </button>

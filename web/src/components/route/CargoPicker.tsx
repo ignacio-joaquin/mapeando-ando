@@ -1,3 +1,4 @@
+import { localeNow, useT, useTr } from "../../i18n/lang";
 import { useState } from "react";
 import {
   cargoKg,
@@ -10,7 +11,7 @@ import {
 import { usePlan } from "../../state/plan";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 
-const kg = (v: number) => v.toLocaleString("es-AR", { maximumFractionDigits: 1 });
+const kg = (v: number) => v.toLocaleString(localeNow(), { maximumFractionDigits: 1 });
 
 /**
  * Qué equipo se lleva (MAP-50). Cada tilde suma su masa a `cargo_kg` y el
@@ -25,6 +26,8 @@ export function CargoPicker() {
   const { toggleEquipment, setExtraKg } = usePlan.getState();
   const [open, setOpen] = useState(kit.length > 0 || extraKg > 0);
   const total = cargoKg(kit, extraKg);
+  const t = useT();
+  const tr = useTr();
 
   return (
     <section data-edu="cargo" className="rounded border border-line p-2">
@@ -34,7 +37,7 @@ export function CargoPicker() {
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-2 text-left text-xs"
       >
-        <span className="font-semibold tracking-wide text-muted uppercase">Carga del equipo</span>
+        <span className="font-semibold tracking-wide text-muted uppercase">{t("Carga del equipo", "Equipment load")}</span>
         <span className="flex items-center gap-2">
           <span className={`font-mono text-sm ${total > 0 ? "text-rust" : "text-muted"}`}>
             {kg(total)} kg
@@ -67,8 +70,8 @@ export function CargoPicker() {
                       {on ? "✓" : "+"}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-xs text-fg">{e.name}</span>
-                      <span className="block text-[11px] leading-tight text-muted">{e.use}</span>
+                      <span className="block text-xs text-fg">{tr(e.name)}</span>
+                      <span className="block text-[11px] leading-tight text-muted">{tr(e.use)}</span>
                     </span>
                     <span className="shrink-0 font-mono text-xs text-fg">{kg(itemKg(e))} kg</span>
                   </button>
@@ -79,7 +82,7 @@ export function CargoPicker() {
           </ul>
 
           <label className="flex items-center gap-2 text-xs">
-            <span className="flex-1 text-muted">Otra carga (muestras juntadas, etc.)</span>
+            <span className="flex-1 text-muted">{t("Otra carga (muestras juntadas, etc.)", "Other load (collected samples, etc.)")}</span>
             <input
               type="number"
               inputMode="decimal"
@@ -98,9 +101,10 @@ export function CargoPicker() {
           </label>
 
           <p className="text-[11px] leading-snug text-muted">
-            Masas en la Tierra: en Marte pesan el 38 %, y el modelo ya lo cuenta. La carga entra a
-            Pandolf y sube el O2 que gastás caminando y parado. Con este modelo no cambia los tiempos
-            (la velocidad es fija) ni la batería (no depende del esfuerzo).
+            {t(
+              "Masas en la Tierra: en Marte pesan el 38 %, y el modelo ya lo cuenta. La carga entra a Pandolf y sube el O2 que gastás caminando y parado. Con este modelo no cambia los tiempos (la velocidad es fija) ni la batería (no depende del esfuerzo).",
+              "Masses on Earth: on Mars they weigh 38 %, and the model already accounts for it. The load goes into Pandolf and raises the O2 you use walking and standing. With this model it does not change the times (speed is fixed) or the battery (it does not depend on effort).",
+            )}
           </p>
         </div>
       ) : null}

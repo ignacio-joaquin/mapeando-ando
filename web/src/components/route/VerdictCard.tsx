@@ -1,6 +1,7 @@
 import type { DataQuality, LimitingFactor, Verdict } from "../../api/schemas";
 import { Measure } from "../Measure";
 import { formatMinutes } from "./format";
+import { useT, useTr } from "../../i18n/lang";
 
 /**
  * Veredicto GO / CAUTION / NO-GO, grande. Se lee con el casco puesto: la palabra
@@ -31,6 +32,8 @@ interface Props {
 }
 
 export function VerdictCard({ verdict, dataQuality }: Props) {
+  const t = useT();
+  const tr = useTr();
   const look = LOOK[verdict.status];
   const rob = verdict.robustness;
   const skipped = rob ? rob.scenarios.length - rob.evaluated : 0;
@@ -38,17 +41,17 @@ export function VerdictCard({ verdict, dataQuality }: Props) {
   if (dataQuality) {
     const lightStatus = dataQuality.light_status ?? (dataQuality.light_evaluated ? "complete" : "missing");
     if (lightStatus === "missing") {
-      dataNotes.push("luz sin evaluar");
+      dataNotes.push(t("luz sin evaluar", "daylight not evaluated"));
     } else {
       if (dataQuality.light_source === "reused") {
-        dataNotes.push("luz estimada con otro sol de la misma estación");
+        dataNotes.push(t("luz estimada con otro sol de la misma estación", "daylight estimated with another sol from the same season"));
       } else if (lightStatus === "partial") {
-        dataNotes.push("luz parcialmente evaluada");
+        dataNotes.push(t("luz parcialmente evaluada", "daylight partially evaluated"));
       }
     }
-    if (!dataQuality.contact_evaluated) dataNotes.push("contacto sin evaluar");
+    if (!dataQuality.contact_evaluated) dataNotes.push(t("contacto sin evaluar", "contact not evaluated"));
     const terrainStatus = dataQuality.terrain_status ?? (dataQuality.terrain_evaluated ? "complete" : "missing");
-    if (terrainStatus !== "complete") dataNotes.push("terreno sin evaluar");
+    if (terrainStatus !== "complete") dataNotes.push(t("terreno sin evaluar", "terrain not evaluated"));
   }
   return (
     <section data-edu="verdict" aria-live="polite" className={`rounded border-2 p-3 ${look.box}`}>
@@ -64,22 +67,22 @@ export function VerdictCard({ verdict, dataQuality }: Props) {
           </span>
         ) : null}
       </div>
-      <p className="mt-1 text-sm font-medium text-fg">{verdict.summary}</p>
+      <p className="mt-1 text-sm font-medium text-fg">{tr(verdict.summary)}</p>
       {dataNotes.length ? (
         <p className="mt-1 text-[11px] font-medium text-warn">
-          Datos del cálculo: {dataNotes.join(" · ")}.
+          {t("Datos del cálculo", "Calculation data")}: {dataNotes.join(" · ")}.
         </p>
       ) : null}
       <dl className="mt-2 flex flex-col gap-1 text-xs">
         {verdict.limiting_factor ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted">Limita</dt>
-            <dd className="font-semibold">{FACTOR_LABEL[verdict.limiting_factor]}</dd>
+            <dt className="text-muted">{t("Limita", "Limiting factor")}</dt>
+            <dd className="font-semibold">{tr(FACTOR_LABEL[verdict.limiting_factor])}</dd>
           </div>
         ) : null}
         {verdict.score ? (
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-muted">Puntaje (margen más chico)</dt>
+            <dt className="text-muted">{t("Puntaje (margen más chico)", "Score (smallest margin)")}</dt>
             <dd>
               <Measure data={verdict.score} format={(v) => String(Math.round(v))} align="left" />
             </dd>
@@ -87,15 +90,17 @@ export function VerdictCard({ verdict, dataQuality }: Props) {
         ) : null}
         {rob ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted">Robustez</dt>
+            <dt className="text-muted">{t("Robustez", "Robustness")}</dt>
             <dd className="text-right font-semibold">
-              {rob.passed} de {rob.evaluated} escenarios
-              {skipped > 0 ? <span className="font-normal text-muted"> · {skipped} sin evaluar</span> : null}
+              {t(`${rob.passed} de ${rob.evaluated} escenarios`, `${rob.passed} of ${rob.evaluated} scenarios`)}
+              {skipped > 0 ? (
+                <span className="font-normal text-muted"> · {t(`${skipped} sin evaluar`, `${skipped} not evaluated`)}</span>
+              ) : null}
             </dd>
           </div>
         ) : null}
         <div className="flex items-center justify-between gap-2">
-          <dt className="text-muted">Reserva al llegar</dt>
+          <dt className="text-muted">{t("Reserva al llegar", "Reserve on arrival")}</dt>
           <dd>
             <Measure data={{ ...verdict.margin, unit: null }} format={formatMinutes} align="left" />
           </dd>

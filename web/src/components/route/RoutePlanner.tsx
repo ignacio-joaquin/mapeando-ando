@@ -25,6 +25,7 @@ import { PlannerTabs, VerdictStrip } from "./PlannerTabs";
 import { RouteSettings } from "./RouteSettings";
 import { useEdu } from "../../state/edu";
 import { useUi, type PlannerTab } from "../../state/ui";
+import { useT, useTr } from "../../i18n/lang";
 import {
   earthShort,
   formatBearing,
@@ -61,6 +62,8 @@ export function RoutePlanner() {
   const params = useRouteParams();
   const { setDepartAt, setRoundTrip, setResult, setStatus, setNotice, clear, reverse } =
     usePlan.getState();
+  const t = useT();
+  const tr = useTr();
 
   // Cambiar de sitio arranca una travesía nueva (salvo la que trajo un enlace).
   useEffect(() => {
@@ -155,12 +158,12 @@ export function RoutePlanner() {
     >
       <span>
         <strong className="text-alert">✕ </strong>
-        {notice}
+        {tr(notice)}
       </span>
       <button
         type="button"
         onClick={() => setNotice(null)}
-        aria-label="Cerrar aviso"
+        aria-label={t("Cerrar aviso", "Close notice")}
         className="-m-1 grid size-7 shrink-0 place-items-center rounded text-muted hover:bg-line hover:text-fg"
       >
         ✕
@@ -170,12 +173,12 @@ export function RoutePlanner() {
 
   const headerEl = (
     <header className="flex items-center justify-between gap-2">
-      <h2 className="text-base font-bold">Travesía</h2>
+      <h2 className="text-base font-bold">{t("Travesía", "Traverse")}</h2>
       {waypoints.length > 0 ? (
         <span className="flex gap-1 text-xs">
-          {waypoints.length >= 2 ? <TextButton onClick={reverse}>⇅ Invertir</TextButton> : null}
+          {waypoints.length >= 2 ? <TextButton onClick={reverse}>{t("⇅ Invertir", "⇅ Reverse")}</TextButton> : null}
           <TextButton onClick={clear} danger>
-            Borrar todo
+            {t("Borrar todo", "Clear all")}
           </TextButton>
         </span>
       ) : null}
@@ -185,13 +188,14 @@ export function RoutePlanner() {
   const statusEl =
     status.kind === "error" ? (
       <p className="rounded-lg border border-alert bg-alert/15 p-2.5 text-xs text-fg">
-        <strong className="text-alert">✕ No se pudo calcular la ruta.</strong> {status.message}
+        <strong className="text-alert">{t("✕ No se pudo calcular la ruta.", "✕ Could not calculate the route.")}</strong>{" "}
+        {tr(status.message)}
       </p>
     ) : !route && waypoints.length >= 2 ? (
       // Sin veredicto mientras se recalcula: el anterior era de otra ruta.
       <p role="status" className="flex items-center gap-2 rounded-lg border border-line p-3 text-xs text-muted">
         <span aria-hidden className="size-3 animate-spin rounded-full border-2 border-muted border-t-transparent" />
-        Calculando la travesía…
+        {t("Calculando la travesía…", "Calculating the traverse…")}
       </p>
     ) : null;
 
@@ -202,7 +206,7 @@ export function RoutePlanner() {
         onClick={() => window.print()}
         className="min-h-9 flex-1 rounded-md border border-line text-xs text-fg hover:border-muted"
       >
-        ⎙ Imprimir tira
+        {t("⎙ Imprimir tira", "⎙ Print cuff checklist")}
       </button>
       <ShareButton />
     </div>
@@ -231,16 +235,19 @@ export function RoutePlanner() {
         waypoints.length > 0 ? (
           <p className="flex items-center gap-1.5 text-[11px] text-muted">
             <span aria-hidden className="inline-block h-0 w-5 shrink-0 border-t-2 border-[#f2e8d5]" />
-            Línea clara en el mapa: borde del terreno de 1 m (DTM HiRISE). Los puntos van adentro.
+            {t(
+              "Línea clara en el mapa: borde del terreno de 1 m (DTM HiRISE). Los puntos van adentro.",
+              "Light line on the map: edge of the 1 m terrain (HiRISE DTM). Points go inside it.",
+            )}
           </p>
         ) : null
       ) : waypoints.length > 0 ? (
-        <p className="text-[11px] text-warn">⚠ {UNVERIFIED_MESSAGE}</p>
+        <p className="text-[11px] text-warn">⚠ {tr(UNVERIFIED_MESSAGE)}</p>
       ) : null}
 
       {/* Salida */}
       <section data-edu="depart" className={`flex flex-col gap-2 ${waypoints.length > 0 ? "" : "hidden"}`}>
-        <SectionTitle>Salida</SectionTitle>
+        <SectionTitle>{t("Salida", "Departure")}</SectionTitle>
         <div className="flex gap-1.5">
           <input
             type="datetime-local"
@@ -249,8 +256,8 @@ export function RoutePlanner() {
               const d = new Date(e.target.value);
               if (!Number.isNaN(d.getTime())) setDepartAt(d);
             }}
-            aria-label="Hora de salida (hora de tu computadora)"
-            title="Hora de tu computadora"
+            aria-label={t("Hora de salida (hora de tu computadora)", "Departure time (your computer's time)")}
+            title={t("Hora de tu computadora", "Your computer's time")}
             className="min-h-9 min-w-0 flex-1 rounded-md border border-line bg-bg px-2 font-mono text-xs text-fg"
           />
           <button
@@ -258,12 +265,12 @@ export function RoutePlanner() {
             onClick={() => setDepartAt(new Date())}
             className="min-h-9 rounded-md border border-line px-3 text-xs text-muted hover:text-fg"
           >
-            Ahora
+            {t("Ahora", "Now")}
           </button>
         </div>
         {origin ? (
           <p className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-muted">En Marte:</span>
+            <span className="text-muted">{t("En Marte:", "On Mars:")}</span>
             <span className="font-mono text-sm text-rust">{ltstShort(departAt, origin.lon)}</span>
             <span className="text-muted">LTST</span>
             <ProvenanceBadge source={MARS24_LTST} align="left" />
@@ -276,12 +283,12 @@ export function RoutePlanner() {
             onChange={(e) => setRoundTrip(e.target.checked)}
             className="size-4 accent-rust"
           />
-          <span>Incluir la vuelta al hábitat</span>
+          <span>{t("Incluir la vuelta al hábitat", "Include the return to the habitat")}</span>
         </label>
         <p className={`text-[11px] ${roundTrip ? "text-muted" : "text-warn"}`}>
           {roundTrip
-            ? "El veredicto cuenta O2, batería, dosis y luz hasta volver a A."
-            : "Solo ida: el veredicto termina en el destino, sin la vuelta."}
+            ? t("El veredicto cuenta O2, batería, dosis y luz hasta volver a A.", "The verdict counts O2, battery, dose and daylight until returning to A.")
+            : t("Solo ida: el veredicto termina en el destino, sin la vuelta.", "One way only: the verdict ends at the destination, without the return.")}
         </p>
       </section>
 
@@ -291,8 +298,9 @@ export function RoutePlanner() {
       {waypoints.length > 0 ? (
         <section data-edu="points" className="flex flex-col gap-2">
           <SectionTitle>
-            Recorrido · {waypoints.length} {waypoints.length === 1 ? "punto" : "puntos"}
-            {roundTrip && waypoints.length >= 2 ? " · ida y vuelta" : ""}
+            {t("Recorrido", "Route")} · {waypoints.length}{" "}
+            {waypoints.length === 1 ? t("punto", "point") : t("puntos", "points")}
+            {roundTrip && waypoints.length >= 2 ? t(" · ida y vuelta", " · round trip") : ""}
           </SectionTitle>
 
           <ol className="flex flex-col">
@@ -332,8 +340,10 @@ export function RoutePlanner() {
 
           {waypoints.length >= 2 ? (
             <Hint>
-              Un clic en el mapa suma una parada antes del destino. Reordená arrastrando ⠿ o con ↑ ↓;
-              los marcadores se mueven en el mapa.
+              {t(
+                "Un clic en el mapa suma una parada antes del destino. Reordená arrastrando ⠿ o con ↑ ↓; los marcadores se mueven en el mapa.",
+                "A click on the map adds a stop before the destination. Reorder by dragging ⠿ or with ↑ ↓; the markers can be moved on the map.",
+              )}
             </Hint>
           ) : null}
 
@@ -400,7 +410,7 @@ export function RoutePlanner() {
                 onClick={() => setTab("navigate")}
                 className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-rust text-base font-bold text-bg shadow-lg hover:brightness-110"
               >
-                🧭 Navegar esta ruta
+                {t("🧭 Navegar esta ruta", "🧭 Navigate this route")}
               </button>
             ) : null}
             {planEl}
@@ -421,10 +431,20 @@ const DRAG_TYPE = "application/x-mapeando-waypoint";
  * cuando ya hay hábitat y destino: desde ahí manda el veredicto.
  */
 function Steps({ count }: { readonly count: number }) {
+  const t = useT();
   const steps = [
-    ["Marcá el hábitat (A)", "Clic en el mapa, con el modo «＋ Puntos». Es de donde salís."],
-    ["Elegí el destino (B)", "Buscalo por nombre, tocá un sugerido o hacé otro clic en el mapa."],
-    ["Revisá el veredicto", "Sumá paradas, ajustá la hora de salida y mirá si da GO."],
+    [
+      t("Marcá el hábitat (A)", "Mark the habitat (A)"),
+      t("Clic en el mapa, con el modo «＋ Puntos». Es de donde salís.", "Click on the map, in «＋ Points» mode. It is where you leave from."),
+    ],
+    [
+      t("Elegí el destino (B)", "Choose the destination (B)"),
+      t("Buscalo por nombre, tocá un sugerido o hacé otro clic en el mapa.", "Search it by name, tap a suggestion or click on the map again."),
+    ],
+    [
+      t("Revisá el veredicto", "Check the verdict"),
+      t("Sumá paradas, ajustá la hora de salida y mirá si da GO.", "Add stops, adjust the departure time and see whether it is a GO."),
+    ],
   ] as const;
   return (
     <ol className="flex flex-col gap-2">
@@ -480,6 +500,7 @@ function TextButton({
 /** Copia el enlace de la travesía (la URL ya tiene sitio, hora y puntos). */
 function ShareButton() {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const t = useT();
   return (
     <button
       type="button"
@@ -493,10 +514,10 @@ function ShareButton() {
       className="min-h-9 flex-1 rounded-md border border-line text-xs text-fg hover:border-muted"
     >
       {state === "copied"
-        ? "✓ Enlace copiado"
+        ? t("✓ Enlace copiado", "✓ Link copied")
         : state === "failed"
-          ? "Copialo de la barra de direcciones"
-          : "🔗 Copiar enlace"}
+          ? t("Copialo de la barra de direcciones", "Copy it from the address bar")
+          : t("🔗 Copiar enlace", "🔗 Copy link")}
     </button>
   );
 }
@@ -516,16 +537,27 @@ function Hint({ children }: { readonly children: ReactNode }) {
 
 function ExampleNotice() {
   const p = EXAMPLE_PARAMS;
+  const t = useT();
   return (
     <details className="rounded-lg border border-warn/60 bg-warn/10 p-2.5 text-[11px] leading-snug text-fg">
       <summary className="cursor-pointer">
-        <strong className="text-warn">▲ Veredicto de ejemplo: no usar para decidir.</strong>
+        <strong className="text-warn">{t("▲ Veredicto de ejemplo: no usar para decidir.", "▲ Sample verdict: do not use it to decide.")}</strong>
       </summary>
       <p className="mt-1.5">
-        El server todavía no tiene <code>/api/route</code>: esto lo calcula el frontend en línea
-        recta, sin terreno, con parámetros supuestos ({p.walkSpeedKmh} km/h, {p.o2Hours} h de O2 y
-        de batería, reserva de {p.reserveMin} min, luz de {p.daylightLtst.from} a{" "}
-        {p.daylightLtst.to} h LTST). No usa la carga del equipo: eso lo calcula el server con Pandolf.
+        {t(
+          <>
+            El server todavía no tiene <code>/api/route</code>: esto lo calcula el frontend en línea
+            recta, sin terreno, con parámetros supuestos ({p.walkSpeedKmh} km/h, {p.o2Hours} h de O2 y
+            de batería, reserva de {p.reserveMin} min, luz de {p.daylightLtst.from} a{" "}
+            {p.daylightLtst.to} h LTST). No usa la carga del equipo: eso lo calcula el server con Pandolf.
+          </>,
+          <>
+            The server does not have <code>/api/route</code> yet: this is calculated by the frontend in a
+            straight line, without terrain, with assumed parameters ({p.walkSpeedKmh} km/h, {p.o2Hours} h of O2
+            and battery, {p.reserveMin} min reserve, daylight from {p.daylightLtst.from} to{" "}
+            {p.daylightLtst.to} h LTST). It does not use the equipment load: the server calculates that with Pandolf.
+          </>,
+        )}
       </p>
     </details>
   );
@@ -536,20 +568,21 @@ function ExampleNotice() {
  * una vez acá; si una fila difiere, esa fila muestra el suyo (ver StopCard).
  */
 function SourcesRow({ stop, leg }: { readonly stop: RouteStop; readonly leg: RouteLeg | undefined }) {
+  const t = useT();
   const items: [string, MeasuredValue][] = [
     ["O2", stop.o2_remaining],
-    ["Batería", stop.battery_remaining],
-    ["Dosis", stop.dose_accumulated],
+    [t("Batería", "Battery"), stop.battery_remaining],
+    [t("Dosis", "Dose"), stop.dose_accumulated],
   ];
   if (leg) {
-    items.push(["Distancia y rumbo", leg.distance], ["Duración", leg.duration]);
+    items.push([t("Distancia y rumbo", "Distance and bearing"), leg.distance], [t("Duración", "Duration"), leg.duration]);
   }
   return (
     <details className="rounded-lg border border-line p-2.5 text-[11px]">
-      <summary className="cursor-pointer text-muted">De dónde sale cada número</summary>
+      <summary className="cursor-pointer text-muted">{t("De dónde sale cada número", "Where each number comes from")}</summary>
       <ul className="mt-2 flex flex-col gap-1.5">
         <li className="flex items-center justify-between gap-2">
-          <span className="text-muted">Horas (LTST)</span>
+          <span className="text-muted">{t("Horas (LTST)", "Times (LTST)")}</span>
           <ProvenanceBadge source={MARS24_LTST} />
         </li>
         {items.map(([label, v]) => (
@@ -600,6 +633,7 @@ function StopCard({
   const roundTrip = usePlan((s) => s.roundTrip);
   const hasDwell = isStation || (roundTrip && label.kind === "destination");
   const departAt = usePlan((s) => s.departAt);
+  const t = useT();
 
   return (
     <div
@@ -613,7 +647,7 @@ function StopCard({
             e.dataTransfer.setData(DRAG_TYPE, waypoint.id);
             e.dataTransfer.effectAllowed = "move";
           }}
-          title="Arrastrar para reordenar"
+          title={t("Arrastrar para reordenar", "Drag to reorder")}
           aria-hidden
           className="-ml-1 cursor-grab px-0.5 text-muted select-none active:cursor-grabbing"
         >
@@ -639,15 +673,18 @@ function StopCard({
             <span className="font-mono">{formatLatLon(waypoint)}</span>
           </span>
         </button>
-        <IconButton label="Quitar" onClick={() => removePoint(waypoint.id)}>
+        <IconButton label={t("Quitar", "Remove")} onClick={() => removePoint(waypoint.id)}>
           ✕
         </IconButton>
       </div>
 
       {outside ? (
         <p role="alert" className="mt-2 rounded-md bg-alert/15 p-1.5 text-[11px] text-fg">
-          <strong className="text-alert">✕ Sin terreno de 1 m real.</strong> Este punto queda fuera
-          del DTM HiRISE: movelo o quitalo antes de confiar en la ruta.
+          <strong className="text-alert">{t("✕ Sin terreno de 1 m real.", "✕ No real 1 m terrain.")}</strong>{" "}
+          {t(
+            "Este punto queda fuera del DTM HiRISE: movelo o quitalo antes de confiar en la ruta.",
+            "This point is outside the HiRISE DTM: move it or remove it before trusting the route.",
+          )}
         </p>
       ) : null}
 
@@ -662,8 +699,8 @@ function StopCard({
               type="text"
               value={waypoint.task}
               onChange={(e) => updatePoint(waypoint.id, { task: e.target.value })}
-              placeholder={isStation ? "Tarea (ej. tomar muestra)" : "Tarea (opcional)"}
-              aria-label={`Tarea en ${label.long}`}
+              placeholder={isStation ? t("Tarea (ej. tomar muestra)", "Task (e.g. take a sample)") : t("Tarea (opcional)", "Task (optional)")}
+              aria-label={`${t("Tarea en", "Task at")} ${label.long}`}
               className="min-h-9 min-w-0 flex-1 rounded-md border border-line bg-bg px-2 text-xs text-fg placeholder:text-muted/70"
             />
             {hasDwell ? (
@@ -676,7 +713,7 @@ function StopCard({
                   onChange={(e) =>
                     updatePoint(waypoint.id, { dwellMin: Math.max(0, Number(e.target.value) || 0) })
                   }
-                  aria-label={`Minutos en ${label.long}`}
+                  aria-label={`${t("Minutos en", "Minutes at")} ${label.long}`}
                   className="min-h-9 w-16 rounded-md border border-line bg-bg px-1.5 text-right font-mono text-xs text-fg"
                 />
                 min
@@ -684,12 +721,12 @@ function StopCard({
             ) : null}
           </div>
           <div className="flex items-center gap-1 text-[11px] text-muted">
-            <span>Orden:</span>
-            <IconButton label="Subir" disabled={index === 0} onClick={() => shiftPoint(waypoint.id, -1)}>
+            <span>{t("Orden:", "Order:")}</span>
+            <IconButton label={t("Subir", "Move up")} disabled={index === 0} onClick={() => shiftPoint(waypoint.id, -1)}>
               ↑
             </IconButton>
             <IconButton
-              label="Bajar"
+              label={t("Bajar", "Move down")}
               disabled={index === total - 1}
               onClick={() => shiftPoint(waypoint.id, 1)}
             >
@@ -697,7 +734,9 @@ function StopCard({
             </IconButton>
           </div>
           {waypoint.placeId && !place ? (
-            <p className="text-[11px] text-muted">Lugar {waypoint.placeId} (el índice de lugares no cargó)</p>
+            <p className="text-[11px] text-muted">
+              {t(`Lugar ${waypoint.placeId} (el índice de lugares no cargó)`, `Place ${waypoint.placeId} (the places index did not load)`)}
+            </p>
           ) : null}
           {place ? <PlaceCard place={place} /> : null}
           <StationPhoto
@@ -714,7 +753,7 @@ function StopCard({
           onClick={() => setOpenStop(index)}
           className="mt-1.5 text-[11px] text-rust hover:underline"
         >
-          {hasDwell ? "Tarea, minutos y fotos ›" : "Tarea y fotos ›"}
+          {hasDwell ? t("Tarea, minutos y fotos ›", "Task, minutes and photos ›") : t("Tarea y fotos ›", "Task and photos ›")}
         </button>
       )}
     </div>
@@ -732,6 +771,7 @@ function ReturnCard({
   readonly reference: RouteStop | undefined;
 }) {
   const label = stopLabel(total - 1, total, true);
+  useT();
   return (
     <div className="rounded-lg border border-dashed border-line p-2.5">
       <div className="flex items-center gap-2">
@@ -760,16 +800,17 @@ function StopValues({
   readonly reference: RouteStop | undefined;
 }) {
   const badgeFor = (v: MeasuredValue, ref: MeasuredValue | undefined) => repeatedBadge(v, ref);
+  const t = useT();
   const times = [
-    ["Llega", stop.arrive_utc],
-    ["Sale", stop.depart_utc],
+    [t("Llega", "Arrives"), stop.arrive_utc],
+    [t("Sale", "Leaves"), stop.depart_utc],
   ] as const;
   return (
     <div className="mt-2 flex flex-col gap-1.5">
       <p className="flex flex-wrap gap-x-3 text-xs">
         {times.map(([what, utc]) =>
           utc ? (
-            <span key={what} title={`Tu hora: ${earthShort(utc)}`}>
+            <span key={what} title={`${t("Tu hora", "Your time")}: ${earthShort(utc)}`}>
               <span className="text-muted">{what} </span>
               <span className="font-mono">{ltstShort(utc, stop.lon)}</span>
               <span className="text-[10px] text-muted"> LTST</span>
@@ -786,7 +827,7 @@ function StopValues({
             badge={badgeFor(stop.o2_remaining, reference?.o2_remaining)}
           />
         </dd>
-        <dt className="text-muted">Batería</dt>
+        <dt className="text-muted">{t("Batería", "Battery")}</dt>
         <dd className="text-right">
           <Measure
             data={stop.battery_remaining}
@@ -794,7 +835,7 @@ function StopValues({
             badge={badgeFor(stop.battery_remaining, reference?.battery_remaining)}
           />
         </dd>
-        <dt className="text-muted">Dosis acum.</dt>
+        <dt className="text-muted">{t("Dosis acum.", "Cumul. dose")}</dt>
         <dd className="text-right">
           <Measure
             data={stop.dose_accumulated}
@@ -811,25 +852,27 @@ function StopValues({
 function LegRow({ leg, reference }: { readonly leg: RouteLeg; readonly reference: RouteLeg | undefined }) {
   const color = LEG_CLASS_COLOR[leg.class];
   const same = (v: MeasuredValue, r: MeasuredValue | undefined) => repeatedBadge(v, r);
+  const t = useT();
+  const tr = useTr();
   return (
     <div
       className={`ml-[1.35rem] flex flex-col gap-0.5 border-l-4 py-2 pl-4 text-[11px] ${leg.class === "unknown" ? "border-dashed" : ""}`}
       style={{ borderColor: color }}
     >
       <span className="font-semibold" style={{ color }}>
-        {LEG_CLASS_LABEL[leg.class]}
+        {tr(LEG_CLASS_LABEL[leg.class])}
       </span>
       <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted">
         <Measure data={{ ...leg.distance, unit: null }} format={formatDistanceM} badge={same(leg.distance, reference?.distance)} />
         ·
         <Measure data={{ ...leg.duration, unit: null }} format={formatMinutes} badge={same(leg.duration, reference?.duration)} />
         ·
-        <span>rumbo</span>
+        <span>{t("rumbo", "bearing")}</span>
         <Measure data={{ ...leg.bearing, unit: null }} format={formatBearing} badge={same(leg.bearing, reference?.bearing)} />
       </span>
       {/* Measure también cuando falta: el badge dice de dónde tendría que salir. */}
       <span className="flex items-center gap-1 text-muted">
-        Pendiente máx.
+        {t("Pendiente máx.", "Max. slope")}
         <Measure data={leg.max_slope} format={(v) => v.toFixed(0)} />
       </span>
     </div>

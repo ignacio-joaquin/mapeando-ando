@@ -11,6 +11,7 @@ import { LEG_CLASS_COLOR, LEG_CLASS_LABEL } from "../map/route";
 import { useDismiss } from "./useDismiss";
 import { ContactLayerRow } from "./route/HabitatContact";
 import { useContact } from "../state/contact";
+import { useT, useTr } from "../i18n/lang";
 
 const GROUP_LABEL: Record<LayerGroup, string> = {
   relieve: "Relieve",
@@ -34,15 +35,18 @@ function useLayersOn(): number {
  */
 export function LayersPanel() {
   const on = useLayersOn();
+  const t = useT();
   return (
     <aside
-      aria-label="Capas del mapa"
+      aria-label={t("Capas del mapa", "Map layers")}
       data-edu="right"
       className="hidden w-80 shrink-0 flex-col border-l border-line bg-panel md:order-3 lg:flex"
     >
       <header className="flex items-center justify-between gap-2 border-b border-line px-3 py-2.5">
-        <h2 className="text-base font-bold">Capas</h2>
-        <span className="text-[11px] text-muted">{on} prendidas</span>
+        <h2 className="text-base font-bold">{t("Capas", "Layers")}</h2>
+        <span className="text-[11px] text-muted">
+          {on} {t("prendidas", "on")}
+        </span>
       </header>
       <div data-edu="layers" className="min-h-0 flex-1 overflow-y-auto p-3">
         <LayerStack />
@@ -60,6 +64,7 @@ export function LayersButton() {
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => setOpen(false));
   const on = useLayersOn();
+  const t = useT();
   // Sin la columna de la derecha, una lección que señala las capas abre el desplegable.
   const lessonShows = useLessonShows([EDU_TARGET.LAYERS]);
   useEffect(() => {
@@ -75,7 +80,7 @@ export function LayersButton() {
         className="flex min-h-10 items-center gap-2 rounded-lg border border-line bg-panel/95 px-2.5 text-sm font-semibold shadow-lg backdrop-blur hover:border-muted aria-expanded:border-rust"
       >
         <span aria-hidden>▤</span>
-        Capas
+        {t("Capas", "Layers")}
         <span className="hidden rounded-full bg-line px-1.5 text-[11px] font-normal text-muted tabular-nums sm:inline">
           {on}
         </span>
@@ -102,17 +107,20 @@ export function LayerStack() {
   const terrain = useStore((s) => s.terrain);
   const terrainError = useStore((s) => s.terrainError);
   const zoom = useStore((s) => s.view?.zoom ?? null);
+  const t = useT();
+  const tr = useTr();
 
   return (
     <div className="flex flex-col gap-5">
       {terrainError ? (
         <p role="alert" className="rounded-md border border-alert bg-alert/10 p-2 text-xs text-fg">
-          <strong className="text-alert">⚠ </strong>No se pudo leer el índice de capas: {terrainError}
+          <strong className="text-alert">⚠ </strong>
+          {t("No se pudo leer el índice de capas", "Could not read the layer index")}: {tr(terrainError)}
         </p>
       ) : null}
       {(Object.keys(GROUP_LABEL) as LayerGroup[]).map((group) => (
         <section key={group}>
-          <GroupTitle>{GROUP_LABEL[group]}</GroupTitle>
+          <GroupTitle>{tr(GROUP_LABEL[group])}</GroupTitle>
           <ul className="flex flex-col divide-y divide-line/60">
             {LAYERS.filter((l) => l.group === group && !l.hidden).map((spec) => {
               const state = layers[spec.id];
@@ -150,8 +158,8 @@ export function LayerStack() {
                       className="size-4 shrink-0 accent-rust"
                     />
                     <span>
-                      {spec.label}
-                      {spec.unit ? <span className="ml-1 text-xs text-muted">({spec.unit})</span> : null}
+                      {tr(spec.label)}
+                      {spec.unit ? <span className="ml-1 text-xs text-muted">({tr(spec.unit)})</span> : null}
                     </span>
                   </label>
                   <div className="pl-6.5">
@@ -161,15 +169,20 @@ export function LayerStack() {
                   {disabled ? (
                     <p className="mt-1 pl-6.5 text-[11px] text-warn" title={failed ?? undefined}>
                       {failed
-                        ? `⚠ Falló en el pipeline: volver a correr ${spec.script ?? "precompute.py"}.`
-                        : "Esperando la salida del pipeline."}
+                        ? t(
+                            `⚠ Falló en el pipeline: volver a correr ${spec.script ?? "precompute.py"}.`,
+                            `⚠ Failed in the pipeline: rerun ${spec.script ?? "precompute.py"}.`,
+                          )
+                        : t("Esperando la salida del pipeline.", "Waiting for the pipeline output.")}
                     </p>
                   ) : null}
 
                   {tooFar ? (
                     <p role="status" className="mt-1 pl-6.5 text-[11px] text-warn">
-                      🔍 Acercá el mapa para verla: aparece desde el zoom {minzoom} (ahora{" "}
-                      {zoom.toFixed(1)}).
+                      {t(
+                        `🔍 Acercá el mapa para verla: aparece desde el zoom ${minzoom} (ahora ${zoom.toFixed(1)}).`,
+                        `🔍 Zoom in to see it: it appears from zoom ${minzoom} (now ${zoom.toFixed(1)}).`,
+                      )}
                     </p>
                   ) : null}
 
@@ -183,13 +196,13 @@ export function LayerStack() {
                               className="inline-block size-2.5 rounded-sm border border-line"
                               style={{ background: stop.color }}
                             />
-                            {stop.label}
+                            {tr(stop.label)}
                           </li>
                         ))}
                       </ul>
-                      {resolution ? <p className="text-[10px] text-muted">{resolution}</p> : null}
+                      {resolution ? <p className="text-[10px] text-muted">{tr(resolution)}</p> : null}
                       <label className="flex items-center gap-2">
-                        <span className="sr-only">Opacidad de {spec.label}</span>
+                        <span className="sr-only">{t("Opacidad de", "Opacity of")} {tr(spec.label)}</span>
                         <input
                           type="range"
                           min={0}
@@ -212,7 +225,7 @@ export function LayerStack() {
         </section>
       ))}
       <section>
-        <GroupTitle>Señal</GroupTitle>
+        <GroupTitle>{t("Señal", "Signal")}</GroupTitle>
         <ContactLayerRow />
       </section>
       <PlacePins />
@@ -233,16 +246,20 @@ function PlacePins() {
   const places = useStore((s) => s.places);
   const placesError = useStore((s) => s.placesError);
   const placeKinds = useStore((s) => s.placeKinds);
+  const t = useT();
+  const tr = useTr();
   const togglePlaceKind = useStore((s) => s.togglePlaceKind);
   const counts = new Map<string, number>();
   for (const p of places?.places ?? []) counts.set(p.kind, (counts.get(p.kind) ?? 0) + 1);
 
   return (
     <section>
-      <GroupTitle>Lugares en el mapa</GroupTitle>
+      <GroupTitle>{t("Lugares en el mapa", "Places on the map")}</GroupTitle>
       {places === null ? (
         <p className="text-[11px] text-warn">
-          {placesError ? "No se pudo leer el índice de lugares." : "Esperando la salida del pipeline (places.json)."}
+          {placesError
+            ? t("No se pudo leer el índice de lugares.", "Could not read the places index.")
+            : t("Esperando la salida del pipeline (places.json).", "Waiting for the pipeline output (places.json).")}
         </p>
       ) : (
         <>
@@ -269,14 +286,16 @@ function PlacePins() {
                     >
                       {style.glyph}
                     </span>
-                    <span className="truncate first-letter:uppercase">{KIND_LABEL[kind]}</span>
+                    <span className="truncate first-letter:uppercase">{tr(KIND_LABEL[kind])}</span>
                     <span className="ml-auto text-[11px] text-muted tabular-nums">{n}</span>
                   </label>
                 </li>
               );
             })}
           </ul>
-          <p className="mt-1 text-[11px] text-muted">Tocá un pin para ver su ficha y sumarlo a la travesía.</p>
+          <p className="mt-1 text-[11px] text-muted">
+            {t("Tocá un pin para ver su ficha y sumarlo a la travesía.", "Tap a pin to see its card and add it to the traverse.")}
+          </p>
         </>
       )}
     </section>
@@ -285,9 +304,11 @@ function PlacePins() {
 
 /** Qué significa el color de cada tramo de la ruta dibujada. */
 function RouteLegend() {
+  const t = useT();
+  const tr = useTr();
   return (
     <section>
-      <GroupTitle>Tramos de la ruta</GroupTitle>
+      <GroupTitle>{t("Tramos de la ruta", "Route segments")}</GroupTitle>
       <ul className="grid grid-cols-2 gap-x-2 gap-y-1">
         {(Object.keys(LEG_CLASS_COLOR) as (keyof typeof LEG_CLASS_COLOR)[]).map((k) => (
           <li key={k} className="flex items-center gap-2 text-[11px] text-muted">
@@ -296,8 +317,8 @@ function RouteLegend() {
               className={`inline-block h-1 w-5 shrink-0 rounded ${k === "unknown" ? "opacity-70" : ""}`}
               style={{ background: LEG_CLASS_COLOR[k] }}
             />
-            {LEG_CLASS_LABEL[k]}
-            {k === "unknown" ? " (punteada)" : ""}
+            {tr(LEG_CLASS_LABEL[k])}
+            {k === "unknown" ? t(" (punteada)", " (dashed)") : ""}
           </li>
         ))}
       </ul>

@@ -13,6 +13,7 @@ import { usePlan } from "../../state/plan";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { formatDistanceM, formatMinutes } from "./format";
+import { tNow, useT, useTr } from "../../i18n/lang";
 
 /**
  * Indicaciones paso a paso, como en Google Maps pero sin GPS: cada paso nombra
@@ -30,38 +31,51 @@ interface Props {
   readonly example?: boolean;
 }
 
-const pct = (v: number) => `${Math.round(v * 100)} % del trecho`;
+const pct = (v: number) => `${Math.round(v * 100)} % ${tNow("del trecho", "of the stretch")}`;
 
 export function DirectionsList({ route, example = false }: Props) {
   const roundTrip = usePlan((s) => s.roundTrip);
   const steps = routeSteps(route);
   const stops = route.stops.length;
+  const t = useT();
 
   return (
     <section aria-labelledby="indicaciones-titulo" className="flex flex-col gap-2">
       <div>
         <h3 id="indicaciones-titulo" className="text-xs font-semibold tracking-wide text-muted uppercase">
-          Indicaciones{steps.length ? ` · ${steps.length} ${steps.length === 1 ? "paso" : "pasos"}` : ""}
+          {t("Indicaciones", "Directions")}
+          {steps.length ? ` · ${steps.length} ${steps.length === 1 ? t("paso", "step") : t("pasos", "steps")}` : ""}
         </h3>
         <p className="text-[11px] text-muted">
-          Sin GPS ni brújula: cada paso nombra algo que vas a ver desde ahí.
+          {t(
+            "Sin GPS ni brújula: cada paso nombra algo que vas a ver desde ahí.",
+            "No GPS or compass: each step names something you will see from there.",
+          )}
         </p>
       </div>
 
       {steps.length === 0 ? (
         <p className="rounded border border-line p-2 text-[11px] text-warn">
-          Falta el dato: el server todavía no calcula indicaciones para esta ruta.
+          {t(
+            "Falta el dato: el server todavía no calcula indicaciones para esta ruta.",
+            "Missing data: the server does not calculate directions for this route yet.",
+          )}
         </p>
       ) : (
         <>
           {example ? (
             <p className="rounded border border-warn/60 bg-warn/10 p-2 text-[11px] text-fg">
-              El planificador de ejemplo no evalúa qué se ve: solo da el respaldo por rumbo. Las
-              indicaciones con landmarks las calcula el server.
+              {t(
+                "El planificador de ejemplo no evalúa qué se ve: solo da el respaldo por rumbo. Las indicaciones con landmarks las calcula el server.",
+                "The sample planner does not evaluate what is visible: it only gives the bearing fallback. Directions with landmarks are calculated by the server.",
+              )}
             </p>
           ) : steps.every((s) => isFallback(s.direction.kind)) ? (
             <p className="rounded border border-warn/60 bg-warn/10 p-2 text-[11px] text-fg">
-              Ningún paso tiene un landmark: todos son de respaldo, por rumbo. Cada uno dice por qué.
+              {t(
+                "Ningún paso tiene un landmark: todos son de respaldo, por rumbo. Cada uno dice por qué.",
+                "No step has a landmark: all are fallbacks, by bearing. Each one says why.",
+              )}
             </p>
           ) : null}
           <ol className="flex flex-col gap-2">
@@ -73,7 +87,7 @@ export function DirectionsList({ route, example = false }: Props) {
               return (
                 <li key={li}>
                   <p className="mb-1 text-[10px] font-semibold tracking-wide text-muted uppercase">
-                    {from.short} → {to.short} · {from.long} a {to.long.toLowerCase()}
+                    {from.short} → {to.short} · {from.long} {t("a", "to")} {to.long.toLowerCase()}
                   </p>
                   <ol className="flex flex-col gap-1.5">
                     {legSteps.map((st) => (
@@ -85,7 +99,10 @@ export function DirectionsList({ route, example = false }: Props) {
             })}
           </ol>
           <p className="text-[10px] text-muted">
-            Pasá el mouse por un paso para verlo en el mapa; tocalo para encuadrarlo.
+            {t(
+              "Pasá el mouse por un paso para verlo en el mapa; tocalo para encuadrarlo.",
+              "Hover over a step to see it on the map; tap it to frame it.",
+            )}
           </p>
         </>
       )}
@@ -100,6 +117,8 @@ function StepItem({ step }: { readonly step: RouteStep }) {
   const fallback = isFallback(d.kind);
   const isActive = active?.index === step.index;
   const pinned = isActive && active.pinned;
+  const t = useT();
+  const tr = useTr();
 
   const hover = (on: boolean) => {
     const cur = usePlan.getState().activeStep;
@@ -138,7 +157,7 @@ function StepItem({ step }: { readonly step: RouteStep }) {
           {fallback ? (
             <span className="mb-0.5 block text-[10px] font-semibold tracking-wide text-warn uppercase">
               <span aria-hidden>{DIRECTION_ICON[d.kind]} </span>
-              {FALLBACK_LABEL[d.kind] ?? "Respaldo"}
+              {tr(FALLBACK_LABEL[d.kind] ?? "Respaldo")}
             </span>
           ) : null}
           <span className="flex gap-1.5 text-sm leading-snug text-fg">
@@ -147,21 +166,21 @@ function StepItem({ step }: { readonly step: RouteStep }) {
                 {DIRECTION_ICON[d.kind]}
               </span>
             ) : null}
-            <span>{d.text}</span>
+            <span>{tr(d.text)}</span>
           </span>
         </span>
       </button>
 
       {d.checks && d.checks.length > 0 ? (
         <div className="mt-2 ml-7">
-          <p className="text-[10px] font-semibold tracking-wide text-muted uppercase">Vas bien si</p>
+          <p className="text-[10px] font-semibold tracking-wide text-muted uppercase">{t("Vas bien si", "You're on track if")}</p>
           <ul className="mt-0.5 flex flex-col gap-1">
             {d.checks.map((c, k) => (
               <li key={k} className="flex items-start gap-1.5 text-xs leading-snug text-fg/90">
                 <span aria-hidden className="w-3 shrink-0 text-center text-muted">
                   {CHECK_ICON[c.kind]}
                 </span>
-                <span className="min-w-0 flex-1">{c.text}</span>
+                <span className="min-w-0 flex-1">{tr(c.text)}</span>
                 <ProvenanceBadge source={c} />
               </li>
             ))}
@@ -172,7 +191,7 @@ function StepItem({ step }: { readonly step: RouteStep }) {
       {d.until ? (
         <p className="mt-2 ml-7 flex items-start gap-1.5 rounded border border-line bg-bg/60 px-2 py-1 text-xs leading-snug text-fg">
           <span aria-hidden className="text-rust">■</span>
-          <span>{d.until.text}</span>
+          <span>{tr(d.until.text)}</span>
         </p>
       ) : null}
 
@@ -180,19 +199,19 @@ function StepItem({ step }: { readonly step: RouteStep }) {
         {d.landmark ? (
           <span className="flex flex-wrap items-center gap-1.5">
             <span className="font-semibold text-fg/90">{d.landmark.name}</span>
-            <span>· {LANDMARK_CATALOG_LABEL[d.landmark.source]}</span>
+            <span>· {tr(LANDMARK_CATALOG_LABEL[d.landmark.source])}</span>
             <ProvenanceBadge source={LANDMARK_SOURCE[d.landmark.source]} align="left" />
           </span>
         ) : null}
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {!fallback ? (
             <span className="inline-flex items-center gap-1.5">
-              visible
+              {t("visible", "visible")}
               <Measure data={{ ...d.visible_fraction, unit: null }} format={pct} align="left" />
             </span>
           ) : null}
           <span className="inline-flex items-center gap-1.5">
-            trecho
+            {t("trecho", "stretch")}
             <Measure data={{ ...d.distance, unit: null }} format={formatDistanceM} align="left" />
           </span>
           {d.duration ? (

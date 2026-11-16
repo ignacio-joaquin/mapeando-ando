@@ -4,9 +4,10 @@ import { earthShort, ltstShort } from "../components/route/format";
 import { usePlan } from "../state/plan";
 import { useEdu, type Prediction, type PredictionRecord } from "../state/edu";
 import { useStore } from "../state/store";
+import { trNow, useT } from "../i18n/lang";
 import {
   lessonById,
-  LESSONS,
+  getLessons,
   PREDICTABLE,
   setupAt,
   type Lesson,
@@ -42,6 +43,8 @@ import {
 export function EduOverlay() {
   const open = useEdu((s) => s.open);
   const lessonId = useEdu((s) => s.lessonId);
+  // Las lecciones se arman por idioma: suscribirse al idioma para rearmarlas.
+  useT();
   const lesson = lessonById(lessonId);
   if (!open) return null;
   return lesson ? <LessonCoach key={lesson.id} lesson={lesson} /> : <LessonPicker />;
@@ -50,6 +53,7 @@ export function EduOverlay() {
 /** Botón del encabezado que abre y cierra el modo. */
 export function EduToggle() {
   const open = useEdu((s) => s.open);
+  const t = useT();
   const { setOpen, exit } = useEdu.getState();
   return (
     <button
@@ -66,8 +70,8 @@ export function EduToggle() {
       }
     >
       <span aria-hidden>🎓</span>
-      <span className="ml-1 hidden sm:inline">{open ? "Salir del entrenamiento" : "Entrenamiento"}</span>
-      <span className="sr-only sm:hidden">{open ? "Salir del entrenamiento" : "Entrenamiento"}</span>
+      <span className="ml-1 hidden sm:inline">{open ? t("Salir del entrenamiento", "Exit training") : t("Entrenamiento", "Training")}</span>
+      <span className="sr-only sm:hidden">{open ? t("Salir del entrenamiento", "Exit training") : t("Entrenamiento", "Training")}</span>
     </button>
   );
 }
@@ -76,6 +80,7 @@ export function EduToggle() {
 
 function LessonPicker() {
   const done = useEdu((s) => s.done);
+  const t = useT();
   const { start, setOpen } = useEdu.getState();
   const ready = useDataReady();
   // Una misión que necesita datos que el server no tiene se puede abrir, pero
@@ -83,8 +88,8 @@ function LessonPicker() {
   const missingFor = (l: Lesson): readonly LessonNeed[] => (l.requires ?? []).filter((n) => ready[n] === false);
   // La primera misión, si se puede, es la de cambiar solo la hora: es la más
   // simple de las que muestran que el mapa depende del tiempo.
-  const ordered = ready.shadows ? [...LESSONS].sort((a, b) => Number(b.id === "reloj") - Number(a.id === "reloj")) : LESSONS;
-  const count = LESSONS.filter((l) => done[l.id]).length;
+  const ordered = ready.shadows ? [...getLessons()].sort((a, b) => Number(b.id === "reloj") - Number(a.id === "reloj")) : getLessons();
+  const count = getLessons().filter((l) => done[l.id]).length;
   const next = ordered.find((l) => !done[l.id] && missingFor(l).length === 0);
   const firstRef = useRef<HTMLButtonElement>(null);
 
@@ -110,22 +115,25 @@ function LessonPicker() {
           <span aria-hidden className="text-5xl leading-none">🧑‍🚀</span>
           <div className="flex-1">
             <h2 id="edu-picker-title" className="text-2xl font-black tracking-tight">
-              Entrenamiento de EVA
+              {t("Entrenamiento de EVA", "EVA training")}
             </h2>
             <p className="mt-1 text-sm leading-relaxed text-fg">
-              Aprendé a planear una salida a la superficie de Marte. En cada misión usás el planificador
-              real, con datos de la NASA, y cada número te dice de dónde sale: lo medido, lo calculado y lo
-              que supuso el equipo.
+              {t(
+                "Aprendé a planear una salida a la superficie de Marte. En cada misión usás el planificador real, con datos de la NASA, y cada número te dice de dónde sale: lo medido, lo calculado y lo que supuso el equipo.",
+                "Learn to plan a walk on the surface of Mars. Each mission uses the real planner, with NASA data, and every number tells you where it comes from: what was measured, what was computed and what the team assumed.",
+              )}
             </p>
             <p className="mt-1 text-xs text-muted">
-              El veredicto GO / NO-GO es de nuestro modelo, no una evaluación de la NASA. Tu travesía queda
-              guardada: cuando salgas del entrenamiento, vuelve.
+              {t(
+                "El veredicto GO / NO-GO es de nuestro modelo, no una evaluación de la NASA. Tu travesía queda guardada: cuando salgas del entrenamiento, vuelve.",
+                "The GO / NO-GO verdict comes from our model, not from a NASA assessment. Your traverse is saved: it comes back when you leave training.",
+              )}
             </p>
           </div>
           <button
             type="button"
             onClick={() => setOpen(false)}
-            aria-label="Cerrar el entrenamiento"
+            aria-label={t("Cerrar el entrenamiento", "Close training")}
             className="grid size-10 shrink-0 place-items-center rounded-full border border-line text-lg text-muted hover:text-fg"
           >
             ✕
@@ -137,14 +145,14 @@ function LessonPicker() {
             className="h-2.5 flex-1 overflow-hidden rounded-full bg-bg"
             role="progressbar"
             aria-valuemin={0}
-            aria-valuemax={LESSONS.length}
+            aria-valuemax={getLessons().length}
             aria-valuenow={count}
-            aria-label="Misiones completadas"
+            aria-label={t("Misiones completadas", "Missions completed")}
           >
-            <div className="h-full rounded-full bg-ok transition-all" style={{ width: `${(count / LESSONS.length) * 100}%` }} />
+            <div className="h-full rounded-full bg-ok transition-all" style={{ width: `${(count / getLessons().length) * 100}%` }} />
           </div>
           <span className="font-semibold">
-            {count} de {LESSONS.length}
+            {count} {t("de", "of")} {getLessons().length}
           </span>
         </div>
 
@@ -167,22 +175,24 @@ function LessonPicker() {
                       {l.icon}
                     </span>
                     {done[l.id] ? (
-                      <span className="rounded-full bg-ok/20 px-2 py-0.5 text-xs font-bold text-ok">✓ hecha</span>
+                      <span className="rounded-full bg-ok/20 px-2 py-0.5 text-xs font-bold text-ok">✓ {t("hecha", "done")}</span>
                     ) : isNext ? (
                       <span className="rounded-full bg-rust/25 px-2 py-0.5 text-xs font-bold text-fg">
-                        {count === 0 ? "empezá acá" : "la que sigue"}
+                        {count === 0 ? t("empezá acá", "start here") : t("la que sigue", "up next")}
                       </span>
                     ) : null}
                   </span>
                   <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">
-                    {l.id === "mision" ? "Misión final" : `Misión ${i + 1}`} · {l.steps.length} pasos
+                    {l.id === "mision" ? t("Misión final", "Final mission") : t(`Misión ${i + 1}`, `Mission ${i + 1}`)} · {l.steps.length}{" "}
+                    {t("pasos", "steps")}
                   </span>
                   <span className="text-base leading-snug font-bold text-fg">{l.title}</span>
                   <span className="text-sm leading-snug text-muted">{l.tagline}</span>
                   {missing.length > 0 ? (
                     <span className="mt-1 rounded-lg border border-warn/60 bg-warn/10 px-2 py-1 text-xs text-fg">
                       <span aria-hidden>⏳ </span>
-                      Espera datos que el server todavía no tiene: {missing.map((n) => NEED_LABEL[n]).join(", ")}.
+                      {t("Espera datos que el server todavía no tiene: ", "Waiting for data the server doesn't have yet: ")}
+                      {missing.map((n) => t(NEED_LABEL[n], NEED_LABEL_EN[n])).join(", ")}.
                     </span>
                   ) : null}
                 </button>
@@ -191,7 +201,7 @@ function LessonPicker() {
           })}
         </ol>
 
-        <p className="text-[11px] text-muted">Prototipo educativo, no software de vuelo.</p>
+        <p className="text-[11px] text-muted">{t("Prototipo educativo, no software de vuelo.", "Educational prototype, not flight software.")}</p>
       </section>
     </div>
   );
@@ -220,11 +230,17 @@ const NEED_LABEL: Record<LessonNeed, string> = {
   places: "los lugares de este sitio",
 };
 
+const NEED_LABEL_EN: Record<LessonNeed, string> = {
+  shadows: "this site's shadows",
+  places: "this site's places",
+};
+
 // ------------------------------------------------------------------ lección
 
 function LessonCoach({ lesson }: { readonly lesson: Lesson }) {
   const stepIndex = useEdu((s) => s.step);
   const prediction = useEdu((s) => s.prediction);
+  const t = useT();
   const index = Math.min(stepIndex, lesson.steps.length - 1);
   const step = lesson.steps[index]!;
   const setup = setupAt(lesson, index);
@@ -266,9 +282,9 @@ function LessonCoach({ lesson }: { readonly lesson: Lesson }) {
       >
         <span aria-hidden className="text-2xl leading-none">{lesson.icon}</span>
         <span>
-          Paso {index + 1} de {lesson.steps.length}: {step.title}
+          {t(`Paso ${index + 1} de ${lesson.steps.length}`, `Step ${index + 1} of ${lesson.steps.length}`)}: {step.title}
         </span>
-        <span className="text-rust">abrir ▴</span>
+        <span className="text-rust">{t("abrir ▴", "open ▴")}</span>
       </button>
     );
   }
@@ -312,6 +328,7 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
   const prediction = useEdu((s) => s.prediction);
   const done = useEdu((s) => s.done);
   const skipped = useEdu((s) => s.skipped);
+  const t = useT();
   const { goTo, skip, predict, complete, exit } = useEdu.getState();
   const last = index >= lesson.steps.length - 1;
 
@@ -354,8 +371,8 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
         <button
           type="button"
           onClick={onMinimize}
-          aria-label="Achicar la tarjeta (Esc)"
-          title="Achicar (Esc)"
+          aria-label={t("Achicar la tarjeta (Esc)", "Minimize the card (Esc)")}
+          title={t("Achicar (Esc)", "Minimize (Esc)")}
           className="grid size-9 place-items-center rounded-full text-lg text-muted hover:bg-line hover:text-fg"
         >
           ▾
@@ -363,8 +380,8 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
         <button
           type="button"
           onClick={exit}
-          aria-label="Volver a las misiones"
-          title="Volver a las misiones"
+          aria-label={t("Volver a las misiones", "Back to missions")}
+          title={t("Volver a las misiones", "Back to missions")}
           className="grid size-9 place-items-center rounded-full text-lg text-muted hover:bg-line hover:text-fg"
         >
           ✕
@@ -380,7 +397,8 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
         {step.kind === "task" ? (
           <div className="rounded-xl border-2 border-rust/60 bg-rust/10 p-3">
             <p className="text-[11px] font-bold tracking-wide text-rust uppercase">
-              <span aria-hidden>🎯 </span>Tu misión
+              <span aria-hidden>🎯 </span>
+              {t("Tu misión", "Your mission")}
             </p>
             <p className="mt-0.5 text-sm font-semibold">{step.goal}</p>
           </div>
@@ -391,23 +409,27 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
 
         {example ? (
           <Banner tone="warn">
-            Esta ruta la calculó el planificador de ejemplo, no el real. Con esos números la lección no te
-            puede corregir.
+            {t(
+              "Esta ruta la calculó el planificador de ejemplo, no el real. Con esos números la lección no te puede corregir.",
+              "This route was computed by the example planner, not the real one. With those numbers the lesson can't check your work.",
+            )}
           </Banner>
         ) : step.kind === "task" && check ? (
           loading ? (
             <p role="status" className="flex items-center gap-2 text-sm text-muted">
-              <span aria-hidden className="edu-spin inline-block">◌</span> Calculando tu ruta…
+              <span aria-hidden className="edu-spin inline-block">◌</span> {t("Calculando tu ruta…", "Computing your route…")}
             </p>
           ) : check.blocked ? (
             <Banner tone="warn">
-              <strong>Con los datos de hoy no se puede. </strong>
-              {check.hint} Podés saltear el paso, pero la misión no va a quedar como hecha.
+              <strong>{t("Con los datos de hoy no se puede. ", "Can't be done with today's data. ")}</strong>
+              {check.hint}{" "}
+              {t("Podés saltear el paso, pero la misión no va a quedar como hecha.", "You can skip the step, but the mission won't count as done.")}
             </Banner>
           ) : check.done ? (
             <div role="status" className="edu-pop rounded-xl border-2 border-ok bg-ok/15 p-3 text-sm">
               <p className="text-base font-black text-ok">
-                <span aria-hidden>🎉 </span>¡Lo lograste!
+                <span aria-hidden>🎉 </span>
+                {t("¡Lo lograste!", "You did it!")}
               </p>
               {check.hint ? <p className="mt-1">{check.hint}</p> : null}
             </div>
@@ -437,24 +459,29 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
             <span className="inline-block transition group-open:rotate-90" aria-hidden>
               ▸
             </span>{" "}
-            Más a fondo
+            {t("Más a fondo", "In depth")}
           </summary>
           <div className="flex flex-col gap-2 px-3 pb-3 text-[13px] leading-relaxed">{step.body(ctx)}</div>
         </details>
 
         {missing.length > 0 ? (
           <p className="text-xs text-warn">
-            ⚠ Este paso usa {missing.length === 1 ? "la capa" : "las capas"} {missing.join(", ")}, que el server
-            todavía no tiene.
+            {t(
+              `⚠ Este paso usa ${missing.length === 1 ? "la capa" : "las capas"} ${missing.join(", ")}, que el server todavía no tiene.`,
+              `⚠ This step uses the ${missing.length === 1 ? "layer" : "layers"} ${missing.map(trNow).join(", ")}, which the server doesn't have yet.`,
+            )}
           </p>
         ) : null}
         {lockZoom ? (
           <p className="text-xs text-muted">
-            <span aria-hidden>🔒 </span>Zoom trabado para que mires esto: podés mover el mapa.
+            <span aria-hidden>🔒 </span>
+            {t("Zoom trabado para que mires esto: podés mover el mapa.", "Zoom locked so you look at this: you can still pan the map.")}
           </p>
         ) : null}
         {skipped && last ? (
-          <p className="text-xs text-muted">Salteaste un paso por falta de datos: esta misión no va a quedar como hecha.</p>
+          <p className="text-xs text-muted">
+            {t("Salteaste un paso por falta de datos: esta misión no va a quedar como hecha.", "You skipped a step for lack of data: this mission won't count as done.")}
+          </p>
         ) : null}
       </div>
 
@@ -465,7 +492,7 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
           onClick={() => goTo(index - 1)}
           className="min-h-11 rounded-full border border-line px-4 text-sm text-muted hover:text-fg disabled:opacity-30"
         >
-          Atrás
+          {t("Atrás", "Back")}
         </button>
         {check?.blocked && !canAdvance && !last ? (
           <button
@@ -473,7 +500,7 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
             onClick={() => skip(index + 1)}
             className="min-h-11 rounded-full border border-warn px-4 text-sm text-fg"
           >
-            Saltear
+            {t("Saltear", "Skip")}
           </button>
         ) : null}
         <button
@@ -489,9 +516,15 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
           }}
           className="ml-auto min-h-11 rounded-full bg-rust px-6 text-sm font-bold text-bg shadow transition hover:brightness-110 disabled:bg-line disabled:text-muted disabled:shadow-none"
         >
-          {last ? (done[lesson.id] ? "Terminar" : "¡Terminar misión!") : index === 0 ? "¡Vamos!" : "Siguiente"}
+          {last
+            ? done[lesson.id]
+              ? t("Terminar", "Finish")
+              : t("¡Terminar misión!", "Finish mission!")
+            : index === 0
+              ? t("¡Vamos!", "Let's go!")
+              : t("Siguiente", "Next")}
         </button>
-        <p className="w-full text-[10px] text-muted">Prototipo educativo, no software de vuelo.</p>
+        <p className="w-full text-[10px] text-muted">{t("Prototipo educativo, no software de vuelo.", "Educational prototype, not flight software.")}</p>
       </footer>
     </section>
   );
@@ -504,6 +537,7 @@ function CoachCard({ rect, anchorIsMap, lesson, index, step, ctx, example, loadi
 function PresetBlock({ preset, ctx }: { readonly preset: Preset; readonly ctx: CardProps["ctx"] }) {
   const siteId = useStore((s) => s.activeSiteId);
   const [error, setError] = useState<string | null>(null);
+  const t = useT();
   if (siteId !== preset.site) return null;
   const active = presetActive(ctx.waypoints, preset);
   const real = active ? ctx.route?.verdict.limiting_factor : undefined;
@@ -517,20 +551,31 @@ function PresetBlock({ preset, ctx }: { readonly preset: Preset; readonly ctx: C
         >
           <span aria-hidden className="text-xl leading-none">🧭</span>
           <span>
-            <span className="block text-xs font-semibold text-muted">¿No encontrás uno? Probá este escenario:</span>
+            <span className="block text-xs font-semibold text-muted">
+              {t("¿No encontrás uno? Probá este escenario:", "Can't find one? Try this scenario:")}
+            </span>
             <span className="block font-semibold">{preset.label}</span>
           </span>
         </button>
       ) : real === undefined ? null : real === preset.expect ? (
         <p className="text-xs text-muted">
-          <span aria-hidden>🧭 </span>Escenario armado con lugares reales del sitio. El planificador confirma que limita{" "}
-          <strong className="text-fg">{FACTOR_LABEL[preset.expect].toLowerCase()}</strong>.
+          <span aria-hidden>🧭 </span>
+          {t(
+            "Escenario armado con lugares reales del sitio. El planificador confirma que limita ",
+            "Scenario built from real places at the site. The planner confirms the limit is ",
+          )}
+          <strong className="text-fg">{trNow(FACTOR_LABEL[preset.expect]).toLowerCase()}</strong>.
         </p>
       ) : (
         <p className="text-xs text-warn">
-          ⚠ Con los datos de hoy, este escenario no muestra lo que esperábamos: limita{" "}
-          {real ? FACTOR_LABEL[real].toLowerCase() : "nada que se pueda nombrar"}, no{" "}
-          {FACTOR_LABEL[preset.expect].toLowerCase()}.
+          {t(
+            `⚠ Con los datos de hoy, este escenario no muestra lo que esperábamos: limita ${
+              real ? FACTOR_LABEL[real].toLowerCase() : "nada que se pueda nombrar"
+            }, no ${FACTOR_LABEL[preset.expect].toLowerCase()}.`,
+            `⚠ With today's data, this scenario doesn't show what we expected: the limit is ${
+              real ? trNow(FACTOR_LABEL[real]).toLowerCase() : "nothing nameable"
+            }, not ${trNow(FACTOR_LABEL[preset.expect]).toLowerCase()}.`,
+          )}
         </p>
       )}
       {error ? <p className="text-xs text-warn">⚠ {error}</p> : null}
@@ -548,11 +593,13 @@ function DepartSlider() {
   const [base] = useState(() => usePlan.getState().departAt.getTime());
   const offset = Math.round((departAt.getTime() - base) / 60_000);
   const inRange = Math.abs(offset) <= 12 * 60;
+  const t = useT();
   return (
     <label className="flex flex-col gap-1 rounded-xl border border-line bg-bg/50 p-3 text-sm">
       <span className="flex items-baseline justify-between gap-2">
         <span className="font-semibold">
-          <span aria-hidden>🕑 </span>Hora de salida
+          <span aria-hidden>🕑 </span>
+          {t("Hora de salida", "Departure time")}
         </span>
         <span className="font-mono text-base text-rust">
           {origin ? `${ltstShort(departAt, origin.lon)} LTST` : earthShort(departAt)}
@@ -566,20 +613,21 @@ function DepartSlider() {
         value={inRange ? offset : 0}
         onChange={(e) => usePlan.getState().setDepartAt(new Date(base + Number(e.target.value) * 60_000))}
         className="w-full accent-rust"
-        aria-valuetext={origin ? `${ltstShort(departAt, origin.lon)} hora solar local` : earthShort(departAt)}
+        aria-valuetext={origin ? `${ltstShort(departAt, origin.lon)} ${t("hora solar local", "local solar time")}` : earthShort(departAt)}
       />
       <span className="flex justify-between text-[11px] text-muted">
-        <span>12 h antes</span>
-        <span>{origin ? "hora solar en el hábitat" : "marcá el hábitat para ver la hora solar"}</span>
-        <span>12 h después</span>
+        <span>{t("12 h antes", "12 h earlier")}</span>
+        <span>{origin ? t("hora solar en el hábitat", "solar time at the habitat") : t("marcá el hábitat para ver la hora solar", "mark the habitat to see solar time")}</span>
+        <span>{t("12 h después", "12 h later")}</span>
       </span>
     </label>
   );
 }
 
 function Dots({ total, current }: { readonly total: number; readonly current: number }) {
+  const t = useT();
   return (
-    <p className="mt-1 flex items-center gap-1" aria-label={`Paso ${current + 1} de ${total}`}>
+    <p className="mt-1 flex items-center gap-1" aria-label={t(`Paso ${current + 1} de ${total}`, `Step ${current + 1} of ${total}`)}>
       {Array.from({ length: total }, (_, i) => (
         <span
           key={i}
@@ -620,11 +668,14 @@ const FACTOR_ICON: Partial<Record<Prediction, string>> = {
 };
 
 function PredictBlock({ question, prediction, onPredict, hasRoute, reveal }: PredictProps) {
+  const t = useT();
   if (prediction !== null) return <div className="edu-pop flex flex-col gap-2 text-sm">{reveal}</div>;
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="mb-1 text-sm font-semibold">{question}</legend>
-      {!hasRoute ? <p className="text-xs text-muted">Primero armá una ruta (la respuesta sigue tapada).</p> : null}
+      {!hasRoute ? (
+        <p className="text-xs text-muted">{t("Primero armá una ruta (la respuesta sigue tapada).", "First build a route (the answer stays hidden).")}</p>
+      ) : null}
       <div className="grid grid-cols-2 gap-2">
         {PREDICTABLE.map((f) => (
           <button
@@ -635,7 +686,7 @@ function PredictBlock({ question, prediction, onPredict, hasRoute, reveal }: Pre
             className="flex min-h-11 items-center gap-2 rounded-xl border-2 border-line px-3 py-2 text-left text-sm font-semibold transition hover:border-rust hover:bg-rust/10 disabled:opacity-40"
           >
             <span aria-hidden className="text-xl leading-none">{FACTOR_ICON[f]}</span>
-            {FACTOR_LABEL[f]}
+            {trNow(FACTOR_LABEL[f])}
           </button>
         ))}
       </div>

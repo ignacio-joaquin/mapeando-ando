@@ -1,5 +1,6 @@
 import type { DataValue } from "../domain/provenance";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { useLocale, useT } from "../i18n/lang";
 
 /**
  * Número visible con su procedencia. Es la forma de mostrar cualquier valor
@@ -18,15 +19,16 @@ interface Props {
   readonly align?: "left" | "right";
 }
 
-const defaultFormat = (v: number) => v.toLocaleString("es-AR", { maximumFractionDigits: 2 });
-
 export function Measure({
   data,
-  format = defaultFormat,
+  format,
   badge = "inline",
   size = "sm",
   align = "right",
 }: Props) {
+  const t = useT();
+  const locale = useLocale();
+  const fmt = format ?? ((v: number) => v.toLocaleString(locale, { maximumFractionDigits: 2 }));
   const missing = data.value === null;
 
   return (
@@ -34,7 +36,7 @@ export function Measure({
       <span
         className={`font-mono ${size === "lg" ? "text-base" : "text-xs"} ${missing ? "text-warn" : ""}`}
       >
-        {data.value === null ? "falta el dato" : format(data.value)}
+        {data.value === null ? t("falta el dato", "missing data") : fmt(data.value)}
         {data.value !== null && data.unit ? (
           <span className="ml-0.5 text-muted">{data.unit}</span>
         ) : null}

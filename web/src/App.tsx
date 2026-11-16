@@ -29,12 +29,14 @@ import { useFreshRoute, usePlan } from "./state/plan";
 import { insideCoverage } from "./map/coverage";
 import { EduOverlay } from "./edu/EduOverlay";
 import { useHabitatContact } from "./components/route/HabitatContact";
+import { tNow, useT } from "./i18n/lang";
 
 export function App() {
   const [sites, setSites] = useState<readonly SiteSummary[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeSiteId = useStore((s) => s.activeSiteId);
+  const t = useT();
   const setAvailability = useStore((s) => s.setAvailability);
   const setTerrain = useStore((s) => s.setTerrain);
   const setPlaces = useStore((s) => s.setPlaces);
@@ -64,7 +66,12 @@ export function App() {
           // switchSite (no clear) deja el plan ya en el sitio nuevo: si no, el efecto de
           // RoutePlanner lo ve distinto, resetea la travesía y borra este aviso.
           plan.switchSite(first.id);
-          plan.setNotice(`El enlace pedía el sitio "${wanted}", que no existe: abrí ${first.name}.`);
+          plan.setNotice(
+            tNow(
+              `El enlace pedía el sitio "${wanted}", que no existe: abrí ${first.name}.`,
+              `The link asked for site "${wanted}", which does not exist: opened ${first.name}.`,
+            ),
+          );
         }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -170,7 +177,7 @@ export function App() {
                 </>
               ) : (
                 <p className="p-6 text-sm text-muted">
-                  {error ? "No se pudo leer el inventario de sitios." : "Cargando sitios…"}
+                  {error ? t("No se pudo leer el inventario de sitios.", "Could not read the site inventory.") : t("Cargando sitios…", "Loading sites…")}
                 </p>
               )}
             </div>
@@ -198,6 +205,7 @@ export function App() {
 function MapOverlays({ site }: { readonly site: SiteSummary }) {
   const view = useStore((s) => s.view);
   const pitched = (view?.pitch ?? 0) > 0.5;
+  const t = useT();
   return (
     <>
       <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-start gap-2 pr-12">
@@ -207,7 +215,10 @@ function MapOverlays({ site }: { readonly site: SiteSummary }) {
         </div>
         {site.files_ok === 0 ? (
           <p className="pointer-events-auto max-w-xs rounded-md border border-warn/60 bg-panel/95 px-2 py-1 text-[11px] text-warn shadow-lg">
-            Sin datos descargados de {site.name}: el mapa muestra el recuadro del sitio, no imagen real.
+            {t(
+              `Sin datos descargados de ${site.name}: el mapa muestra el recuadro del sitio, no imagen real.`,
+              `No data downloaded for ${site.name}: the map shows the site box, not a real image.`,
+            )}
           </p>
         ) : null}
         <Inspector center={site.center} siteId={site.id} />
@@ -218,7 +229,7 @@ function MapOverlays({ site }: { readonly site: SiteSummary }) {
         {/* Con la cámara inclinada la escala cambia de punta a punta de la
             pantalla: una barra fija mentiría. */}
         {pitched ? (
-          <span className="text-[10px] text-muted">sin barra de escala en 3D</span>
+          <span className="text-[10px] text-muted">{t("sin barra de escala en 3D", "no scale bar in 3D")}</span>
         ) : (
           <ScaleBar lat={view?.lat ?? site.center.lat} zoom={view?.zoom ?? 12} maxPx={110} />
         )}

@@ -16,6 +16,7 @@ import { MARS24_LTST } from "../../domain/provenance";
 import { Measure } from "../Measure";
 import { ProvenanceBadge } from "../ProvenanceBadge";
 import { formatDistanceM, formatMinutes, ltstShort } from "./format";
+import { useT, useTr } from "../../i18n/lang";
 
 /**
  * Navegación paso a paso, la pestaña para usar afuera con el casco puesto: un
@@ -37,6 +38,8 @@ export function NavigationView({ route, example }: Props) {
   const navStep = useUi((s) => s.navStep);
   const { setNavStep } = useUi.getState();
   const roundTrip = usePlan((s) => s.roundTrip);
+  const t = useT();
+  const tr = useTr();
   const i = Math.min(navStep, Math.max(steps.length - 1, 0));
   const step = steps[i];
 
@@ -49,8 +52,8 @@ export function NavigationView({ route, example }: Props) {
   // ← → para avanzar, salvo escribiendo en un campo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       if (e.key === "ArrowRight") setNavStep(Math.min(i + 1, steps.length - 1));
       if (e.key === "ArrowLeft") setNavStep(Math.max(i - 1, 0));
     };
@@ -62,8 +65,11 @@ export function NavigationView({ route, example }: Props) {
     return (
       <div className="flex flex-col gap-3">
         <p className="rounded-lg border border-warn/60 bg-warn/10 p-3 text-xs text-fg">
-          <strong className="text-warn">Falta el dato:</strong> el server no devolvió indicaciones para
-          esta ruta. Seguí los tramos de la pestaña Recorrido por rumbo y distancia.
+          <strong className="text-warn">{t("Falta el dato:", "Missing data:")}</strong>{" "}
+          {t(
+            "el server no devolvió indicaciones para esta ruta. Seguí los tramos de la pestaña Recorrido por rumbo y distancia.",
+            "the server returned no directions for this route. Follow the segments in the Route tab by bearing and distance.",
+          )}
         </p>
       </div>
     );
@@ -83,8 +89,11 @@ export function NavigationView({ route, example }: Props) {
     <div className="flex flex-col gap-3">
       {example ? (
         <p className="rounded-md border border-warn/60 bg-warn/10 p-2 text-[11px] text-fg">
-          <strong className="text-warn">Ejemplo:</strong> el planificador de ejemplo no evalúa qué se
-          ve, solo da el respaldo por rumbo. No usar para decidir.
+          <strong className="text-warn">{t("Ejemplo:", "Sample:")}</strong>{" "}
+          {t(
+            "el planificador de ejemplo no evalúa qué se ve, solo da el respaldo por rumbo. No usar para decidir.",
+            "the sample planner does not evaluate what is visible; it only gives the bearing fallback. Do not use it to decide.",
+          )}
         </p>
       ) : null}
 
@@ -96,14 +105,14 @@ export function NavigationView({ route, example }: Props) {
           {from.short} → {to.short}
         </span>
         <span className="truncate text-muted">
-          {from.long} a {to.long.toLowerCase()}
+          {from.long} {t("a", "to")} {to.long.toLowerCase()}
         </span>
         {leg ? (
           <span
             className="ml-auto shrink-0 font-semibold"
             style={{ color: LEG_CLASS_COLOR[leg.class] }}
           >
-            {LEG_CLASS_LABEL[leg.class]}
+            {tr(LEG_CLASS_LABEL[leg.class])}
           </span>
         ) : null}
       </div>
@@ -111,7 +120,7 @@ export function NavigationView({ route, example }: Props) {
       {/* El paso, en grande */}
       <section
         aria-live="polite"
-        aria-label={`Paso ${i + 1} de ${steps.length}`}
+        aria-label={t(`Paso ${i + 1} de ${steps.length}`, `Step ${i + 1} of ${steps.length}`)}
         className={`relative overflow-hidden rounded-2xl border-2 p-4 shadow-xl ${
           fallback ? "border-dashed border-warn bg-warn/5" : "border-rust bg-gradient-to-b from-rust/20 to-panel"
         }`}
@@ -119,11 +128,11 @@ export function NavigationView({ route, example }: Props) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold tracking-wider text-muted uppercase">
-              Paso {i + 1} de {steps.length}
+              {t(`Paso ${i + 1} de ${steps.length}`, `Step ${i + 1} of ${steps.length}`)}
             </p>
             {fallback ? (
               <p className="mt-0.5 text-[11px] font-bold tracking-wide text-warn uppercase">
-                {DIRECTION_ICON[d.kind]} {FALLBACK_LABEL[d.kind] ?? "Respaldo"}
+                {DIRECTION_ICON[d.kind]} {tr(FALLBACK_LABEL[d.kind] ?? "Respaldo")}
               </p>
             ) : null}
           </div>
@@ -136,26 +145,26 @@ export function NavigationView({ route, example }: Props) {
               {DIRECTION_ICON[d.kind]}
             </span>
           ) : null}
-          {d.text}
+          {tr(d.text)}
         </p>
 
         {d.landmark ? (
           <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
             <span className="font-semibold text-fg">{d.landmark.name}</span>·{" "}
-            {LANDMARK_CATALOG_LABEL[d.landmark.source]}
+            {tr(LANDMARK_CATALOG_LABEL[d.landmark.source])}
             <ProvenanceBadge source={LANDMARK_SOURCE[d.landmark.source]} align="left" />
           </p>
         ) : null}
 
         <dl className="mt-3 flex flex-col gap-1.5">
-          <Stat label="Trecho">
+          <Stat label={t("Trecho", "Stretch")}>
             <Measure data={{ ...d.distance, unit: null }} format={formatDistanceM} size="lg" align="left" />
           </Stat>
-          <Stat label="Tiempo">
+          <Stat label={t("Tiempo", "Time")}>
             {d.duration ? (
               <Measure data={{ ...d.duration, unit: null }} format={formatMinutes} size="lg" align="left" />
             ) : (
-              <span className="font-mono text-base text-warn">falta el dato</span>
+              <span className="font-mono text-base text-warn">{t("falta el dato", "missing data")}</span>
             )}
           </Stat>
         </dl>
@@ -164,14 +173,14 @@ export function NavigationView({ route, example }: Props) {
       {/* Vas bien si… */}
       {d.checks && d.checks.length > 0 ? (
         <section className="rounded-lg border border-line p-3">
-          <h3 className="mb-1.5 text-[11px] font-semibold tracking-wider text-ok uppercase">✓ Vas bien si</h3>
+          <h3 className="mb-1.5 text-[11px] font-semibold tracking-wider text-ok uppercase">{t("✓ Vas bien si", "✓ You're on track if")}</h3>
           <ul className="flex flex-col gap-1.5">
             {d.checks.map((c, k) => (
               <li key={k} className="flex items-start gap-2 text-sm leading-snug">
                 <span aria-hidden className="w-4 shrink-0 text-center text-muted">
                   {CHECK_ICON[c.kind]}
                 </span>
-                <span className="min-w-0 flex-1">{c.text}</span>
+                <span className="min-w-0 flex-1">{tr(c.text)}</span>
                 <ProvenanceBadge source={c} />
               </li>
             ))}
@@ -182,8 +191,8 @@ export function NavigationView({ route, example }: Props) {
       {/* Pará cuando… */}
       {d.until ? (
         <section className="rounded-lg border-2 border-warn bg-warn/10 p-3">
-          <h3 className="mb-1 text-[11px] font-semibold tracking-wider text-warn uppercase">■ Pará cuando</h3>
-          <p className="text-sm leading-snug font-semibold">{d.until.text}</p>
+          <h3 className="mb-1 text-[11px] font-semibold tracking-wider text-warn uppercase">{t("■ Pará cuando", "■ Stop when")}</h3>
+          <p className="text-sm leading-snug font-semibold">{tr(d.until.text)}</p>
         </section>
       ) : null}
 
@@ -197,7 +206,7 @@ export function NavigationView({ route, example }: Props) {
           onClick={() => setNavStep(i - 1)}
           className="min-h-12 flex-1 rounded-xl border border-line text-sm font-semibold hover:border-muted disabled:opacity-30"
         >
-          ← Anterior
+          {t("← Anterior", "← Previous")}
         </button>
         <button
           type="button"
@@ -205,14 +214,16 @@ export function NavigationView({ route, example }: Props) {
           onClick={() => setNavStep(i + 1)}
           className="min-h-12 flex-[2] rounded-xl bg-rust text-base font-bold text-bg shadow-lg hover:brightness-110 disabled:opacity-40"
         >
-          {done ? "✓ Fin de la travesía" : "Siguiente paso →"}
+          {done ? t("✓ Fin de la travesía", "✓ End of the traverse") : t("Siguiente paso →", "Next step →")}
         </button>
       </div>
-      <p className="text-center text-[10px] text-muted">También con las flechas ← → del teclado.</p>
+      <p className="text-center text-[10px] text-muted">{t("También con las flechas ← → del teclado.", "Also with the ← → arrow keys.")}</p>
 
       {/* Todos los pasos */}
       <details className="rounded-lg border border-line p-2.5">
-        <summary className="cursor-pointer text-xs text-muted">Todos los pasos ({steps.length})</summary>
+        <summary className="cursor-pointer text-xs text-muted">
+          {t("Todos los pasos", "All steps")} ({steps.length})
+        </summary>
         <ol className="mt-2 flex flex-col gap-1">
           {steps.map((s) => (
             <li key={s.index}>
@@ -226,7 +237,7 @@ export function NavigationView({ route, example }: Props) {
                 <span aria-hidden className="w-4 shrink-0 text-center text-rust">
                   {DIRECTION_ICON[s.direction.kind]}
                 </span>
-                <span className="min-w-0 flex-1">{s.direction.text}</span>
+                <span className="min-w-0 flex-1">{tr(s.direction.text)}</span>
               </button>
             </li>
           ))}
@@ -246,15 +257,16 @@ function Progress({
   readonly current: number;
   readonly onPick: (i: number) => void;
 }) {
+  const t = useT();
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between text-[11px] text-muted">
-        <span className="font-semibold text-fg">🧭 Navegación</span>
+        <span className="font-semibold text-fg">{t("🧭 Navegación", "🧭 Navigation")}</span>
         <span className="tabular-nums">
           {Math.round(((current + 1) / steps.length) * 100)} %
         </span>
       </div>
-      <ol className="flex gap-1" aria-label="Progreso de la travesía">
+      <ol className="flex gap-1" aria-label={t("Progreso de la travesía", "Traverse progress")}>
         {steps.map((s) => {
           const fb = isFallback(s.direction.kind);
           const state = s.index < current ? "done" : s.index === current ? "now" : "todo";
@@ -263,7 +275,7 @@ function Progress({
               <button
                 type="button"
                 onClick={() => onPick(s.index)}
-                aria-label={`Ir al paso ${s.index + 1}`}
+                aria-label={t(`Ir al paso ${s.index + 1}`, `Go to step ${s.index + 1}`)}
                 aria-current={state === "now" ? "step" : undefined}
                 className={`block h-2.5 w-full rounded-full transition-colors ${
                   state === "now" ? "bg-rust ring-2 ring-rust/40" : state === "done" ? "bg-rust/60" : "bg-line"
@@ -289,6 +301,7 @@ function Progress({
 function Dial({ step }: { readonly step: RouteStep }) {
   const d = step.direction;
   const rel = d.relative_bearing_deg;
+  const t = useT();
   const size = 88;
   const r = 36;
   const c = size / 2;
@@ -306,7 +319,9 @@ function Dial({ step }: { readonly step: RouteStep }) {
       viewBox={`0 0 ${size} ${size}`}
       role="img"
       aria-label={
-        d.clock ? `El landmark está a las ${d.clock}, mirando hacia donde caminás` : "Sin landmark: guiate por el respaldo"
+        d.clock
+          ? t(`El landmark está a las ${d.clock}, mirando hacia donde caminás`, `The landmark is at ${d.clock} o'clock, facing where you walk`)
+          : t("Sin landmark: guiate por el respaldo", "No landmark: follow the fallback")
       }
       className="shrink-0"
     >
@@ -332,7 +347,7 @@ function Dial({ step }: { readonly step: RouteStep }) {
       ) : null}
       {d.clock ? (
         <text x={c} y={size - 4} textAnchor="middle" className="fill-fg text-[10px] font-bold">
-          a las {d.clock}
+          {t(`a las ${d.clock}`, `${d.clock} o'clock`)}
         </text>
       ) : null}
     </svg>
@@ -350,16 +365,17 @@ function Stat({ label, children }: { readonly label: string; readonly children: 
 
 /** Al terminar un tramo: a qué hora llegás y con cuánto. */
 function Arrival({ stop, label, short }: { readonly stop: RouteStop; readonly label: string; readonly short: string }) {
+  const t = useT();
   return (
     <section className="rounded-lg border border-ok/60 bg-ok/10 p-3">
       <h3 className="mb-1.5 flex items-center gap-2 text-sm font-bold">
         <span className="grid size-6 place-items-center rounded-full bg-ok text-xs text-bg">{short}</span>
-        Llegás a {label.toLowerCase()}
+        {t("Llegás a", "You arrive at")} {label.toLowerCase()}
       </h3>
       <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 text-xs">
         {stop.arrive_utc ? (
           <>
-            <dt className="text-muted">Hora</dt>
+            <dt className="text-muted">{t("Hora", "Time")}</dt>
             <dd className="flex items-center justify-end gap-1.5">
               <span className="font-mono">{ltstShort(stop.arrive_utc, stop.lon)}</span>
               <span className="text-muted">LTST</span>
@@ -371,7 +387,7 @@ function Arrival({ stop, label, short }: { readonly stop: RouteStop; readonly la
         <dd className="text-right">
           <Measure data={stop.o2_remaining} format={(v) => v.toFixed(1)} />
         </dd>
-        <dt className="text-muted">Batería</dt>
+        <dt className="text-muted">{t("Batería", "Battery")}</dt>
         <dd className="text-right">
           <Measure data={stop.battery_remaining} format={(v) => v.toFixed(0)} />
         </dd>

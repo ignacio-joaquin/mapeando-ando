@@ -2,6 +2,7 @@ import { MARS_RADIUS_M } from "../mars/constants";
 import { formatDistance, marsMetersPerPixel } from "../mars/geo";
 import { LOCAL_GEOMETRY } from "../domain/provenance";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import { useT } from "../i18n/lang";
 
 /**
  * Barra de escala con el radio de Marte, no el de la Tierra.
@@ -19,6 +20,7 @@ const NICE = [
 ];
 
 export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
+  const t = useT();
   const mpp = marsMetersPerPixel(lat, zoom);
 
   const maxMeters = mpp * maxPx;
@@ -28,7 +30,10 @@ export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
   return (
     <div
       className="pointer-events-none select-none"
-      title={`Esfera IAU Mars 2000, radio ${(MARS_RADIUS_M / 1000).toFixed(2)} km: el mismo de los DTM y de api/terrain.py`}
+      title={t(
+        `Esfera IAU Mars 2000, radio ${(MARS_RADIUS_M / 1000).toFixed(2)} km: el mismo de los DTM y de api/terrain.py`,
+        `IAU Mars 2000 sphere, radius ${(MARS_RADIUS_M / 1000).toFixed(2)} km: the same as the DTMs and api/terrain.py`,
+      )}
     >
       <div className="text-[10px] text-muted">{formatDistance(meters)}</div>
       <div
@@ -36,7 +41,9 @@ export function ScaleBar({ lat, zoom, maxPx = 140 }: Props) {
         style={{ width: `${px}px` }}
       />
       <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted">
-        <span className="hidden sm:inline">escala marciana · R {(MARS_RADIUS_M / 1000).toFixed(1)} km</span>
+        <span className="hidden sm:inline">
+          {t("escala marciana", "Mars scale")} · R {(MARS_RADIUS_M / 1000).toFixed(1)} km
+        </span>
         {/* El badge recibe eventos aunque la barra no, para poder ver el tooltip. */}
         <span className="pointer-events-auto">
           <ProvenanceBadge source={LOCAL_GEOMETRY} align="left" side="top" />

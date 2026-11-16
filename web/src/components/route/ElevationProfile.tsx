@@ -4,6 +4,7 @@ import { EDU_TARGET } from "../../edu/lessons";
 import { useLessonShows } from "../../edu/useLessonShows";
 import { formatDistance } from "../../mars/geo";
 import { SLOPE_CLASSES, slopeClass } from "../../map/layers";
+import { useT, useTr } from "../../i18n/lang";
 
 /**
  * Perfil de elevación de la travesía, coloreado por pendiente.
@@ -32,6 +33,7 @@ export function ElevationProfile({ profile }: { readonly profile: Profile | unde
     if (lessonShows) setOpen(true);
   }, [lessonShows]);
   const missing = (profile?.distance_m.length ?? 0) < 2;
+  const t = useT();
   return (
     <section className="border-t border-line bg-panel">
       <button
@@ -41,8 +43,10 @@ export function ElevationProfile({ profile }: { readonly profile: Profile | unde
         className="flex min-h-9 w-full items-center gap-2 px-3 text-left text-[11px] font-semibold tracking-wider text-muted uppercase hover:text-fg"
       >
         <span aria-hidden className={`transition-transform ${open ? "rotate-90" : ""}`}>›</span>
-        Perfil de elevación
-        {missing ? <span className="font-normal tracking-normal text-warn normal-case">· falta el dato</span> : null}
+        {t("Perfil de elevación", "Elevation profile")}
+        {missing ? (
+          <span className="font-normal tracking-normal text-warn normal-case">· {t("falta el dato", "missing data")}</span>
+        ) : null}
       </button>
       {open ? (
         <div className="px-3 pb-2">
@@ -58,11 +62,15 @@ export function ElevationProfile({ profile }: { readonly profile: Profile | unde
 const PAD = { top: 18, right: 8, bottom: 20, left: 44 };
 
 function ProfileChart({ profile, height = 140 }: Props) {
+  const t = useT();
+  const tr = useTr();
   if (!profile || profile.distance_m.length < 2) {
     return (
       <p className="text-[11px] text-warn">
-        Falta el perfil: lo devuelve el backend al muestrear el DTM sobre la ruta. Con el
-        planificador de ejemplo, o sin el DTM descargado, no se dibuja nada; no se inventa una curva.
+        {t(
+          "Falta el perfil: lo devuelve el backend al muestrear el DTM sobre la ruta. Con el planificador de ejemplo, o sin el DTM descargado, no se dibuja nada; no se inventa una curva.",
+          "The profile is missing: the backend returns it by sampling the DTM along the route. With the sample planner, or without the DTM downloaded, nothing is drawn; no curve is made up.",
+        )}
       </p>
     );
   }
@@ -131,7 +139,7 @@ function ProfileChart({ profile, height = 140 }: Props) {
                 className="inline-block h-0.5 w-3 rounded-full"
                 style={{ background: c.color }}
               />
-              {c.label}
+              {tr(c.label)}
             </li>
           ))}
         </ul>
@@ -139,9 +147,10 @@ function ProfileChart({ profile, height = 140 }: Props) {
 
       {rectas.size > 0 ? (
         <p className="mb-1 text-[11px] text-warn">
-          Sin camino en {[...rectas].map((k) => `el tramo ${k}→${k + 1}`).join(", ")}: se muestra
-          la línea recta medida sobre el terreno (punteada). No es una ruta: marca dónde está lo
-          que bloquea.
+          {t(
+            `Sin camino en ${[...rectas].map((k) => `el tramo ${k}→${k + 1}`).join(", ")}: se muestra la línea recta medida sobre el terreno (punteada). No es una ruta: marca dónde está lo que bloquea.`,
+            `No path on ${[...rectas].map((k) => `segment ${k}→${k + 1}`).join(", ")}: the straight line measured over the terrain is shown (dashed). It is not a route: it marks where the blockage is.`,
+          )}
         </p>
       ) : null}
 
@@ -149,7 +158,10 @@ function ProfileChart({ profile, height = 140 }: Props) {
         viewBox={`0 0 ${w} ${h}`}
         className="h-[110px] w-full sm:h-[140px]"
         role="img"
-        aria-label={`Perfil de elevación de la travesía: ${formatDistance(dMax)} y entre ${Math.round(zMin)} y ${Math.round(zMax)} metros de elevación`}
+        aria-label={t(
+          `Perfil de elevación de la travesía: ${formatDistance(dMax)} y entre ${Math.round(zMin)} y ${Math.round(zMax)} metros de elevación`,
+          `Traverse elevation profile: ${formatDistance(dMax)} and between ${Math.round(zMin)} and ${Math.round(zMax)} meters of elevation`,
+        )}
       >
         {ticksZ.map((z) => (
           <g key={z}>

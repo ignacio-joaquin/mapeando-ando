@@ -1,3 +1,4 @@
+import { localeNow, useT, useTr } from "../../i18n/lang";
 import { useState } from "react";
 import type { RouteSettings as Schema, SettingsGroup } from "../../api/schemas";
 import { usingFixtures } from "../../api/client";
@@ -22,21 +23,29 @@ export function RouteSettings() {
   const state = useSettings((s) => s.schemaState);
   const overrides = useSettings((s) => s.overrides);
   const n = countOverrides(overrides);
+  const t = useT();
+  const tr = useTr();
 
   if (usingFixtures) {
     return (
       <p className="rounded-lg border border-warn/60 bg-warn/10 p-3 text-xs">
-        Sin backend no hay ajustes: el planificador de ejemplo usa parámetros fijos.
+        {t(
+          "Sin backend no hay ajustes: el planificador de ejemplo usa parámetros fijos.",
+          "Without a backend there are no settings: the sample planner uses fixed parameters.",
+        )}
       </p>
     );
   }
-  if (state === "loading") return <p className="text-xs text-muted">Consultando qué se puede ajustar…</p>;
+  if (state === "loading") return <p className="text-xs text-muted">{t("Consultando qué se puede ajustar…", "Checking what can be adjusted…")}</p>;
   if (!schema) {
     return (
       <p className="rounded-lg border border-warn/60 bg-warn/10 p-3 text-xs">
         {state === "error"
-          ? "No se pudo leer qué ajustes acepta el server."
-          : "El server todavía no acepta ajustes (falta GET /api/route/params): la ruta usa los valores del equipo."}
+          ? t("No se pudo leer qué ajustes acepta el server.", "Could not read which settings the server accepts.")
+          : t(
+              "El server todavía no acepta ajustes (falta GET /api/route/params): la ruta usa los valores del equipo.",
+              "The server does not accept settings yet (GET /api/route/params is missing): the route uses the team's values.",
+            )}
       </p>
     );
   }
@@ -45,8 +54,10 @@ export function RouteSettings() {
     <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-3">
         <p className="text-[11px] leading-snug text-muted">
-          Los valores por defecto son del equipo y del traje EMU de la ISS; varios todavía no tienen
-          fuente citable. Si cambiás alguno, el veredicto lo dice.
+          {t(
+            "Los valores por defecto son del equipo y del traje EMU de la ISS; varios todavía no tienen fuente citable. Si cambiás alguno, el veredicto lo dice.",
+            "The default values come from the team and from the ISS EMU suit; several still have no citable source. If you change any, the verdict says so.",
+          )}
         </p>
         <button
           type="button"
@@ -54,14 +65,15 @@ export function RouteSettings() {
           onClick={() => useSettings.getState().reset()}
           className="min-h-8 shrink-0 rounded-md border border-line px-2.5 text-xs text-fg hover:border-rust disabled:opacity-40"
         >
-          Restablecer{n > 0 ? ` (${n})` : ""}
+          {t("Restablecer", "Reset")}
+          {n > 0 ? ` (${n})` : ""}
         </button>
       </div>
 
       {schema.groups.map((g) => (
         <section key={g.id} className="flex flex-col gap-1">
-          <h3 className="text-[11px] font-semibold tracking-wider text-muted uppercase">{g.label ?? g.id}</h3>
-          <p className="mb-1 text-[11px] text-muted">{GROUP_HINT[g.id]}</p>
+          <h3 className="text-[11px] font-semibold tracking-wider text-muted uppercase">{g.label ? tr(g.label) : g.id}</h3>
+          <p className="mb-1 text-[11px] text-muted">{tr(GROUP_HINT[g.id])}</p>
           <ul className="flex flex-col divide-y divide-line/60 rounded-lg border border-line">
             {g.fields.map((f) => (
               <SettingRow key={f.id} group={g.id} field={f} value={overrides[g.id]?.[f.id]} />
@@ -73,7 +85,7 @@ export function RouteSettings() {
   );
 }
 
-const fmt = (v: number) => v.toLocaleString("es-AR", { maximumFractionDigits: 3 });
+const fmt = (v: number) => v.toLocaleString(localeNow(), { maximumFractionDigits: 3 });
 
 function SettingRow({
   group,
@@ -107,6 +119,8 @@ function SettingRow({
     setDraft(null);
   };
   const invalid = draft !== null && parse(draft) === null;
+  const t = useT();
+  const tr = useTr();
 
   return (
     <li className={`flex flex-col gap-1.5 p-2.5 ${changed ? "bg-rust/5" : ""}`}>
@@ -117,8 +131,8 @@ function SettingRow({
               ●
             </span>
           ) : null}
-          {field.label}
-          {changed ? <span className="sr-only"> (cambiado)</span> : null}
+          {tr(field.label)}
+          {changed ? <span className="sr-only">{t(" (cambiado)", " (changed)")}</span> : null}
         </label>
         <span className="flex shrink-0 items-center gap-1">
           <input
@@ -141,14 +155,14 @@ function SettingRow({
               invalid ? "border-alert" : changed ? "border-rust" : "border-line"
             }`}
           />
-          {unit ? <span className="w-9 text-[11px] text-muted">{unit}</span> : <span className="w-9" />}
+          {unit ? <span className="w-9 text-[11px] text-muted">{tr(unit)}</span> : <span className="w-9" />}
         </span>
       </div>
       <p id={`set-${group}-${field.id}-help`} className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
-        <span>{field.help}</span>
+        <span>{tr(field.help)}</span>
         {invalid ? (
           <span className="text-alert">
-            Entre {min !== undefined ? fmt(min) : "−∞"} y {max !== undefined ? fmt(max) : "∞"}.
+            {t("Entre", "Between")} {min !== undefined ? fmt(min) : "−∞"} {t("y", "and")} {max !== undefined ? fmt(max) : "∞"}.
           </span>
         ) : null}
         {changed ? (
@@ -157,7 +171,7 @@ function SettingRow({
             onClick={() => useSettings.getState().set(group, field.id, null)}
             className="text-rust hover:underline"
           >
-            volver a {fmt(field.default)}
+            {t("volver a", "back to")} {fmt(field.default)}
           </button>
         ) : null}
       </p>

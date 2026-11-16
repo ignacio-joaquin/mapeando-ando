@@ -1,3 +1,4 @@
+import { localeNow } from "../../i18n/lang";
 import { ltstAt, formatMarsTime } from "../../mars/mars24";
 import type { SourceInfo } from "../../domain/provenance";
 
@@ -10,7 +11,7 @@ export function ltstShort(iso: string | Date, lon: number): string {
 /** Hora terrestre de esta computadora, "HH:MM". */
 export function earthShort(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString(localeNow(), { hour: "2-digit", minute: "2-digit" });
 }
 
 /** Valor para <input type="datetime-local"> en la zona horaria local. */
@@ -30,9 +31,12 @@ export function formatMinutes(min: number): string {
   return `${h} h ${String(r).padStart(2, "0")} min`;
 }
 
-const COMPASS = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"] as const;
+const COMPASS = {
+  es: ["N", "NE", "E", "SE", "S", "SO", "O", "NO"],
+  en: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+} as const;
 export function formatBearing(deg: number): string {
-  const card = COMPASS[Math.round(deg / 45) % 8] ?? "N";
+  const card = COMPASS[localeNow() === "en-US" ? "en" : "es"][Math.round(deg / 45) % 8] ?? "N";
   return `${String(Math.round(deg)).padStart(3, "0")}° ${card}`;
 }
 

@@ -3,6 +3,7 @@
  * todo número que muestra una lección sale de acá, o sea de la respuesta real.
  * Si el dato falta, devuelven null y la lección dice que falta.
  */
+import { localeNow, tNow } from "../i18n/lang";
 import type { LimitingFactor, MeasuredValue, RouteResponse, SafetyLimit } from "../api/schemas";
 import { marsDistanceM } from "../mars/geo";
 
@@ -16,18 +17,18 @@ export const val = (m: MeasuredValue | undefined | null): number | null => m?.va
 /** Número en castellano, con hasta `digits` decimales. "—" si falta. */
 export function num(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
-  return v.toLocaleString("es-AR", { maximumFractionDigits: digits });
+  return v.toLocaleString(localeNow(), { maximumFractionDigits: digits });
 }
 
 /** "12,3 kg" con la unidad que trae el dato. */
 export function measure(m: MeasuredValue | null | undefined, digits = 1): string {
-  if (!m || m.value === null) return "sin dato";
+  if (!m || m.value === null) return tNow("sin dato", "no data");
   return m.unit ? `${num(m.value, digits)} ${m.unit}` : num(m.value, digits);
 }
 
 /** Margen como porcentaje: 1 − usado/límite. */
 export function marginPct(l: SafetyLimit | null): string {
-  return l?.margin === null || l?.margin === undefined ? "sin evaluar" : `${num(l.margin * 100, 0)} %`;
+  return l?.margin === null || l?.margin === undefined ? tNow("sin evaluar", "not evaluated") : `${num(l.margin * 100, 0)} %`;
 }
 
 /** Distancia caminada (suma de tramos) y en línea recta entre las estaciones, en m. */

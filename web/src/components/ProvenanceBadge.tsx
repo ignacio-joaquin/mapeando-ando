@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { HOW_WE_KNOW, INSTRUMENT_NOTE, PROVENANCE_LABEL, type Provenance, type SourceInfo } from "../domain/provenance";
+import { useT, useTr } from "../i18n/lang";
 
 /**
  * Badge de procedencia: "MRO HiRISE · DERIVED".
@@ -31,7 +32,12 @@ interface Props {
 
 export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Props) {
   const tipId = useId();
-  const who = [source.mission, source.instrument].filter(Boolean).join(" ");
+  const t = useT();
+  const tr = useTr();
+  // Misión e instrumento suelen ser nombres propios; los que no ("geometría
+  // esférica") pasan por el diccionario.
+  const who = [source.mission, source.instrument].filter(Boolean).map((x) => tr(x)).join(" ");
+  const local = t("cálculo local", "local calculation");
 
   return (
     <span
@@ -39,7 +45,7 @@ export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Pr
       aria-describedby={tipId}
       className="group relative inline-flex shrink-0 cursor-help items-center gap-1 rounded border border-line bg-bg/60 px-1.5 py-0.5 text-[10px] leading-none whitespace-nowrap text-muted outline-none focus-visible:ring-1 focus-visible:ring-fg/60"
     >
-      <span className="font-medium text-fg/80">{who || "cálculo local"}</span>
+      <span className="font-medium text-fg/80">{who || local}</span>
       <span
         className={`rounded-sm border px-1 py-px text-[9px] font-semibold tracking-wide ${TONE[source.provenance]}`}
       >
@@ -51,38 +57,42 @@ export function ProvenanceBadge({ source, align = "right", side = "bottom" }: Pr
         role="tooltip"
         className={`invisible absolute z-30 w-60 rounded border border-line bg-panel p-2 text-left text-[11px] leading-snug font-normal whitespace-normal text-fg opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100 group-focus-within:visible group-focus-within:opacity-100 ${align === "right" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
       >
-        <span className="block font-semibold">¿Cómo lo sabemos?</span>
-        <span className="mt-0.5 block">{HOW_WE_KNOW[source.provenance]}</span>
+        <span className="block font-semibold">{t("¿Cómo lo sabemos?", "How do we know?")}</span>
+        <span className="mt-0.5 block">{tr(HOW_WE_KNOW[source.provenance])}</span>
         {source.instrument && INSTRUMENT_NOTE[source.instrument] ? (
-          <span className="mt-1 block text-muted">{INSTRUMENT_NOTE[source.instrument]}</span>
+          <span className="mt-1 block text-muted">{tr(INSTRUMENT_NOTE[source.instrument])}</span>
         ) : null}
         <span className="mt-1.5 block border-t border-line pt-1.5 font-semibold">
-          {PROVENANCE_LABEL[source.provenance]}
-          {who ? ` · ${who}` : " · cálculo local del frontend"}
+          {tr(PROVENANCE_LABEL[source.provenance])}
+          {who ? ` · ${who}` : t(" · cálculo local del frontend", " · local calculation in the browser")}
         </span>
         {source.resolution ? (
-          <span className="block text-muted">Resolución: {source.resolution}</span>
+          <span className="block text-muted">
+            {t("Resolución", "Resolution")}: {tr(source.resolution)}
+          </span>
         ) : null}
         {source.source ? (
-          <span className="mt-1 block text-muted">Fuente: {source.source}</span>
+          <span className="mt-1 block text-muted">
+            {t("Fuente", "Source")}: {tr(source.source)}
+          </span>
         ) : null}
         {source.assumptions && source.assumptions.length > 0 ? (
           <span className="mt-1 block">
-            <span className="block text-muted">Supuestos:</span>
+            <span className="block text-muted">{t("Supuestos", "Assumptions")}:</span>
             {source.assumptions.map((a) => (
               <span key={a} className="block">
-                · {a}
+                · {tr(a)}
               </span>
             ))}
           </span>
         ) : null}
         <a
-          href="https://ciencia.nasa.gov/"
+          href={t("https://ciencia.nasa.gov/", "https://science.nasa.gov/")}
           target="_blank"
           rel="noreferrer"
           className="mt-1.5 block text-rust underline underline-offset-2"
         >
-          Más sobre Marte en ciencia.nasa.gov ↗
+          {t("Más sobre Marte en ciencia.nasa.gov ↗", "More about Mars at science.nasa.gov ↗")}
         </a>
       </span>
     </span>
