@@ -59,7 +59,7 @@ Nada que requiera API key o token en el cliente: **el repo es público**. Sin Ma
 ## 3. Reglas que no se negocian
 
 1. **Ser educado con los servidores de la NASA.** Respetar `Crawl-delay` (PDS: 10 s), un pedido a la vez por host, `User-Agent` identificable, backoff ante 429/503, descarga dirigida. Un pipeline agresivo nos bloquea la IP y termina el proyecto.
-2. **Cero secretos en el repo.** Ni claves, ni tokens, ni el nombre del bucket. Van en `/etc/mapeando.env` o en el rol IAM. La IP del server es la única excepción (2026-11-15): como no hay dominio, es la dirección pública de la demo y va **solo** en el link de demo del README. En el resto del repo (ejemplos, configs, docs, comentarios) se sigue escribiendo `<IP>`.
+2. **Cero secretos en el repo.** Ni claves, ni tokens, ni el nombre del bucket. Van en `/etc/mapeando.env` o en el rol IAM. La IP del server es la única excepción (2026-11-15): como no hay dominio, es la dirección pública de la demo y va **solo** en el link de demo de los README (`README.md` y `README.es.md`). En el resto del repo (ejemplos, configs, docs, comentarios) se sigue escribiendo `<IP>`.
 3. **Nunca escribir dentro del repo en runtime.** El auto-deploy hace `git reset --hard`. Todo dato va bajo `/data`.
 4. **`main` es producción.** Cada push a `main` se despliega solo en menos de un minuto.
 5. **Citar procedencia siempre.** Toda salida declara misión, instrumento y resolución.
@@ -232,6 +232,8 @@ Una pila reutilizada viaja como `MODELED`, con el sol de origen, ΔLs y la difer
 ### Idioma
 
 Código, ids, endpoints y nombres de archivo en **inglés**. Comentarios, docs, commits, PRs y UI en **español**.
+
+Excepción (2026-11-15): `README.md` va en **inglés**, porque Space Apps pide inglés en la página del proyecto y en todo lo que se linkea desde ahí. La versión en español es `README.es.md`: si cambia uno, cambia el otro en el mismo PR.
 
 ---
 

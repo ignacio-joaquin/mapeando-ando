@@ -1,6 +1,6 @@
 # Capas de terreno · pendiente, peligro, térmico y agua
 
-Método, parámetros y limitaciones de las capas de terreno que salen de `pipeline/precompute.py`. El resumen para quien evalúa el proyecto está en el [README](../README.md#supuestos-de-los-modelos); acá está el detalle. Si cambia un parámetro en el código, se actualiza acá en el mismo PR.
+Método, parámetros y limitaciones de las capas de terreno que salen de `pipeline/precompute.py`. El resumen para quien evalúa el proyecto está en el [README](../README.es.md#supuestos-de-los-modelos); acá está el detalle. Si cambia un parámetro en el código, se actualiza acá en el mismo PR.
 
 ## Pendiente (`pipeline/precompute.py`)
 

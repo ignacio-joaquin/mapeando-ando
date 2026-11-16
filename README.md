@@ -1,176 +1,180 @@
 # Mapa Marciano
 
-Mapa de supervivencia para una caminata (EVA) en la superficie de Marte, armado con datos reales de la NASA. Lo hizo el equipo **Mapeando Ando** para el NASA Space Apps Challenge 2026, challenge *Interplanetary Survival Guide: Martian Map*.
+*English · [Español](README.es.md)*
 
-**Demo:** <http://3.22.102.116/> (sin HTTPS: todavía no tenemos dominio)
+A survival map for a spacewalk (EVA) on the surface of Mars, built on real NASA data. Made by team **Mapeando Ando** for the NASA Space Apps Challenge 2026, challenge *Interplanetary Survival Guide: Martian Map*.
 
-**Proyecto en Space Apps:** link pendiente, se completa al publicar el proyecto.
+**Demo:** <http://3.22.102.116/> (no HTTPS: we don't have a domain yet). The app's interface is in Spanish.
 
-> **Prototipo educativo, no software de vuelo.** Los números sirven para entender qué limita una EVA, no para planear una de verdad. La app también lo dice en pantalla.
+**Space Apps project page:** link pending, added once the project is published.
 
-## Índice
+> **Educational prototype, not flight software.** The numbers help you understand what limits an EVA, not plan a real one. The app says so on screen too.
 
-- [Qué hace](#qué-hace)
-- [Cómo leer cada número](#cómo-leer-cada-número)
-- [Datos de la NASA que usamos](#datos-de-la-nasa-que-usamos)
-- [Supuestos de los modelos](#supuestos-de-los-modelos)
-- [Cómo correrlo](#cómo-correrlo)
-- [Estructura del repo](#estructura-del-repo)
-- [Uso de IA](#uso-de-ia)
-- [Créditos](#créditos)
+The detailed method documents in [`docs/`](docs/) are in Spanish. This README summarizes everything needed to trace each number back to its source.
 
-## Qué hace
+## Contents
 
-Responde las preguntas de alguien parado en Marte, con el casco puesto y poco tiempo:
+- [What it does](#what-it-does)
+- [How to read each number](#how-to-read-each-number)
+- [NASA data we use](#nasa-data-we-use)
+- [Model assumptions](#model-assumptions)
+- [How to run it](#how-to-run-it)
+- [Repository layout](#repository-layout)
+- [Use of AI](#use-of-ai)
+- [Credits](#credits)
 
-| Pregunta | Qué muestra la app |
+## What it does
+
+It answers the questions of someone standing on Mars, helmet on and short on time:
+
+| Question | What the app shows |
 |---|---|
-| ¿Puedo pisar acá? | Pendiente y peligro de terreno a 1 m (pendiente + rugosidad + suelo suelto de THEMIS). El corte de "no transitable" es el mismo en el mapa y en el planificador: 25°. |
-| ¿Por dónde voy, y cómo vuelvo? | Planificador 4D: marcás el hábitat, las paradas, el destino y la hora de salida. La API busca la ruta **más segura**, no la más corta: A\* sobre la pendiente, la sombra a la hora en que pasás y la línea de vista al hábitat. Por defecto incluye la vuelta. |
-| ¿Me alcanzan el O2 y la batería? | Consumo del traje tramo por tramo (Pandolf ajustado a 0,38 g), con la carga que elegís llevar. |
-| ¿Cuánta radiación acumulo? | Presupuesto de dosis de la travesía, a partir de la dosis medida por RAD de Curiosity. |
-| ¿Cuánta luz me queda? | Sombras hora por hora calculadas con el terreno y las efemérides SPICE, con un deslizador del Sol en el mapa. |
-| ¿Me escuchan desde el hábitat? | Desde dónde hay línea de vista por radio con el hábitat, y cuántos minutos seguidos se camina sin ella. |
-| ¿Dónde me cubro? | Refugios (lugares con poco cielo visible) y minutos caminando hasta el más cercano. |
-| ¿Cómo me oriento sin GPS? | Indicaciones por trecho mirando el paisaje ("andá hacia el cerro que tenés a las 12, unos 8 min"), con cráteres y cerros que se ven desde 1,7 m de altura, y el Sol y la sombra para confirmar el rumbo. |
+| Can I step here? | Slope and terrain hazard at 1 m (slope + roughness + loose soil from THEMIS). The "impassable" cutoff is the same on the map and in the planner: 25°. |
+| Which way do I go, and how do I get back? | 4D planner: you mark the habitat, the stops, the destination and the departure time. The API finds the **safest** route, not the shortest: A\* over slope, shadow at the time you pass and line of sight to the habitat. The return trip is included by default. |
+| Will my O2 and battery last? | Suit consumption leg by leg (Pandolf adapted to 0.38 g), with the load you choose to carry. |
+| How much radiation will I accumulate? | Dose budget for the traverse, based on the dose measured by Curiosity's RAD. |
+| How much daylight is left? | Hour-by-hour shadows computed from the terrain and SPICE ephemerides, with a Sun slider on the map. |
+| Can the habitat hear me? | Where there is radio line of sight to the habitat, and how many minutes in a row you walk without it. |
+| Where do I take cover? | Shelters (places with little visible sky) and walking minutes to the nearest one. |
+| How do I find my way without GPS? | Directions for each stretch based on the landscape ("head toward the hill at 12 o'clock, about 8 min"), using craters and hills visible from 1.7 m eye height, and the Sun and your shadow to confirm the heading. |
 
-Todo termina en un veredicto **GO / CAUTION / NO-GO** que dice qué límite manda ("Limita: regreso antes del atardecer") y en cuántos escenarios de estrés la ruta sigue en pie. Además: el horizonte en primera persona desde cada parada (Three.js sobre el relieve real) y un modo entrenamiento con lecciones que se corrigen con la respuesta real del planificador.
+Everything ends in a **GO / CAUTION / NO-GO** verdict that names the limit that governs (for example, "limited by: return before sunset") and in how many stress scenarios the route still holds. There is also a first-person horizon view from each stop (Three.js over the real terrain) and a training mode whose lessons are graded against the planner's real response.
 
-Dos sitios: **Jezero** (Perseverance) y **Gale** (Curiosity). Sumar otro es sumar un JSON en `sites/`.
+Two sites: **Jezero** (Perseverance) and **Gale** (Curiosity). Adding another one means adding a JSON file to `sites/`.
 
-## Cómo leer cada número
+## How to read each number
 
-Cada número que muestra la app lleva un badge con su procedencia, la misión y el instrumento (por ejemplo `MRO HiRISE · DERIVED` o `MSL RAD · MODELED`). En el tooltip van la resolución, la fuente y los supuestos.
+Every number in the app carries a badge with its provenance, mission and instrument (for example `MRO HiRISE · DERIVED` or `MSL RAD · MODELED`). The tooltip shows the resolution, the source and the assumptions.
 
-| Badge | Qué quiere decir | Ejemplo |
+| Badge | Meaning | Example |
 |---|---|---|
-| **OBSERVED** | Lo midió un instrumento. | Elevación del DTM de HiRISE, masa de una herramienta de Apollo |
-| **DERIVED** | Cálculo determinista sobre un dato observado. | Pendiente, sombra a una hora dada, posición de un cráter |
-| **MODELED** | Sale de un modelo con supuestos, y los supuestos van a la vista. | O2 consumido, dosis acumulada, minutos al refugio |
-| **ASSUMED** | Valor elegido por el equipo, todavía sin fuente citable. | Pendiente máxima de 25°, 10 min seguidos sin contacto |
+| **OBSERVED** | Measured by an instrument. | HiRISE DTM elevation, mass of an Apollo tool |
+| **DERIVED** | Deterministic calculation from observed data. | Slope, shadow at a given time, crater position |
+| **MODELED** | Comes from a model with assumptions, and the assumptions are shown. | O2 used, accumulated dose, minutes to shelter |
+| **ASSUMED** | Value chosen by the team, with no citable source yet. | 25° maximum slope, 10 minutes in a row without contact |
 
-Si un dato falta, la app dice que falta (`value: null`): nunca lo rellena con un estimado. Con datos a medias responde igual, avisa qué no pudo evaluar ("Ojo: …") y el veredicto pasa a CAUTION.
+If a value is missing, the app says it is missing (`value: null`): it never fills the gap with an estimate. With partial data it still answers, says what it could not evaluate, and the verdict drops to CAUTION.
 
-## Datos de la NASA que usamos
+## NASA data we use
 
-Qué se baja está declarado en [`sites/*.json`](sites/) y en los scripts de `pipeline/fetch_*`. Todo se baja con pedidos dirigidos, un pedido a la vez por servidor y respetando el `Crawl-delay` de PDS (10 s).
+What gets downloaded is declared in [`sites/*.json`](sites/) and in the `pipeline/fetch_*` scripts. Downloads are targeted, one request at a time per server, honoring the PDS `Crawl-delay` (10 s).
 
-| Dato | Fuente | Misión · instrumento | Resolución | Badge en la app | Para qué |
+| Data | Source | Mission · instrument | Resolution | Badge in the app | Used for |
 |---|---|---|---|---|---|
-| Topografía de Jezero | [DTM HiRISE del TRN de Mars 2020](https://planetarymaps.usgs.gov/mosaic/mars2020_trn/HiRISE/JEZ_hirise_soc_006_DTM_MOLAtopography_DeltaGeoid_1m_Eqc_latTs0_lon0_blend40.tif) (USGS), ~21 × 21 km | MRO · HiRISE | 1 m | OBSERVED (elevación) → DERIVED (pendiente, sombreado, curvas, peligro) | La base de casi todo: ruta, sombras, refugios, contacto, relieve 3D |
-| Topografía de Gale | [DEM fusionado de Gale v3](https://planetarymaps.usgs.gov/mosaic/Mars/MSL/MSL_Gale_DEM_Mosaic_1m_v3.tif) (USGS) | MRO · HiRISE; CTX, HRSC y MOLA donde no hay estéreo HiRISE | grilla de 1 m (menos detalle real en las zonas rellenadas) | ídem | ídem |
-| Topografía global | [DEM MOLA + HRSC v2](https://planetarymaps.usgs.gov/mosaic/Mars/HRSC_MOLA_Blend/Mars_HRSC_MOLA_BlendDEM_Global_200mp_v2.tif) (USGS), recortado por sitio | MGS · MOLA + Mars Express · HRSC | 200 m | OBSERVED → DERIVED | Horizonte lejano: la sombra del borde del cráter, el cielo visible para la dosis y el relieve lejano del horizonte en primera persona |
-| Imagen de Jezero | [Ortomosaico HiRISE](https://asc-pds-services.s3.us-west-2.amazonaws.com/mosaic/mars2020_trn/HiRISE/JEZ_hirise_soc_006_orthoMosaic_25cm_Eqc_latTs0_lon0_first.tif) (USGS) | MRO · HiRISE | 25 cm (teselado hasta ~0,64 m/px) | OBSERVED | Fondo del mapa |
-| Imagen de Gale | [Mosaico color HiRISE LRGB](https://asc-pds-services.s3.us-west-2.amazonaws.com/mosaic/Mars/MSL/MSL_Gale_HiRISE-LRGB_78quads_sharp_cog.tif) (USGS) | MRO · HiRISE | — | OBSERVED | Fondo del mapa |
-| Efemérides | [Kernels genéricos de NAIF SPICE](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/): `naif0012.tls`, `pck00011.tpc`, `de440s.bsp` y el último `mar*.bsp` | NASA/JPL · NAIF | — | DERIVED | Posición del Sol para las sombras, el amanecer y el atardecer |
-| Térmico | Mosaicos controlados de THEMIS IR de noche (USGS): [Syrtis Major](https://astrogeo-ard.s3.us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc13_syrtis_major_nir/mc13_syrtis_major_nir.tif) y [Aeolis](https://astrogeo-ard.s3.us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc23_aeolis_nir/mc23_aeolis_nir.tif) | Mars Odyssey · THEMIS | 100 m | OBSERVED (brillo relativo de 8 bits, no temperatura) → MODELED (suelo suelto) | ¿Roca o arena? Sube el peligro de "bajo" a "medio" donde el suelo es probablemente suelto |
-| Radiación | [Dosis en superficie de RAD](https://doi.org/10.1126/science.1244797): 0,64 ± 0,12 mSv/día (Hassler et al. 2014; [`reference/rad_surface_dose.json`](reference/rad_surface_dose.json)) | MSL Curiosity · RAD | una medición en Gale; la capa va a 100 m | MODELED | Presupuesto de dosis de la travesía |
-| Hielo subsuperficial | [SWIM 2.0](https://swim.psi.edu/), composite de consistencia de hielo de 0–1 m | Odyssey (neutrones), MGS TES y THEMIS (térmico), MRO (geomorfología y radar SHARAD) | ~3 km | MODELED | ¿Hay hielo a mano? En los dos sitios no cambia ninguna decisión: la capa está oculta en el mapa |
-| Espectral | CRISM MTRDR (browse de parámetros de resumen) vía el [Orbital Data Explorer](https://ode.rsl.wustl.edu/mars/) de PDS Geosciences | MRO · CRISM | la del producto MTRDR | DERIVED | Señales minerales como destinos posibles: un indicio desde órbita, no una identificación |
-| Nombres de lugares | [Nomenclátor planetario IAU/USGS](https://planetarynames.wr.usgs.gov/) | IAU · USGS | — | DERIVED | Landmarks con nombre para las indicaciones y el buscador |
-| Cráteres | [Base de cráteres de Robbins & Hynek 2012](https://astrogeology.usgs.gov/pygeoapi/collections/mars/robbinsv1) (API OGC de USGS) | Mars Odyssey · THEMIS (mosaico de día con el que se armó la base) | cráteres ≥ 1 km | DERIVED | Landmarks sin nombre para orientarse |
-| Recorrido del rover | Waypoints de MMGIS: [Perseverance](https://mars.nasa.gov/mmgis-maps/M20/Layers/json/M20_waypoints.json), [Ingenuity](https://mars.nasa.gov/mmgis-maps/M20/Layers/json/m20_heli_waypoints.json) y [Curiosity](https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json) | Mars 2020 · MSL | — | DERIVED | Lugares conocidos para buscar y planear (posiciones del rover, aeródromos de Ingenuity) |
-| Muestras | [Ubicación de los tubos de Three Forks](https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_sample_depot_three_forks/miscellaneous/sample_metadata/sample_tube_locations.csv) (PDS Geosciences) | Mars 2020 | posición del rover al soltar cada tubo | DERIVED | El depósito de muestras como destino |
-| Objetivos científicos | Listas de observaciones en PDS Geosciences: [SuperCam](https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_supercam/data_observation_log/m2020_scam_masterlist.csv) y [PIXL](https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_pixl/data_oxides_pmc/collection_data_oxides_pmc_inventory.csv) en Jezero; [ChemCam](https://pds-geosciences.wustl.edu/msl/msl-m-chemcam-libs-4_5-rdr-v1/mslccm_1xxx/document/msl_ccam_obs.csv) y APXS ([soles 0–3076](https://pds-geosciences.wustl.edu/msl/urn-nasa-pds-msl_apxs_supplement_sols_0_3076/data/ds01_2021je007171r.csv), [3054–3712](https://pds-geosciences.wustl.edu/msl/urn-nasa-pds-msl_apxs_supplement_sols_3054_3712/data/ds01_2024.csv)) en Gale | Mars 2020 · SuperCam, PIXL; MSL · ChemCam, APXS | posición medida por APXS, o la del rover al medir (si quedó a más de 10 m, se avisa) | DERIVED | Destinos con nombre donde el rover midió algo |
-| Masas de herramientas | Herramientas de Apollo 16 y 17 (Allton 1989, JSC-23454; *Apollo Lunar Surface Journal*) | Apollo | — | OBSERVED (masa medida), con el supuesto de que un kit marciano pesaría lo mismo | ¿Cuánto O2 me cuesta llevar el taladro? |
+| Jezero topography | [Mars 2020 TRN HiRISE DTM](https://planetarymaps.usgs.gov/mosaic/mars2020_trn/HiRISE/JEZ_hirise_soc_006_DTM_MOLAtopography_DeltaGeoid_1m_Eqc_latTs0_lon0_blend40.tif) (USGS), ~21 × 21 km | MRO · HiRISE | 1 m | OBSERVED (elevation) → DERIVED (slope, hillshade, contours, hazard) | The base for almost everything: route, shadows, shelters, contact, 3D relief |
+| Gale topography | [Gale merged DEM v3](https://planetarymaps.usgs.gov/mosaic/Mars/MSL/MSL_Gale_DEM_Mosaic_1m_v3.tif) (USGS) | MRO · HiRISE; CTX, HRSC and MOLA where there is no HiRISE stereo | 1 m grid (less real detail in filled areas) | same | same |
+| Global topography | [MOLA + HRSC blended DEM v2](https://planetarymaps.usgs.gov/mosaic/Mars/HRSC_MOLA_Blend/Mars_HRSC_MOLA_BlendDEM_Global_200mp_v2.tif) (USGS), cropped per site | MGS · MOLA + Mars Express · HRSC | 200 m | OBSERVED → DERIVED | Far horizon: the crater rim's shadow, visible sky for the dose model and distant relief in the first-person horizon |
+| Jezero imagery | [HiRISE orthomosaic](https://asc-pds-services.s3.us-west-2.amazonaws.com/mosaic/mars2020_trn/HiRISE/JEZ_hirise_soc_006_orthoMosaic_25cm_Eqc_latTs0_lon0_first.tif) (USGS) | MRO · HiRISE | 25 cm (served at up to ~0.64 m/px) | OBSERVED | Map background |
+| Gale imagery | [HiRISE LRGB color mosaic](https://asc-pds-services.s3.us-west-2.amazonaws.com/mosaic/Mars/MSL/MSL_Gale_HiRISE-LRGB_78quads_sharp_cog.tif) (USGS) | MRO · HiRISE | — | OBSERVED | Map background |
+| Ephemerides | [NAIF SPICE generic kernels](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/): `naif0012.tls`, `pck00011.tpc`, `de440s.bsp` and the latest `mar*.bsp` | NASA/JPL · NAIF | — | DERIVED | Sun position for shadows, sunrise and sunset |
+| Thermal | THEMIS nighttime IR controlled mosaics (USGS): [Syrtis Major](https://astrogeo-ard.s3.us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc13_syrtis_major_nir/mc13_syrtis_major_nir.tif) and [Aeolis](https://astrogeo-ard.s3.us-west-2.amazonaws.com/mars/mo/themis/controlled_mosaics/mc23_aeolis_nir/mc23_aeolis_nir.tif) | Mars Odyssey · THEMIS | 100 m | OBSERVED (8-bit relative brightness, not temperature) → MODELED (loose soil) | Rock or sand? Raises the hazard from "low" to "medium" where the soil is probably loose |
+| Radiation | [RAD surface dose](https://doi.org/10.1126/science.1244797): 0.64 ± 0.12 mSv/day (Hassler et al. 2014; [`reference/rad_surface_dose.json`](reference/rad_surface_dose.json)) | MSL Curiosity · RAD | a single measurement at Gale; the layer is at 100 m | MODELED | Dose budget for the traverse |
+| Subsurface ice | [SWIM 2.0](https://swim.psi.edu/), 0–1 m ice consistency composite | Odyssey (neutrons), MGS TES and THEMIS (thermal), MRO (geomorphology and SHARAD radar) | ~3 km | MODELED | Is there ice nearby? At both sites it changes no decision, so the layer is hidden on the map |
+| Spectral | CRISM MTRDR (summary-parameter browse products) through the PDS Geosciences [Orbital Data Explorer](https://ode.rsl.wustl.edu/mars/) | MRO · CRISM | that of the MTRDR product | DERIVED | Mineral signals as possible destinations: a hint from orbit, not an identification |
+| Place names | [IAU/USGS Gazetteer of Planetary Nomenclature](https://planetarynames.wr.usgs.gov/) | IAU · USGS | — | DERIVED | Named landmarks for directions and search |
+| Craters | [Robbins & Hynek 2012 crater database](https://astrogeology.usgs.gov/pygeoapi/collections/mars/robbinsv1) (USGS OGC API) | Mars Odyssey · THEMIS (the daytime mosaic the database was built on) | craters ≥ 1 km | DERIVED | Unnamed landmarks for orientation |
+| Rover traverse | MMGIS waypoints: [Perseverance](https://mars.nasa.gov/mmgis-maps/M20/Layers/json/M20_waypoints.json), [Ingenuity](https://mars.nasa.gov/mmgis-maps/M20/Layers/json/m20_heli_waypoints.json) and [Curiosity](https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json) | Mars 2020 · MSL | — | DERIVED | Known places to search and plan (rover positions, Ingenuity airfields) |
+| Samples | [Three Forks sample tube locations](https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_sample_depot_three_forks/miscellaneous/sample_metadata/sample_tube_locations.csv) (PDS Geosciences) | Mars 2020 | rover position when each tube was dropped | DERIVED | The sample depot as a destination |
+| Science targets | Observation lists in PDS Geosciences: [SuperCam](https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_supercam/data_observation_log/m2020_scam_masterlist.csv) and [PIXL](https://pds-geosciences.wustl.edu/m2020/urn-nasa-pds-mars2020_pixl/data_oxides_pmc/collection_data_oxides_pmc_inventory.csv) at Jezero; [ChemCam](https://pds-geosciences.wustl.edu/msl/msl-m-chemcam-libs-4_5-rdr-v1/mslccm_1xxx/document/msl_ccam_obs.csv) and APXS ([sols 0–3076](https://pds-geosciences.wustl.edu/msl/urn-nasa-pds-msl_apxs_supplement_sols_0_3076/data/ds01_2021je007171r.csv), [3054–3712](https://pds-geosciences.wustl.edu/msl/urn-nasa-pds-msl_apxs_supplement_sols_3054_3712/data/ds01_2024.csv)) at Gale | Mars 2020 · SuperCam, PIXL; MSL · ChemCam, APXS | position measured by APXS, or the rover's position when measuring (flagged if it was more than 10 m away) | DERIVED | Named destinations where the rover measured something |
+| Tool masses | Apollo 16 and 17 tools (Allton 1989, JSC-23454; *Apollo Lunar Surface Journal*) | Apollo | — | OBSERVED (measured mass), assuming a Mars kit would weigh the same | How much O2 does carrying the drill cost? |
 
-La Hora Solar Local y la estación (Ls) del lado del cliente salen del algoritmo [Mars24](https://www.giss.nasa.gov/tools/mars24/) de NASA GISS (Allison & McEwen 2000), el mismo en la API y en el navegador. El chequeo contra SPICE (`pipeline/check_mars24.py`) está armado, pero su referencia todavía no está en el repo.
+Local solar time and season (Ls) come from NASA GISS's [Mars24](https://www.giss.nasa.gov/tools/mars24/) algorithm (Allison & McEwen 2000), the same one in the API and in the browser. A check against SPICE (`pipeline/check_mars24.py`) is in place, but its reference output is not in the repo yet.
 
-**Bajados pero todavía sin usar.** Están en el server pero ningún paso del pipeline los procesa aún, así que la app muestra "falta el dato" donde irían: MEDA (Mars 2020) y REMS (MSL) para las condiciones del día, alertas de clima espacial de DONKI (WSA-Enlil), radargramas de RIMFAX, el campo magnético cortical de Langlais et al. 2019, la composición química de SuperCam, ChemCam y PIXL, y THEMIS de día. Las fotos del rover por parada tienen el contrato definido pero el endpoint no está implementado. Detalle en [`docs/infra y setup.md`](docs/infra%20y%20setup.md#4-datos).
+**Downloaded but not used yet.** These are on the server, but no pipeline step processes them yet, so the app shows "missing data" where they would go: MEDA (Mars 2020) and REMS (MSL) for current conditions, DONKI space-weather alerts (WSA-Enlil), RIMFAX radargrams, the crustal magnetic field from Langlais et al. 2019, SuperCam, ChemCam and PIXL chemistry, and daytime THEMIS. Rover photos for each stop have a defined API contract, but the endpoint is not implemented. Details (in Spanish) in [`docs/infra y setup.md`](docs/infra%20y%20setup.md#4-datos).
 
-## Supuestos de los modelos
+## Model assumptions
 
-Acá está todo número que no sale de una medición. Los **ASSUMED** los eligió el equipo y están para discutirse: cambiar uno es editar una línea de código y la fila del doc que lo explica. Desde la pestaña "Ajustes" del planificador se pueden mover los límites y los pesos de una ruta (salvo la pendiente máxima), y el veredicto avisa que se calculó con ajustes del usuario.
+Every number that does not come from a measurement is listed here. The **ASSUMED** ones were chosen by the team and are open to discussion: changing one means editing one line of code and the row of the doc that explains it. In the planner's settings tab ("Ajustes") a user can change the limits and weights for a route (except the maximum slope), and the verdict then states that it was computed with user settings.
 
-### Límites del veredicto (`api/safety.py`)
+### Verdict limits (`api/safety.py`)
 
-Si se rompe uno, es NO-GO. No se compensan entre sí. Detalle en [`docs/seguridad.md`](docs/seguridad.md).
+Breaking any one of them means NO-GO. They don't offset each other. Details in [`docs/seguridad.md`](docs/seguridad.md).
 
-| Límite | Valor | Badge del valor | Cómo se mide en la ruta |
+| Limit | Value | Badge of the value | How it is measured on the route |
 |---|---|---|---|
-| Pendiente máxima | **25°** | ASSUMED | La pendiente que no se puede esquivar en cada celda del A\* (la f-ésima más alta de sus f × f píxeles): una franja empinada que cruza la celda bloquea, una roca suelta no |
-| Reserva de O2 al volver | **20 %** de la capacidad | MODELED (capacidad del traje; el 20 % es nuestro) | O2 consumido según Pandolf |
-| Reserva de batería al volver | **20 %** | MODELED (ídem) | Consumo eléctrico fijo del traje |
-| Volver antes del atardecer | **30 min** de margen | MODELED (atardecer de la pila de sombras; el margen es nuestro). ASSUMED sin pila | Duración de la travesía contra el atardecer con terreno |
-| Minutos seguidos sin contacto | **10 min** (default del briefing) | ASSUMED | Racha más larga sin línea de vista al hábitat, contando las esperas |
-| Dosis por EVA | **0,5 mSv** (a revisar) | ASSUMED | Tasa de dosis promedio de la ruta × tiempo afuera |
-| Calorías | sin definir | — | Se calculan y se muestran, pero no cuentan en el veredicto |
+| Maximum slope | **25°** | ASSUMED | The slope that cannot be avoided in each A\* cell (the f-th highest of its f × f pixels): a steep strip crossing the cell blocks it, a single loose rock does not |
+| O2 reserve on return | **20%** of capacity | MODELED (suit capacity; the 20% is ours) | O2 used according to Pandolf |
+| Battery reserve on return | **20%** | MODELED (same) | Fixed electrical draw of the suit |
+| Back before sunset | **30 min** margin | MODELED (sunset from the shadow stack; the margin is ours). ASSUMED when there is no stack | Traverse duration vs. sunset over the real terrain |
+| Minutes in a row without contact | **10 min** (briefing default) | ASSUMED | Longest stretch without line of sight to the habitat, including stops |
+| Dose per EVA | **0.5 mSv** (under review) | ASSUMED | Average dose rate along the route × time outside |
+| Calories | not defined | — | Computed and shown, but not counted in the verdict |
 
-- **Puntaje** = 100 × el margen más chico entre los límites (margen = 1 − usado / límite). El límite que da ese mínimo es el factor limitante que muestra la UI.
-- **CAUTION** si el puntaje es menor a 20, si la ruta falla en algún escenario de estrés o si un límite no se pudo evaluar del todo. **GO** en otro caso.
-- **Robustez:** la misma ruta, sin cambiar el camino, evaluada otra vez saliendo 30 min tarde, caminando un 20 % más lento y con un 10 % más de carga. "Tormenta de polvo" y "sin el refugio más cercano" figuran como **no evaluables**: no tenemos un modelo que los calcule y no inventamos su efecto.
+- **Score** = 100 × the smallest margin among the limits (margin = 1 − used / limit). The limit that gives that minimum is the limiting factor shown in the UI.
+- **CAUTION** if the score is below 20, if the route fails any stress scenario, or if a limit could not be fully evaluated. **GO** otherwise.
+- **Robustness:** the same route, with the path unchanged, evaluated again leaving 30 min late, walking 20% slower and carrying 10% more load. "Dust storm" and "nearest shelter unavailable" are listed as **not evaluable**: we have no model that computes them, and we don't make up their effect.
 
-### Elegir la ruta: costo del A\* (`api/planner.py`)
+### Choosing the route: A\* cost (`api/planner.py`)
 
 ```text
-costo = Σ celdas Δt · (1 + Σ_k w_k · r_k(celda, hora de llegada))
+cost = Σ cells Δt · (1 + Σ_k w_k · r_k(cell, arrival time))
 ```
 
-`Δt` es el tiempo de caminata y cada `r_k` va de 0 a 1 en la celda, **a la hora en que llegás**: eso hace al planificador 4D. Pesos activos: pendiente (w = 2), sombra a esa hora (w = 1) y sin línea de vista al hábitat (w = 1). Rugosidad, suelo suelto y radiación por terreno tienen peso, pero el A\* todavía no las lee. Los pesos son del equipo.
+`Δt` is the walking time and each `r_k` goes from 0 to 1 in the cell, **at the time you arrive**: that is what makes the planner 4D. Active weights: slope (w = 2), shadow at that time (w = 1) and no line of sight to the habitat (w = 1). Roughness, loose soil and terrain-dependent radiation have weights, but the A\* does not read them yet. The weights are the team's.
 
-### Terreno: peligro (`pipeline/terrain_layers.py`)
+### Terrain hazard (`pipeline/terrain_layers.py`)
 
-La clase es la peor entre la de pendiente y la de rugosidad (σ del DTM sin la tendencia, en 5 m). Detalle y justificación de cada corte en [`docs/terreno.md`](docs/terreno.md).
+The class is the worse of the slope class and the roughness class (σ of the detrended DTM over 5 m). Details and the reasoning behind each cutoff (in Spanish) in [`docs/terreno.md`](docs/terreno.md).
 
-| Clase | Pendiente | Rugosidad σ | ≈ escalones de |
+| Class | Slope | Roughness σ | ≈ steps of |
 |---|---|---|---|
-| bajo | < 10° | < 0,15 m | < 0,3 m |
-| medio | 10–20° | 0,15–0,25 m | 0,3–0,5 m |
-| alto | 20–25° | 0,25–0,40 m | 0,5–0,8 m |
-| no transitable | ≥ 25° | ≥ 0,40 m | ~1 m o más |
+| low | < 10° | < 0.15 m | < 0.3 m |
+| medium | 10–20° | 0.15–0.25 m | 0.3–0.5 m |
+| high | 20–25° | 0.25–0.40 m | 0.5–0.8 m |
+| impassable | ≥ 25° | ≥ 0.40 m | ~1 m or more |
 
-- El 25° es una decisión del equipo, no sale de la bibliografía. Como referencia, los astronautas de Apollo caminaron en pendientes de menos de 15° (Iqbal et al. 2024).
-- **Suelo suelto (THEMIS, MODELED):** el 20 % más frío de noche dentro del sitio, solo si ese percentil queda a ≥ 5 DN de la mediana. Sube "bajo" a "medio", nunca más: un dato de 100 m alcanza para avisar, no para bloquear. Los dos números son nuestros.
-- La pendiente se calcula con el tamaño real del píxel sobre la esfera (radio 3396190 m): en Jezero, `gdaldem` daba 28,7° donde hay 30°.
-- Un DTM de 1 m no ve rocas de menos de ~3–5 m, y su precisión vertical es de decenas de cm.
+- The 25° cutoff is a team decision, not taken from the literature. For reference, Apollo astronauts walked on slopes below 15° (Iqbal et al. 2024).
+- **Loose soil (THEMIS, MODELED):** the coldest 20% at night within the site, only if that percentile is at least 5 DN away from the median. It raises "low" to "medium", never higher: 100 m data is enough to warn, not to block. Both numbers are ours.
+- Slope is computed with the true pixel size on the sphere (radius 3,396,190 m): at Jezero, `gdaldem` gave 28.7° where the slope is actually 30°.
+- A 1 m DTM cannot see rocks smaller than ~3–5 m, and its vertical precision is in the tens of cm.
 
-### Traje y consumibles (`api/consumables.py`)
+### Suit and consumables (`api/consumables.py`)
 
-Pandolf et al. (1977) con la corrección de bajadas de Santee et al. (2001), integrado cada 10 m sobre el DTM y ajustado a 0,38 g: los términos de carga y caminata se escalan con la gravedad y el de estar parado no (hipótesis nuestra). Los valores por defecto son los del EMU de la ISS. Fórmula, contrato del endpoint y fuentes en [`docs/consumibles del traje.md`](docs/consumibles%20del%20traje.md).
+Pandolf et al. (1977) with the downhill correction from Santee et al. (2001), integrated every 10 m over the DTM and adapted to 0.38 g: the load and walking terms scale with gravity and the standing term does not (our hypothesis). Defaults are those of the ISS EMU suit. Formula, endpoint contract and sources (in Spanish) in [`docs/consumibles del traje.md`](docs/consumibles%20del%20traje.md).
 
-| Parámetro | Valor | Estado |
+| Parameter | Value | Status |
 |---|---|---|
-| Masa del astronauta | 80 kg | a verificar |
-| Masa del traje con soporte vital | 127 kg (EMU, ~280 lb) | a verificar |
-| Gravedad | 0,38 g | confirmado |
-| Factor de terreno (η de Pandolf) | 1,1 (regolito compacto ≈ camino de tierra) | supuesto propio |
-| Velocidad de caminata | 0,8 m/s (~2,9 km/h), fija | supuesto propio |
-| Energía por litro de O2 | 20,1 kJ/L | confirmado |
-| O2 disponible | 0,55 kg (O2 primario del PLSS, sin la reserva de emergencia) | a verificar |
-| Batería | 446,9 Wh (16,8 V × 26,6 Ah), 90 % aprovechable | capacidad a verificar; eficiencia, supuesto propio |
-| Consumo eléctrico fijo | 55 W | supuesto propio |
+| Astronaut mass | 80 kg | to be verified |
+| Suit mass with life support | 127 kg (EMU, ~280 lb) | to be verified |
+| Gravity | 0.38 g | confirmed |
+| Terrain factor (Pandolf's η) | 1.1 (compacted regolith ≈ dirt road) | our assumption |
+| Walking speed | 0.8 m/s (~2.9 km/h), fixed | our assumption |
+| Energy per liter of O2 | 20.1 kJ/L | confirmed |
+| Available O2 | 0.55 kg (primary PLSS O2, excluding the emergency supply) | to be verified |
+| Battery | 446.9 Wh (16.8 V × 26.6 Ah), 90% usable | capacity to be verified; efficiency is our assumption |
+| Fixed electrical draw | 55 W | our assumption |
 
-Con esto, caminar en plano gasta ~600 W, el O2 alcanza para ~3,6 h y la batería para ~7,3 h: **el O2 es el que limita**. Límites del modelo: Pandolf se validó hasta ±25 % de grado (~14°) y con cargas más livianas que un traje (por eso probablemente sobreestima), no modela la rigidez del traje presurizado y la velocidad no cambia con la pendiente ni con la carga. La carga del equipo usa masas de herramientas de Apollo (OBSERVED); la carga a mano es ASSUMED.
+With these values, walking on flat ground burns ~600 W, the O2 lasts ~3.6 h and the battery ~7.3 h: **O2 is the limiting resource**. Model limits: Pandolf was validated up to ±25% grade (~14°) and with loads lighter than a suit, so it probably overestimates; it does not model the stiffness of a pressurized suit; and walking speed does not change with slope or load. The equipment load uses Apollo tool masses (OBSERVED); a manually entered load is ASSUMED.
 
-### Radiación (`pipeline/radiation.py`)
+### Radiation (`pipeline/radiation.py`)
 
 ```text
-dosis(celda) = H0 × cielo_visible(celda) / cielo_visible(Bradbury Landing)
+dose(cell) = H0 × visible_sky(cell) / visible_sky(Bradbury Landing)
 ```
 
-H0 = 0,64 ± 0,12 mSv/día (26,7 µSv/h), la dosis equivalente que midió RAD en Gale entre agosto de 2012 y junio de 2013. El cielo visible sale del horizonte hasta 60 km (DTM cerca, DEM de 200 m lejos) y se normaliza en el lugar donde midió RAD. Como la dosis cambia de un lugar a otro **menos que la incertidumbre de RAD** (±19 %), se muestra como presupuesto de la travesía y no entra al costo del A\*. Límites: el modelo isótropo sobreestima el blindaje del terreno (es una cota), y H0 no cambia con el ciclo solar, la estación ni las tormentas solares. Detalle en [`docs/radiation.md`](docs/radiation.md).
+H0 = 0.64 ± 0.12 mSv/day (26.7 µSv/h), the dose equivalent RAD measured at Gale between August 2012 and June 2013. Visible sky comes from the horizon out to 60 km (the DTM nearby, the 200 m DEM farther out) and is normalized at the spot where RAD measured. Because the dose changes from place to place **less than RAD's own uncertainty** (±19%), it is shown as a traverse budget and does not enter the A\* cost. Limits: the isotropic model overestimates terrain shielding (it is a bound), and H0 does not vary with the solar cycle, the season or solar storms. Details in [`docs/radiation.md`](docs/radiation.md).
 
-### Luz y sombra (`pipeline/illumination.py`)
+### Light and shadow (`pipeline/illumination.py`)
 
-Posición del Sol con SPICE en el centro del sitio y trazado de sombras sobre el DTM de 1 m más el DEM de 200 m hasta 100 km (borde del cráter), con la curvatura de Marte. Pila de máscaras cada 1 h de hora solar local. Supuestos: Sol puntual (sin penumbra), sin refracción ni polvo, sin luz difusa, y un mismo Sol para todo el sitio (error < ±0,2° en Jezero, ±0,5° en Gale). Si la fecha pedida no se precomputó, se usa la pila de otro sol de la **misma estación** (|ΔLs| ≤ 2°, ≤ 0,9° de declinación) y pasa a MODELED; si no hay ninguna, la luz queda sin evaluar y el veredicto lo dice. Detalle en [`docs/illumination.md`](docs/illumination.md).
+Sun position from SPICE at the site center, and shadow tracing over the 1 m DTM plus the 200 m DEM out to 100 km (the crater rim), including Mars' curvature. A stack of masks every hour of local solar time. Assumptions: point Sun (no penumbra), no refraction or dust, no diffuse light, and a single Sun position for the whole site (error below ±0.2° at Jezero, ±0.5° at Gale). If the requested date was not precomputed, the stack from another sol in the **same season** (|ΔLs| ≤ 2°, at most 0.9° of declination) is used and the result becomes MODELED; if there is none, light is left unevaluated and the verdict says so. Details in [`docs/illumination.md`](docs/illumination.md).
 
-### Contacto con el hábitat (`api/contact.py`, `api/viewshed.py`)
+### Contact with the habitat (`api/contact.py`, `api/viewshed.py`)
 
-Radio solo en línea de vista directa, sin repetidores ni difracción. Antena del hábitat a 3 m del suelo y la del traje a 2 m, descontando la curvatura de Marte. El DTM se promedia para el cálculo, así que los obstáculos más chicos que la celda no se ven. Un tramo sin dato de visibilidad no cuenta como "sin contacto": si podría romper el límite, queda en CAUTION.
+Radio by direct line of sight only, with no relays or diffraction. Habitat antenna 3 m above the ground and suit antenna at 2 m, accounting for Mars' curvature. The DTM is averaged for the calculation, so obstacles smaller than a cell are not seen. A stretch with no visibility data does not count as "no contact": if it could break the limit, the verdict stays at CAUTION.
 
-### Refugios (`pipeline/shelter.py`)
+### Shelters (`pipeline/shelter.py`)
 
-Refugio de emergencia para 2–3 personas: lugares con **≤ 85 %** de cielo visible (refugio fuerte: **≤ 75 %**), pendiente < 25° y al menos 10 m², calculado a 2 m. Es reparo geométrico, no una dosis calculada, y los dos umbrales son nuestros. Los minutos hasta el refugio usan la función de Tobler (1993) escalada a 0,8 m/s en plano (MODELED). Detalle en [`docs/refugios.md`](docs/refugios.md).
+An emergency shelter for 2–3 people: places with **≤ 85%** visible sky (strong shelter: **≤ 75%**), slope below 25° and at least 10 m², computed at 2 m. It is geometric cover, not a computed dose, and both thresholds are ours. Minutes to shelter use Tobler's hiking function (1993) scaled to 0.8 m/s on flat ground (MODELED). Details in [`docs/refugios.md`](docs/refugios.md).
 
-### Navegación por landmarks (`api/directions.py`)
+### Landmark navigation (`api/directions.py`)
 
-Cada tramo se parte en trechos donde el rumbo gira más de 30°. Para cada trecho se elige el landmark que mejor se ve desde 1,7 m de altura (línea de vista sobre el DTM cerca y el DEM de 200 m lejos), priorizando lo que está al frente, lo grande y lo que no se confunde con otro parecido. El Sol se usa para confirmar el rumbo solo entre 3° y 65° de elevación. Si no se ve nada, la indicación cae a "seguí con el Sol" o a un rumbo y dice por qué: **nunca se inventa un landmark**.
+Each leg is split into stretches wherever the heading turns more than 30°. For each stretch, the app picks the landmark best seen from 1.7 m eye height (line of sight over the DTM nearby and the 200 m DEM farther out), favoring what lies ahead, what is large and what cannot be confused with a similar feature. The Sun is used to confirm the heading only between 3° and 65° of elevation. If nothing is visible, the direction falls back to "follow the Sun" or a compass heading and says why: **a landmark is never made up**.
 
-## Cómo correrlo
+## How to run it
 
-**Requisitos:** Python 3.12, GDAL del sistema (en Ubuntu 24.04: `gdal-bin` y `python3-gdal`; el pipeline usa `gdaldem`, `gdal2tiles` y `ogr2ogr`) y Node 22. Con los datos completos son decenas de GB y horas de descarga: solo el ortomosaico de Jezero pesa 7,4 GB.
+**Requirements:** Python 3.12, system GDAL (on Ubuntu 24.04: `gdal-bin` and `python3-gdal`; the pipeline uses `gdaldem`, `gdal2tiles` and `ogr2ogr`) and Node 22. The full data takes tens of GB and hours to download: the Jezero orthomosaic alone is 7.4 GB.
 
-### Solo el frontend
+### Frontend only
 
 ```bash
 cd web
@@ -178,94 +182,94 @@ npm install
 npm run dev            # http://localhost:5173
 ```
 
-Sin backend arranca en **modo ejemplo**: datos de prueba locales y un cartel rojo que avisa que ningún valor es una medición. Para usar un backend real, copiá `web/.env.example` a `web/.env.local` y poné en `VITE_API_TARGET` la dirección del server: Vite le reenvía `/api` y `/tiles`.
+Without a backend it starts in **sample mode**: local test data and a red banner warning that no value is a measurement. To use a real backend, copy `web/.env.example` to `web/.env.local` and set `VITE_API_TARGET` to the server address: Vite proxies `/api` and `/tiles` to it.
 
-### La API
+### The API
 
 ```bash
 python3.12 -m venv .venv-api
 .venv-api/bin/pip install -r api/requirements.txt
-DATA_DIR=/data .venv-api/bin/uvicorn api.main:app --port 8000     # desde la raíz del repo
+DATA_DIR=/data .venv-api/bin/uvicorn api.main:app --port 8000     # from the repo root
 ```
 
-Sin datos, la API responde igual: `/api/health` anda y las consultas de un sitio sin datos devuelven 404 o `value: null` con una nota (el frontend lo maneja). La API no sirve `/tiles/`: en el server eso lo hace nginx con [`deploy/nginx.conf`](deploy/nginx.conf), que también pone `/api/` en el mismo origen.
+Without data the API still answers: `/api/health` works, and queries for a site without data return 404 or `value: null` with a note (the frontend handles both). The API does not serve `/tiles/`: on the server, nginx does that with [`deploy/nginx.conf`](deploy/nginx.conf), which also puts `/api/` on the same origin.
 
-### El pipeline de datos
+### The data pipeline
 
 ```bash
-python3.12 -m venv --system-site-packages .venv-pipeline     # usa el GDAL del sistema
+python3.12 -m venv --system-site-packages .venv-pipeline     # uses the system GDAL
 .venv-pipeline/bin/pip install -r pipeline/requirements.txt -r pipeline/requirements-dev.txt
-export DATA_DIR=/data                                           # cualquier carpeta con espacio
+export DATA_DIR=/data                                           # any folder with enough space
 
-# 1. Bajar (horas; se reanuda si se corta)
-.venv-pipeline/bin/python pipeline/download.py         # lo de sites/*.json → raw/ + manifest.json
-.venv-pipeline/bin/python pipeline/fetch_extras.py     # Robbins, SWIM, DONKI, Langlais (NASA_API_KEY opcional)
-bash pipeline/fetch_science.sh                         # THEMIS y CRISM
-.venv-pipeline/bin/python pipeline/fetch_targets.py    # nombres de los objetivos de PIXL (~20 min por el Crawl-delay)
+# 1. Download (hours; resumes if interrupted)
+.venv-pipeline/bin/python pipeline/download.py         # everything in sites/*.json → raw/ + manifest.json
+.venv-pipeline/bin/python pipeline/fetch_extras.py     # Robbins, SWIM, DONKI, Langlais (NASA_API_KEY optional)
+bash pipeline/fetch_science.sh                         # THEMIS and CRISM
+.venv-pipeline/bin/python pipeline/fetch_targets.py    # PIXL target names (~20 min because of the Crawl-delay)
 
-# 2. Precomputar, por sitio (jezero, gale)
-.venv-pipeline/bin/python pipeline/precompute.py --site jezero --prueba   # recorte de 2 × 2 km para probar rápido
-.venv-pipeline/bin/python pipeline/precompute.py --site jezero            # relieve, peligro, térmico, dosis, agua y tiles
-.venv-pipeline/bin/python pipeline/shelter.py --site jezero               # refugios
+# 2. Precompute, per site (jezero, gale)
+.venv-pipeline/bin/python pipeline/precompute.py --site jezero --prueba   # 2 × 2 km crop for a quick test
+.venv-pipeline/bin/python pipeline/precompute.py --site jezero            # relief, hazard, thermal, dose, water and tiles
+.venv-pipeline/bin/python pipeline/shelter.py --site jezero               # shelters
 .venv-pipeline/bin/python pipeline/illumination.py --site jezero --start 2026-11-15T00:00:00 --sols 1
-.venv-pipeline/bin/python pipeline/shadow_tiles.py --site jezero          # tiles de sombra por hora
-.venv-pipeline/bin/python pipeline/places.py --site jezero                # lugares para el buscador y los landmarks
+.venv-pipeline/bin/python pipeline/shadow_tiles.py --site jezero          # hourly shadow tiles
+.venv-pipeline/bin/python pipeline/places.py --site jezero                # places for search and landmarks
 ```
 
-`precompute.py --ortho` suma la ortoimagen (la más cara: horas). Las salidas van a `$DATA_DIR/output/<sitio>/`, cada capa con un índice (`terrain.json`, `shelter.json`) que dice su procedencia, su resolución y si salió bien; el mapa prende solo las capas que el índice marca como listas. Nada escribe dentro del repo.
+`precompute.py --ortho` adds the orthoimage (the most expensive step: hours). Outputs go to `$DATA_DIR/output/<site>/`, each layer with an index (`terrain.json`, `shelter.json`) stating its provenance, its resolution and whether it succeeded; the map only turns on the layers the index marks as ready. Nothing writes inside the repo.
 
 ### Tests
 
 ```bash
-.venv-pipeline/bin/python -m pytest pipeline/tests     # con MAPEANDO_KERNELS=<carpeta de kernels> corre también lo de SPICE
+.venv-pipeline/bin/python -m pytest pipeline/tests     # with MAPEANDO_KERNELS=<kernels folder> it also runs the SPICE tests
 .venv-api/bin/pip install pytest httpx && .venv-api/bin/python -m pytest api/tests
-cd web && npm run build                                 # typecheck + build, lo mismo que corre el CI
+cd web && npm run build                                 # typecheck + build, the same thing CI runs
 ```
 
-El server, el auto-deploy y el acceso del equipo están en [`docs/infra y setup.md`](docs/infra%20y%20setup.md).
+The server, auto-deploy and team access are documented (in Spanish) in [`docs/infra y setup.md`](docs/infra%20y%20setup.md).
 
-## Estructura del repo
+## Repository layout
 
-| Carpeta | Qué hay |
+| Folder | Contents |
 |---|---|
-| `sites/` | Un JSON por sitio (Jezero, Gale) + `common.json`: qué se baja y de dónde. |
-| `pipeline/` | Python que descarga y precomputa (rasterio, numpy, spiceypy, GDAL). Lo pesado se hace acá, no en un request. |
-| `api/` | FastAPI: inventario, consulta por punto, planificador 4D (`/api/route`), consumibles, contacto y sombras. Solo lee lo precomputado. |
-| `web/` | React 19 + MapLibre GL + Three.js (Vite). Solo dibuja. |
-| `reference/` | Tablas de referencia versionadas (dosis de RAD en superficie). |
-| `docs/` | Métodos, supuestos y contratos. Empezá por [`context.md`](docs/context.md). |
-| `deploy/` | Bootstrap del server, nginx, systemd y auto-deploy. |
+| `sites/` | One JSON per site (Jezero, Gale) + `common.json`: what gets downloaded and from where. |
+| `pipeline/` | Python that downloads and precomputes (rasterio, numpy, spiceypy, GDAL). The heavy work happens here, never inside a request. |
+| `api/` | FastAPI: inventory, point queries, 4D planner (`/api/route`), consumables, contact and shadows. It only reads precomputed outputs. |
+| `web/` | React 19 + MapLibre GL + Three.js (Vite). It only draws. |
+| `reference/` | Versioned reference tables (RAD surface dose). |
+| `docs/` | Methods, assumptions and contracts, in Spanish. Start with [`context.md`](docs/context.md). |
+| `deploy/` | Server bootstrap, nginx, systemd and auto-deploy. |
 
-Documentación por tema: [`seguridad.md`](docs/seguridad.md) (veredicto y ruta), [`consumibles del traje.md`](docs/consumibles%20del%20traje.md), [`terreno.md`](docs/terreno.md), [`radiation.md`](docs/radiation.md), [`illumination.md`](docs/illumination.md), [`refugios.md`](docs/refugios.md), [`educacion.md`](docs/educacion.md) (modo entrenamiento) y [`frontend y backend.md`](docs/frontend%20y%20backend.md).
+Documentation by topic (in Spanish): [`seguridad.md`](docs/seguridad.md) (verdict and route), [`consumibles del traje.md`](docs/consumibles%20del%20traje.md) (suit consumables), [`terreno.md`](docs/terreno.md) (terrain), [`radiation.md`](docs/radiation.md), [`illumination.md`](docs/illumination.md), [`refugios.md`](docs/refugios.md) (shelters), [`educacion.md`](docs/educacion.md) (training mode) and [`frontend y backend.md`](docs/frontend%20y%20backend.md).
 
-## Uso de IA
+## Use of AI
 
-Space Apps permite usar herramientas de IA y pide decir dónde y cómo. Esto es lo que hicimos:
+Space Apps allows AI tools and asks teams to state where and how they used them. This is what we did:
 
-- **En el desarrollo, sí.** Programamos con **Claude Code** (Anthropic) como asistente: escribió y revisó buena parte del código, los tests y la documentación, siempre a pedido de una persona del equipo que revisa lo que hace. Al 15/11/2026, unos dos de cada tres commits lo llevan como coautor (`Co-Authored-By`). Las instrucciones que le dimos están en el repo, a la vista: [`CLAUDE.md`](CLAUDE.md), [`docs/context.md`](docs/context.md) y las skills de [`.claude/skills/`](.claude/skills/), entre ellas "no inventes datos" y "respetá el Crawl-delay de PDS".
-- **En los datos, no.** Ningún número científico lo generó una IA: cada valor sale de un dataset de la tabla de arriba, de un modelo publicado (Pandolf, Tobler, SPICE, Mars24) o de un supuesto del equipo marcado ASSUMED. Los límites y umbrales los decidió el equipo.
-- **En la app, no.** No hay IA en tiempo de ejecución: ni la API ni el frontend llaman a un modelo de lenguaje. La ruta sale de un A\* determinista y el veredicto, de reglas fijas que están en [`docs/seguridad.md`](docs/seguridad.md).
+- **In development, yes.** We coded with **Claude Code** (Anthropic) as an assistant: it wrote and reviewed a good part of the code, tests and documentation, always at the request of a team member who reviews its work. As of 2026-11-15, about two out of three commits list it as co-author (`Co-Authored-By`). This English README was also translated with its help. The instructions we gave it are in the repo, in plain sight: [`CLAUDE.md`](CLAUDE.md), [`docs/context.md`](docs/context.md) and the skills in [`.claude/skills/`](.claude/skills/), including "don't make up data" and "respect the PDS Crawl-delay".
+- **In the data, no.** No scientific number was generated by an AI: every value comes from a dataset in the table above, from a published model (Pandolf, Tobler, SPICE, Mars24) or from a team assumption labeled ASSUMED. The limits and thresholds were decided by the team.
+- **In the app, no.** There is no AI at runtime: neither the API nor the frontend calls a language model. The route comes from a deterministic A\* search and the verdict from fixed rules documented in [`docs/seguridad.md`](docs/seguridad.md).
 
-## Créditos
+## Credits
 
-### Datos
+### Data
 
-- **NASA/JPL-Caltech:** Mars Reconnaissance Orbiter, Mars 2020 (Perseverance e Ingenuity), Mars Science Laboratory (Curiosity), Mars Odyssey, MMGIS y NAIF SPICE.
+- **NASA/JPL-Caltech:** Mars Reconnaissance Orbiter, Mars 2020 (Perseverance and Ingenuity), Mars Science Laboratory (Curiosity), Mars Odyssey, MMGIS and NAIF SPICE.
 - **HiRISE:** NASA/JPL-Caltech/University of Arizona. **CRISM:** NASA/JPL-Caltech/JHUAPL. **THEMIS:** NASA/JPL-Caltech/Arizona State University. **MOLA:** NASA/GSFC (Mars Global Surveyor). **RAD:** NASA/JPL-Caltech/SwRI.
 - **HRSC:** ESA/DLR/FU Berlin (Mars Express).
-- **USGS Astrogeology Science Center:** mosaicos de DTM e imagen de Jezero y Gale, DEM MOLA + HRSC, mosaicos controlados de THEMIS, nomenclátor planetario (con el Grupo de Trabajo de Nomenclatura de la IAU) y el servicio de la base de cráteres de Robbins.
-- **PDS Geosciences Node** (Washington University in St. Louis): Orbital Data Explorer y los productos de Mars 2020 y MSL.
+- **USGS Astrogeology Science Center:** DTM and image mosaics of Jezero and Gale, the MOLA + HRSC DEM, THEMIS controlled mosaics, the planetary nomenclature gazetteer (with the IAU Working Group for Planetary System Nomenclature) and the Robbins crater database service.
+- **PDS Geosciences Node** (Washington University in St. Louis): Orbital Data Explorer and the Mars 2020 and MSL products.
 - **SWIM:** Subsurface Water Ice Mapping, Planetary Science Institute.
 - **Mars24:** NASA Goddard Institute for Space Studies.
-- **Apollo:** catálogo de herramientas de NASA JSC (Allton 1989) y *Apollo Lunar Surface Journal*.
+- **Apollo:** NASA JSC tool catalog (Allton 1989) and the *Apollo Lunar Surface Journal*.
 
-Usar datos públicos de la NASA no implica que la NASA respalde este proyecto.
+Using public NASA data does not imply that NASA endorses this project.
 
 ### Software
 
-MapLibre GL JS, React, Three.js, Zod, Zustand, Tailwind CSS y Vite en el frontend (con las fuentes de rótulos de OpenMapTiles); FastAPI y uvicorn en la API; GDAL, rasterio, NumPy, SciPy, scikit-image y SpiceyPy en el pipeline.
+MapLibre GL JS, React, Three.js, Zod, Zustand, Tailwind CSS and Vite in the frontend (with OpenMapTiles label fonts); FastAPI and uvicorn in the API; GDAL, rasterio, NumPy, SciPy, scikit-image and SpiceyPy in the pipeline.
 
-### Referencias
+### References
 
 - Hassler, D. M. et al. (2014). Mars' surface radiation environment measured with the Mars Science Laboratory's Curiosity rover. *Science* 343(6169), 1244797.
 - Pandolf, K. B. et al. (1977). Predicting energy expenditure with loads while standing or walking very slowly. *Journal of Applied Physiology* 43(4).
@@ -278,10 +282,10 @@ MapLibre GL JS, React, Three.js, Zod, Zustand, Tailwind CSS y Vite en el fronten
 - Viviano-Beck, C. E. et al. (2014). Revised CRISM spectral parameters and summary products based on the currently detected mineral diversity on Mars. *Journal of Geophysical Research: Planets* 119.
 - Allison, M. & McEwen, M. (2000). A post-Pathfinder evaluation of areocentric solar coordinates with improved timing recipes for Mars seasonal/diurnal climate studies. *Planetary and Space Science* 48.
 - Allton, J. H. (1989). *Catalog of Apollo Lunar Surface Geological Sampling Tools and Containers*. JSC-23454, NASA Johnson Space Center.
-- Iqbal et al. (2024). *Acta Astronautica* (pendientes caminadas en Apollo).
-- Sutton, S. S. et al. (2022). *Remote Sensing* 14, 2403 (precisión de los DTM HiRISE).
+- Iqbal et al. (2024). *Acta Astronautica* (slopes walked during Apollo).
+- Sutton, S. S. et al. (2022). *Remote Sensing* 14, 2403 (HiRISE DTM precision).
 
-### Equipo
+### Team
 
 **Mapeando Ando** · NASA Space Apps Challenge 2026
 
@@ -294,4 +298,4 @@ MapLibre GL JS, React, Three.js, Zod, Zustand, Tailwind CSS y Vite en el fronten
 
 ---
 
-*Prototipo educativo, no software de vuelo.*
+*Educational prototype, not flight software.*

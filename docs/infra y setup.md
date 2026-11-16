@@ -52,7 +52,7 @@ GitHub (main) ──auto-deploy cada 60 s──▶ EC2 (Ubuntu 24.04, us-east-2)
 
 ### Acceso
 
-- **SSH:** cada integrante tiene su usuario con sudo (`nasho`, `dana`, `pilx`, `guido`, `maro`, `lucas`). La contraseña y la IP se pasan por privado. Para entrar: `ssh <usuario>@<IP del server>`. Conviene subir la clave pública con `ssh-copy-id <usuario>@<IP>`, para no depender de la contraseña.
+- **SSH:** cada integrante tiene su usuario con sudo; la lista de usuarios la tiene el admin y no se publica acá. La contraseña se pasa por privado. Para entrar: `ssh <usuario>@<IP del server>`. Conviene subir la clave pública con `ssh-copy-id <usuario>@<IP>`, para no depender de la contraseña.
 - **fail2ban:** 8 intentos fallidos en 10 min bloquean la IP 30 min. La IP desde donde trabaja el equipo está exceptuada. Si alguien recibe `Connection refused` desde otra red, es ese bloqueo.
 - **Altas y bajas:** `sudo mapeando-add-member <usuario> "<clave pública>"` y `sudo mapeando-remove-member <usuario>`.
 - **Session Manager:** sigue disponible desde la consola de AWS como entrada de respaldo.
@@ -159,12 +159,12 @@ Todo M0 está cerrado en Linear. Quedan estos pendientes de datos e infraestruct
 
 1. **APXS:** bajar las tablas de óxidos por sol. Hoy solo está el inventario.
 2. **Manifest:** sumar a `manifest.json` los datos científicos (THEMIS, CRISM, química, clima) para que la API los liste.
-3. **Seguridad del server:** SSH está abierto a internet con una contraseña compartida y sudo. Opciones: pasar a claves (`ssh-copy-id`) y apagar el login por contraseña, o limitar el puerto 22 a la IP del equipo.
+3. **Seguridad del server (urgente: desde el 2026-11-15 la IP es pública, está en el README):** SSH está abierto a internet con una contraseña compartida y sudo. Opciones: pasar a claves (`ssh-copy-id`) y apagar el login por contraseña, o limitar el puerto 22 a la IP del equipo.
 4. **LICENSE:** el repo todavía no tiene licencia.
 
 ## 8. Contexto y skills de IA (equipo)
 
-Todo el equipo trabaja con el mismo contexto y las mismas skills, versionados en el repo. No hay que instalar nada: al clonar ya están. Qué declaramos del uso de IA ante Space Apps está en el [README](../README.md#uso-de-ia).
+Todo el equipo trabaja con el mismo contexto y las mismas skills, versionados en el repo. No hay que instalar nada: al clonar ya están. Qué declaramos del uso de IA ante Space Apps está en el [README](../README.es.md#uso-de-ia).
 
 | Archivo | Qué es |
 |---|---|
