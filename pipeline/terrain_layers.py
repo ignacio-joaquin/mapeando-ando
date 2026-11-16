@@ -38,7 +38,7 @@ from rasterio.warp import Resampling, reproject
 from rasterio.windows import Window
 from scipy.ndimage import uniform_filter
 
-# --- Parámetros (documentados en el README) ---
+# --- Parámetros (documentados en docs/terreno.md) ---
 TREND_WINDOW_M = 15        # escala de la "forma general" del terreno, que se resta
 ROUGHNESS_WINDOW_M = 5     # ~ resolución horizontal real de un DTM HiRISE (3-5 px)
 

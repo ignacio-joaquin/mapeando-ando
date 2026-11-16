@@ -3,7 +3,7 @@
 Equipo **Mapeando Ando** — NASA Space Apps Challenge 2026 (14 y 15 de noviembre).
 Desafío: *Interplanetary Survival Guide: Martian Map*.
 
-Este documento resume las decisiones, la infraestructura, los datos y el estado del trabajo previo a la hackathon. Para usar el repo, ver el [README](README.md).
+Este documento resume las decisiones, la infraestructura, los datos y el estado del trabajo previo a la hackathon. Para usar el repo, ver el [README](../README.md).
 
 > Este repo es público. Acá no van IPs, contraseñas, IDs de cuenta ni mails. Esos datos se pasan por el canal privado del equipo.
 
@@ -44,14 +44,15 @@ GitHub (main) ──auto-deploy cada 60 s──▶ EC2 (Ubuntu 24.04, us-east-2)
 ```
 
 - **Cuenta AWS:** plan gratuito. La organización administrada por AWS fija la región en **us-east-2** y solo permite tipos de instancia del free tier. Usamos `m7i-flex.large` (2 vCPU, 8 GB); los créditos cubren el uso.
-- **Auto-deploy:** un timer de systemd (`mapeando-autodeploy.timer`) hace `git fetch` cada 60 s. Si `main` cambió, resetea, reinicia la API y, si cambió `deploy/`, vuelve a correr `bootstrap.sh`. El log queda en `/var/log/mapeando-deploy.log`. No usa secretos porque el repo es público.
+- **Rutas en el server:** `http://<IP>/` sirve el build de `web/`, `/api/*` va a FastAPI y `/tiles/*` sirve `/data/output/`. Datos crudos en `/data/raw/<sitio>/`, salidas en `/data/output/<sitio>/`, inventario en `/data/manifest.json` y el repo en `/opt/mapeando-ando`. La copia de los crudos está en `s3://<bucket>/raw/` (el nombre, en `/etc/mapeando.env`); dentro del server se usa con `aws s3 ...` sin credenciales propias, porque la instancia tiene un rol IAM. La IP está en Linear.
+- **Auto-deploy:** un timer de systemd (`mapeando-autodeploy.timer`) hace `git fetch` cada 60 s. Si `main` cambió, resetea, reinicia la API y, si cambió `deploy/`, vuelve a correr `bootstrap.sh`. Si cambió `web/`, compila el frontend (`deploy/build-web.sh`); si el build falla, sigue la versión anterior. El log queda en `/var/log/mapeando-deploy.log`. No usa secretos porque el repo es público: no hay que guardar claves en GitHub, el server solo lee.
 - **Variables del server:** están en `/etc/mapeando.env` (`DATA_DIR`, `BUCKET`, región y, opcionalmente, `NASA_API_KEY`). Este archivo no está en el repo.
 - **API:** `/api/health` devuelve el commit desplegado y si hay datos. `/api/sites` y `/api/sites/{id}` leen `/data/manifest.json`.
 - **CI:** `.github/workflows/ci.yml` chequea la sintaxis de Python, JSON y bash.
 
 ### Acceso
 
-- **SSH:** cada integrante tiene su usuario con sudo (`nasho`, `dana`, `pilx`, `guido`, `maro`, `lucas`). La contraseña y la IP se pasan por privado.
+- **SSH:** cada integrante tiene su usuario con sudo (`nasho`, `dana`, `pilx`, `guido`, `maro`, `lucas`). La contraseña y la IP se pasan por privado. Para entrar: `ssh <usuario>@<IP del server>`. Conviene subir la clave pública con `ssh-copy-id <usuario>@<IP>`, para no depender de la contraseña.
 - **fail2ban:** 8 intentos fallidos en 10 min bloquean la IP 30 min. La IP desde donde trabaja el equipo está exceptuada. Si alguien recibe `Connection refused` desde otra red, es ese bloqueo.
 - **Altas y bajas:** `sudo mapeando-add-member <usuario> "<clave pública>"` y `sudo mapeando-remove-member <usuario>`.
 - **Session Manager:** sigue disponible desde la consola de AWS como entrada de respaldo.
@@ -160,6 +161,20 @@ Todo M0 está cerrado en Linear. Quedan estos pendientes de datos e infraestruct
 2. **Manifest:** sumar a `manifest.json` los datos científicos (THEMIS, CRISM, química, clima) para que la API los liste.
 3. **Seguridad del server:** SSH está abierto a internet con una contraseña compartida y sudo. Opciones: pasar a claves (`ssh-copy-id`) y apagar el login por contraseña, o limitar el puerto 22 a la IP del equipo.
 4. **LICENSE:** el repo todavía no tiene licencia.
+
+## 8. Contexto y skills de IA (equipo)
+
+Todo el equipo trabaja con el mismo contexto y las mismas skills, versionados en el repo. No hay que instalar nada: al clonar ya están. Qué declaramos del uso de IA ante Space Apps está en el [README](../README.md#uso-de-ia).
+
+| Archivo | Qué es |
+|---|---|
+| `docs/context.md` | **Fuente única de contexto**: core value, arquitectura, stack, reglas duras, cómo trabajamos, decisiones abiertas. Si cambia una decisión del proyecto, se edita acá en el mismo PR. |
+| `CLAUDE.md` | Lo que lee Claude Code en cada sesión: carga `docs/context.md` y dice qué skill usar en cada área. |
+| `.claude/skills/` | Skills propias (`mapeando-*`, `linear-task`) + skills curated de [Gentleman-Skills](https://github.com/Gentleman-Programming/Gentleman-Skills) copiadas. |
+| `.claude/settings.json` | Permisos del proyecto (incluye no pushear a `main`). |
+| `.claude/update-skills.sh` | Vuelve a traer las skills externas desde upstream. Se revisa el diff y va por PR. |
+
+Si usás otro asistente (Cursor, Copilot, Gemini CLI), apuntalo a `docs/context.md`: es el mismo contenido.
 
 ---
 

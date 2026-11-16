@@ -50,7 +50,7 @@ from rasterio.windows import Window, from_bounds
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 
-# Criterio de suelo suelto (supuestos del equipo, documentados en el README).
+# Criterio de suelo suelto (supuestos del equipo, documentados en docs/terreno.md).
 LOOSE_PERCENTILE = 20      # el 20 % más frío de noche dentro del sitio
 MIN_CONTRAST_DN = 5        # contraste mínimo (en DN de 0-255) entre ese percentil y la mediana
 
